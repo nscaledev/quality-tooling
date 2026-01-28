@@ -27,6 +27,12 @@ go.work.sum
 # env file
 .env
 
+# Local testing secrets and config
+.secrets
+.vars
+test-results-sample.json
+.github/workflows/test-linear-action.yml
+
 # Editor/IDE
 # .idea/
 # .vscode/

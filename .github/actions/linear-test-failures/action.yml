@@ -1,0 +1,64 @@
+name: 'Linear Test Failures'
+description: 'Automatically create Linear issues for failed Ginkgo/Gomega tests'
+author: 'Nscale'
+
+branding:
+  icon: 'alert-circle'
+  color: 'red'
+
+inputs:
+  test-results-path:
+    description: 'Path to Ginkgo JSON test results file'
+    required: true
+  workflow-url:
+    description: 'GitHub Actions workflow run URL'
+    required: true
+  linear-api-key:
+    description: 'Linear API key for authentication'
+    required: true
+  linear-team-id:
+    description: 'Linear team ID where issues should be created'
+    required: true
+  linear-project-id:
+    description: 'Linear project ID to assign issues to (optional)'
+    required: false
+    default: ''
+  environment:
+    description: 'Environment name (dev, uat, prod, etc.)'
+    required: true
+  linear-priority:
+    description: 'Linear issue priority (1-4, default: 3 = Medium)'
+    required: false
+    default: '3'
+  max-failures:
+    description: 'Maximum number of failures before skipping issue creation (spam prevention)'
+    required: false
+    default: '5'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run Linear Issue Creator
+      shell: bash
+      run: |
+        # Save workspace path and convert test results path to absolute
+        WORKSPACE_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+        TEST_RESULTS_PATH="${{ inputs.test-results-path }}"
+
+        # Convert relative path to absolute if needed
+        if [[ ! "$TEST_RESULTS_PATH" = /* ]]; then
+          TEST_RESULTS_PATH="$WORKSPACE_DIR/$TEST_RESULTS_PATH"
+        fi
+
+        # Run from action directory but with absolute test results path
+        cd ${{ github.action_path }}
+        go run linear-issue-creator.go \
+          "$TEST_RESULTS_PATH" \
+          "${{ inputs.workflow-url }}" \
+          "${{ inputs.environment }}"
+      env:
+        LINEAR_API_KEY: ${{ inputs.linear-api-key }}
+        LINEAR_TEAM_ID: ${{ inputs.linear-team-id }}
+        LINEAR_PROJECT_ID: ${{ inputs.linear-project-id }}
+        LINEAR_PRIORITY: ${{ inputs.linear-priority }}
+        MAX_FAILURES: ${{ inputs.max-failures }}
