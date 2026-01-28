@@ -12,7 +12,7 @@ The `quality-tooling` repository provides company-wide, reusable GitHub Actions 
 .github/actions/
   └── linear-test-failures/        # Auto-creates Linear issues for test failures
       ├── action.yml               # GitHub Composite Action definition
-      ├── linear-issue-creator.go  # Go implementation (~718 lines)
+      ├── linear-issue-creator.go  # Go implementation (725 lines)
       ├── go.mod                   # Go module definition
       ├── shared/
       │   └── types.go            # Ginkgo test result types
@@ -34,7 +34,7 @@ The `quality-tooling` repository provides company-wide, reusable GitHub Actions 
 
 **Usage in Other Repositories**:
 ```yaml
-- uses: nscale/quality-tooling/.github/actions/linear-test-failures@v1
+- uses: nscale/quality-tooling/.github/actions/linear-test-failures@main
   with:
     test-results-path: path/to/test-results.json
     workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -106,7 +106,7 @@ go build -o bin/linear-issue-creator linear-issue-creator.go
 
 Two-phase approach for efficient and accurate matching:
 
-1. **Fast filtering**: Linear GraphQL search by labels (`automated-test`, `nightly-failure`, `environment:{env}`) and state (open, backlog, todo, in_progress)
+1. **Fast filtering**: Linear GraphQL search by labels (`Automation Failures`, `nightly-failure`, environment label) and state (backlog, todo, in_progress, blocked)
 2. **Precise matching**: Extract and compare SHA256 hash from HTML comment in issue description
 
 Hash format: `SHA256({test_full_path}|{environment})`
@@ -121,39 +121,15 @@ This ensures same test in different environments creates separate issues, while 
 - **Client errors (4xx)**: No retry, logs error and continues
 - **Graceful degradation**: Issues logged but CI workflow never fails
 
-## Versioning and Releases
+## Deployment
 
-### Creating New Releases
+The action runs directly from the `main` branch - no versioning or tags needed since this is an internal tool. Projects reference it using `@main`:
 
-```bash
-# Tag specific version
-git tag -a v1.0.0 -m "Release v1.0.0
-
-Features:
-- Feature 1
-- Feature 2"
-
-# Update major version pointer (for v1.x.x)
-git tag -f -a v1 -m "v1 major version"
-
-# Push tags
-git push origin v1.0.0
-git push origin v1 --force  # Force needed to move v1 pointer
-```
-
-### Version Pinning Recommendations
-
-Projects should pin to major versions for automatic minor/patch updates:
 ```yaml
-uses: nscale/quality-tooling/.github/actions/{action}@v1  # Recommended
-uses: nscale/quality-tooling/.github/actions/{action}@v1.0.0  # Specific version
+uses: nscale/quality-tooling/.github/actions/{action}@main
 ```
 
-### Semantic Versioning
-
-- **Major (v2.0.0)**: Breaking changes to inputs, outputs, or behavior
-- **Minor (v1.1.0)**: New features, backward-compatible changes
-- **Patch (v1.0.1)**: Bug fixes, no new features
+Changes pushed to main are immediately available to all consuming projects. Test changes in a feature branch before merging to main.
 
 ## Adding New Actions
 
@@ -175,7 +151,7 @@ cd .github/actions/{action-name}
 
 5. Update root `README.md` with action description
 
-6. Create version tags following semantic versioning
+6. Commit and push to main branch
 
 ## Linear API Integration
 
@@ -195,10 +171,12 @@ cd .github/actions/{action-name}
 }
 ```
 
-**Required Labels** (create in Linear team settings):
-- `automated-test` (blue)
-- `nightly-failure` (red)
-- `environment:dev`, `environment:uat`, `environment:prod` (various colors)
+**Required Labels** (create in Linear workspace or team settings):
+- `Automation Failures` - Marks issues created by automation
+- `nightly-failure` - Indicates test failure origin
+- `Dev` - Dev environment failures
+- `UAT` - UAT environment failures
+- `Prod` - Production environment failures (if applicable)
 
 ### GraphQL Queries
 
@@ -256,8 +234,6 @@ When test passes again, duplicate detection adds comment to existing issue showi
 ## Related Documentation
 
 - `README.md` - Repository overview and quick start
-- `TESTING.md` - Comprehensive testing guide with local and CI testing strategies
-- `PLAN.md` - Implementation plan and architecture decisions
 - `.github/actions/linear-test-failures/README.md` - Action-specific usage documentation
 
 ## License
