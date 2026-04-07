@@ -1,0 +1,47 @@
+name: 'Slack Test Notifications'
+description: 'Send Slack notifications with Ginkgo/Gomega test results summary'
+author: 'Nscale'
+
+branding:
+  icon: 'bell'
+  color: 'green'
+
+inputs:
+  test-results-path:
+    description: 'Path to Ginkgo JSON test results file'
+    required: true
+  workflow-url:
+    description: 'GitHub Actions workflow run URL'
+    required: true
+  slack-webhook-url:
+    description: 'Slack incoming webhook URL'
+    required: true
+  environment:
+    description: 'Environment name (dev, uat, prod, etc.)'
+    required: true
+  title:
+    description: 'Notification title shown in the Slack message header (e.g. "Compute API Test Results")'
+    required: false
+    default: 'API Test Results'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Send Slack Notification
+      shell: bash
+      run: |
+        WORKSPACE_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+        TEST_RESULTS_PATH="${{ inputs.test-results-path }}"
+
+        if [[ ! "$TEST_RESULTS_PATH" = /* ]]; then
+          TEST_RESULTS_PATH="$WORKSPACE_DIR/$TEST_RESULTS_PATH"
+        fi
+
+        cd ${{ github.action_path }}
+        go run slack-notify.go \
+          "$TEST_RESULTS_PATH" \
+          "${{ inputs.workflow-url }}"
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        TITLE: ${{ inputs.title }}
