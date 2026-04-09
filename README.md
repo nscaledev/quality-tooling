@@ -12,7 +12,7 @@ Automatically create Linear issues for failed Ginkgo/Gomega tests from nightly C
 
 **Usage**:
 ```yaml
-- uses: nscale/quality-tooling/.github/actions/linear-test-failures@main
+- uses: nscaledev/quality-tooling/.github/actions/linear-test-failures@main
   with:
     test-results-path: path/to/test-results.json
     workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -28,6 +28,31 @@ Automatically create Linear issues for failed Ginkgo/Gomega tests from nightly C
 - Clear naming: `[Nightly-{env}] {TestSuite} - {TestName}`
 
 [Full documentation](./.github/actions/linear-test-failures/README.md)
+
+### Slack Test Notifications
+
+Send a Slack message summarising Ginkgo/Gomega test results — pass/fail counts, duration, and details of up to 5 failures.
+
+**Location**: `.github/actions/slack-test-notifications/`
+
+**Usage**:
+```yaml
+- uses: nscaledev/quality-tooling/.github/actions/slack-test-notifications@main
+  with:
+    test-results-path: path/to/test-results.json
+    workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+    environment: dev
+    title: 'Compute API Test Results'  # optional, defaults to "API Test Results"
+```
+
+**Features**:
+- Posts pass/fail/skip counts and test duration
+- Lists up to 5 failures with error messages and file locations
+- Configurable title per repository
+- Runs even when tests fail (`if: ${{ !cancelled() }}`)
+
+[Full documentation](./.github/actions/slack-test-notifications/README.md)
 
 ## Adding New Actions
 

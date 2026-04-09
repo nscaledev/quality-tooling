@@ -132,9 +132,7 @@ Variables:
     environment: dev
 ```
 
-### Complete Workflow Example (uni-compute nightly tests)
-
-This example shows integration with a real nightly API test workflow that runs against dev and UAT environments:
+### Complete Workflow Example
 
 ```yaml
 name: API Tests
@@ -163,7 +161,6 @@ jobs:
     env:
       ENVIRONMENT: dev
       API_BASE_URL: ${{ vars.DEV_API_BASE_URL }}
-      # ... other environment variables ...
 
     steps:
     - name: Checkout
@@ -192,9 +189,8 @@ jobs:
         name: api-test-junit-dev
         path: test/api/suites/junit.xml
 
-    # ADD LINEAR ISSUE CREATION AFTER ARCHIVING ARTIFACTS:
     - name: Create Linear Issues for Test Failures
-      uses: nscale/quality-tooling/.github/actions/linear-test-failures@main
+      uses: nscaledev/quality-tooling/.github/actions/linear-test-failures@main
       if: ${{ !cancelled() }}
       with:
         test-results-path: test/api/suites/test-results.json
@@ -206,12 +202,14 @@ jobs:
         max-failures: '5'
 
     - name: Send Slack Notification
+      uses: nscaledev/quality-tooling/.github/actions/slack-test-notifications@main
       if: ${{ !cancelled() }}
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-      run: |
-        WORKFLOW_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        go run test/api/suites/scripts/slack-notify.go test/api/suites/test-results.json "$WORKFLOW_URL"
+      with:
+        test-results-path: test/api/suites/test-results.json
+        workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        environment: dev
+        title: 'Compute API Test Results'
 
   API-Tests-UAT:
     name: API Tests (uat)
@@ -219,21 +217,19 @@ jobs:
     if: github.event_name == 'schedule' || github.event.inputs.run_uat == 'true'
     env:
       ENVIRONMENT: uat
-      # ... UAT environment variables ...
 
     steps:
     # ... same steps as dev job ...
 
-    # Use environment: uat for UAT job
     - name: Create Linear Issues for Test Failures
-      uses: nscale/quality-tooling/.github/actions/linear-test-failures@main
+      uses: nscaledev/quality-tooling/.github/actions/linear-test-failures@main
       if: ${{ !cancelled() }}
       with:
         test-results-path: test/api/suites/test-results.json
         workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         linear-api-key: ${{ secrets.LINEAR_API_KEY }}
         linear-team-id: ${{ vars.LINEAR_TEAM_ID }}
-        environment: uat  # Changed to uat
+        environment: uat
         linear-priority: '3'
         max-failures: '5'
 ```
@@ -249,8 +245,6 @@ jobs:
    ```
 
 2. **Use `if: ${{ !cancelled() }}`**: Ensures the action runs even when tests fail
-   - Without this, the action won't run if tests fail
-   - This is crucial for capturing failures
 
 3. **Environment Separation**:
    - Set `environment: dev` for dev job
