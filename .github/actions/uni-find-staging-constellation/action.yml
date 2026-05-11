@@ -1,0 +1,33 @@
+name: 'Uni Find Staging Constellation'
+description: 'Scans open uni-releases PRs for a candidate constellation and outputs the pinned service tag'
+author: 'Nscale'
+
+inputs:
+  service:
+    description: 'Service name as it appears in the constellation manifest (e.g. uni-region, uni-compute)'
+    required: true
+  releases-read-token:
+    description: 'GitHub token with read access to the releases repository'
+    required: true
+  releases-repo:
+    description: 'Releases repository in owner/repo format'
+    required: false
+    default: 'nscaledev/uni-releases'
+
+outputs:
+  tag:
+    description: 'Git tag pinned in the candidate constellation (e.g. v1.16.4), empty if no candidate found'
+    value: ${{ steps.find.outputs.tag }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Find candidate constellation tag
+      id: find
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: go run .
+      env:
+        GH_TOKEN: ${{ inputs.releases-read-token }}
+        SERVICE: ${{ inputs.service }}
+        RELEASES_REPO: ${{ inputs.releases-repo }}
