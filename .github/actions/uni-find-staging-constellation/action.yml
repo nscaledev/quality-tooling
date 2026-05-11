@@ -25,7 +25,8 @@ runs:
     - name: Find candidate constellation tag
       id: find
       shell: bash
-      run: go run ${{ github.action_path }}/uni-find-staging-constellation.go
+      working-directory: ${{ github.action_path }}
+      run: go run .
       env:
         GH_TOKEN: ${{ inputs.releases-read-token }}
         SERVICE: ${{ inputs.service }}
