@@ -54,6 +54,29 @@ Send a Slack message summarising Ginkgo/Gomega test results — pass/fail counts
 
 [Full documentation](./.github/actions/slack-test-notifications/README.md)
 
+### Uni Find Staging Constellation
+
+Scans open PRs in `uni-releases` for a candidate constellation and outputs the pinned service tag. Used as a preflight step before UAT tests to ensure tests run against the version deployed to staging.
+
+**Location**: `.github/actions/uni-find-staging-constellation/`
+
+**Usage**:
+```yaml
+- uses: nscaledev/quality-tooling/.github/actions/uni-find-staging-constellation@main
+  id: find
+  with:
+    service: uni-region
+    releases-read-token: ${{ secrets.RELEASES_READ_TOKEN }}
+```
+
+**Features**:
+- Paginates all open PRs in the releases repository
+- Finds the constellation with `status: candidate`
+- Strips short-SHA suffix from version: `v1.16.4-c2153ee` → `v1.16.4`
+- Outputs empty tag (skip UAT) when no candidate exists
+
+[Full documentation](./.github/actions/uni-find-staging-constellation/README.md)
+
 ## Adding New Actions
 
 1. Create directory: `.github/actions/{action-name}/`
