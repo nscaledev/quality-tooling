@@ -116,8 +116,8 @@ func main() {
 }
 
 // findCandidateTag scans open PRs in releasesRepo for a constellation with
-// status=candidate and returns the plain vX.Y.Z tag for the given service.
-// Returns an empty string (not an error) when no candidate is found.
+// status=candidate or status=released and returns the plain vX.Y.Z tag for
+// the given service. Returns an empty string (not an error) when none is found.
 func findCandidateTag(client *githubClient, releasesRepo, service string) (string, error) {
 	prs, err := listOpenPRs(client, releasesRepo)
 	if err != nil {
@@ -181,13 +181,13 @@ func checkConstellationFile(client *githubClient, releasesRepo, service string, 
 		return "", nil
 	}
 
-	if c.Status != "candidate" {
+	if c.Status != "candidate" && c.Status != "released" {
 		return "", nil
 	}
 
 	svc, ok := c.Services[service]
 	if !ok || svc.Version == "" {
-		return "", fmt.Errorf("candidate constellation found (PR #%d, %s) but %q version is missing or null", pr.Number, filename, service) //nolint:err113
+		return "", fmt.Errorf("constellation found (PR #%d, %s, status=%s) but %q version is missing or null", pr.Number, filename, c.Status, service) //nolint:err113
 	}
 
 	// Strip trailing short-SHA: v1.16.4-c2153ee -> v1.16.4
@@ -197,7 +197,7 @@ func checkConstellationFile(client *githubClient, releasesRepo, service string, 
 		return "", fmt.Errorf("extracted tag %q from %q does not match expected vX.Y.Z format", tag, svc.Version) //nolint:err113
 	}
 
-	fmt.Printf("Matched candidate: PR #%d (%s), file %s, tag %s\n", pr.Number, pr.Head.Ref, filename, tag)
+	fmt.Printf("Matched constellation: PR #%d (%s), status=%s, file %s, tag %s\n", pr.Number, pr.Head.Ref, c.Status, filename, tag)
 
 	return tag, nil
 }
