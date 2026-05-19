@@ -146,6 +146,12 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache: false
+
     - name: Generate Test Results Report
       id: report
       shell: bash

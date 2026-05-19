@@ -19,11 +19,11 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 	if !config.EnableAIAnalysis {
 		return nil, nil
 	}
+	if len(analysis.Failures) == 0 && len(analysis.Skipped) == 0 {
+		return nil, nil
+	}
 	if config.ClaudeToken == "" {
 		return nil, fmt.Errorf("enable-ai-analysis is true but claude-token/CLAUDE_CODE_OAUTH_TOKEN is not set")
-	}
-	if len(analysis.Failures) == 0 {
-		return nil, nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
