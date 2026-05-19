@@ -393,6 +393,8 @@ func TestBuildSlackPayloadIncludesBotFieldsButtonsAndAnalysis(t *testing.T) {
 	payload := buildSlackPayload(analysis, SlackOptions{
 		Title:       "E2E Test Results",
 		Environment: "dev",
+		Branch:      "feat/e2e",
+		Actor:       "octocat",
 		WorkflowURL: "https://github.example/run",
 		ReportURL:   "https://reports.example/allure",
 		Channel:     "#e2e",
@@ -412,6 +414,8 @@ func TestBuildSlackPayloadIncludesBotFieldsButtonsAndAnalysis(t *testing.T) {
 		"New failures",
 		"creates instance",
 		"Failure Analysis",
+		"feat/e2e",
+		"octocat",
 		"GitHub Build",
 		"Allure Report",
 	} {
@@ -460,6 +464,35 @@ func TestClaudePromptRequestsCategorisedSlackSummary(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
+func TestRenderAIInputIncludesSkippedTests(t *testing.T) {
+	t.Parallel()
+
+	input := renderAIInput(Analysis{
+		Current: TestRun{Name: "Console E2E"},
+		Stats:   Stats{Passed: 1, Failed: 1, Skipped: 1},
+		Failures: []TestCase{{
+			Name:    "creates instance",
+			Message: "timeout",
+		}},
+		Skipped: []TestCase{{
+			Name:    "deletes VPC",
+			Message: "feature flag disabled",
+		}},
+	})
+
+	for _, expected := range []string{
+		"Failed tests:",
+		"Skipped tests:",
+		"creates instance",
+		"deletes VPC",
+		"feature flag disabled",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("AI input missing %q:\n%s", expected, input)
 		}
 	}
 }

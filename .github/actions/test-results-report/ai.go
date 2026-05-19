@@ -56,6 +56,10 @@ func renderAIInput(analysis Analysis) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Test run: %s\n", analysis.Current.Name))
 	sb.WriteString(fmt.Sprintf("Totals: %d passed, %d failed, %d skipped\n\n", analysis.Stats.Passed, analysis.Stats.Failed, analysis.Stats.Skipped))
+
+	if len(analysis.Failures) > 0 {
+		sb.WriteString("Failed tests:\n")
+	}
 	for _, failure := range analysis.Failures {
 		sb.WriteString(fmt.Sprintf("Test: %s\n", failure.Name))
 		if failure.Suite != "" {
@@ -72,6 +76,24 @@ func renderAIInput(analysis Analysis) string {
 		}
 		sb.WriteString("\n")
 	}
+
+	if len(analysis.Skipped) > 0 {
+		sb.WriteString("Skipped tests:\n")
+	}
+	for _, skipped := range analysis.Skipped {
+		sb.WriteString(fmt.Sprintf("Test: %s\n", skipped.Name))
+		if skipped.Suite != "" {
+			sb.WriteString(fmt.Sprintf("Suite: %s\n", skipped.Suite))
+		}
+		if location := formatLocation(skipped); location != "" {
+			sb.WriteString(fmt.Sprintf("Location: %s\n", location))
+		}
+		if skipped.Message != "" {
+			sb.WriteString(fmt.Sprintf("Reason: %s\n", truncate(skipped.Message, 1000)))
+		}
+		sb.WriteString("\n")
+	}
+
 	return sb.String()
 }
 

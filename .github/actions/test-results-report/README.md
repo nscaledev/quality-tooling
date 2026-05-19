@@ -88,6 +88,8 @@ When enabled, the report includes:
 | `slack-channel` | No | empty | Slack channel for bot mode |
 | `fail-on-slack-error` | No | `false` | Fail action on Slack errors |
 | `environment` | No | empty | Environment label |
+| `branch` | No | `GITHUB_REF_NAME` | Branch shown in Slack |
+| `actor` | No | `GITHUB_ACTOR` | Actor shown in Slack |
 | `title` | No | `Test Results` | Report title |
 | `workflow-url` | No | inferred | GitHub Actions workflow URL |
 | `report-url` | No | empty | Published report URL, e.g. Allure |

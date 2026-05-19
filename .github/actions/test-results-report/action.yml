@@ -58,6 +58,14 @@ inputs:
     description: 'Environment name shown in the summary and Slack message.'
     required: false
     default: ''
+  branch:
+    description: 'Branch name shown in Slack. Defaults to GITHUB_REF_NAME.'
+    required: false
+    default: ''
+  actor:
+    description: 'Actor shown in Slack. Defaults to GITHUB_ACTOR.'
+    required: false
+    default: ''
   title:
     description: 'Report title.'
     required: false
@@ -153,6 +161,8 @@ runs:
         INPUT_SLACK_CHANNEL: ${{ inputs.slack-channel }}
         INPUT_FAIL_ON_SLACK_ERROR: ${{ inputs.fail-on-slack-error }}
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_BRANCH: ${{ inputs.branch }}
+        INPUT_ACTOR: ${{ inputs.actor }}
         INPUT_TITLE: ${{ inputs.title }}
         INPUT_WORKFLOW_URL: ${{ inputs.workflow-url }}
         INPUT_REPORT_URL: ${{ inputs.report-url }}

@@ -14,6 +14,8 @@ import (
 type SlackOptions struct {
 	Title       string
 	Environment string
+	Branch      string
+	Actor       string
 	WorkflowURL string
 	ReportURL   string
 	Channel     string
@@ -81,6 +83,20 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 				{Type: "mrkdwn", Text: fmt.Sprintf("*Skipped:*\n%d", analysis.Stats.Skipped)},
 			},
 		},
+	}
+
+	var contextFields []SlackText
+	if options.Environment != "" {
+		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Environment:*\n`%s`", options.Environment)})
+	}
+	if options.Branch != "" {
+		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Branch:*\n`%s`", options.Branch)})
+	}
+	if options.Actor != "" {
+		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Triggered by:*\n`%s`", options.Actor)})
+	}
+	if len(contextFields) > 0 {
+		blocks = append(blocks, SlackBlock{Type: "section", Fields: contextFields})
 	}
 
 	if analysis.Compare != nil {

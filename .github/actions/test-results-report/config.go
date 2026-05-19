@@ -24,6 +24,8 @@ type Config struct {
 	FailOnSlackError      bool
 	Title                 string
 	Environment           string
+	Branch                string
+	Actor                 string
 	WorkflowURL           string
 	ReportURL             string
 	MaxFailures           int
@@ -81,6 +83,8 @@ func configFromEnv(envSource interface{}) Config {
 		FailOnSlackError:      parseBoolDefault(env["INPUT_FAIL_ON_SLACK_ERROR"], false),
 		Title:                 firstNonEmpty(env["INPUT_TITLE"], "Test Results"),
 		Environment:           env["INPUT_ENVIRONMENT"],
+		Branch:                firstNonEmpty(env["INPUT_BRANCH"], env["GITHUB_REF_NAME"]),
+		Actor:                 firstNonEmpty(env["INPUT_ACTOR"], env["GITHUB_ACTOR"]),
 		WorkflowURL:           firstNonEmpty(env["INPUT_WORKFLOW_URL"], defaultWorkflowURL(env)),
 		ReportURL:             env["INPUT_REPORT_URL"],
 		MaxFailures:           parseIntDefault(env["INPUT_MAX_FAILURES"], 5),
