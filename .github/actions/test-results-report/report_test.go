@@ -1,0 +1,451 @@
+package main
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestParseJUnitReport(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="Console E2E Test Suites" tests="3" failures="1" skipped="1" time="12.5">
+  <testsuite name="chromium" tests="3" failures="1" skipped="1" time="12.5">
+    <testcase classname="settings.organisation" name="creates organisation group" time="1.2"/>
+    <testcase classname="compute.instance" name="creates instance" time="8.5">
+      <failure message="Expected button to be visible">TimeoutError: locator.click timed out
+        at src/spec/compute/instance.spec.ts:42:11</failure>
+      <system-out>console logs here</system-out>
+    </testcase>
+    <testcase classname="network.vpc" name="deletes VPC" time="0">
+      <skipped message="feature flag disabled"/>
+    </testcase>
+  </testsuite>
+</testsuites>`)
+
+	run, err := parseJUnit(input)
+	if err != nil {
+		t.Fatalf("parseJUnit returned error: %v", err)
+	}
+
+	if run.Name != "Console E2E Test Suites" {
+		t.Fatalf("run name = %q", run.Name)
+	}
+	if len(run.Tests) != 3 {
+		t.Fatalf("test count = %d", len(run.Tests))
+	}
+
+	stats := calculateStats(run.Tests)
+	if stats.Total != 3 || stats.Passed != 1 || stats.Failed != 1 || stats.Skipped != 1 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+
+	failed := run.Tests[1]
+	if failed.Status != StatusFailed {
+		t.Fatalf("failed status = %q", failed.Status)
+	}
+	if failed.ID != "compute.instance::creates instance" {
+		t.Fatalf("failed id = %q", failed.ID)
+	}
+	if !strings.Contains(failed.Message, "Expected button") {
+		t.Fatalf("failed message = %q", failed.Message)
+	}
+	if failed.Duration != 8500*time.Millisecond {
+		t.Fatalf("failed duration = %s", failed.Duration)
+	}
+
+	skipped := run.Tests[2]
+	if skipped.Status != StatusSkipped || skipped.Message != "feature flag disabled" {
+		t.Fatalf("unexpected skipped test: %+v", skipped)
+	}
+}
+
+func TestParsePlaywrightJSONReport(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{
+  "stats": {"duration": 4200},
+  "suites": [{
+    "title": "src/spec/compute/instance.spec.ts",
+    "file": "src/spec/compute/instance.spec.ts",
+    "specs": [{
+      "title": "creates instance @smoke",
+      "tests": [{
+        "projectName": "chromium",
+        "status": "unexpected",
+        "results": [{
+          "status": "failed",
+          "duration": 3000,
+          "error": {"message": "Error: expected visible"},
+          "errors": [{"message": "TimeoutError: locator.click timed out"}]
+        }]
+      }]
+    }, {
+      "title": "deletes instance @smoke",
+      "tests": [{
+        "projectName": "chromium",
+        "status": "expected",
+        "results": [{"status": "passed", "duration": 1200}]
+      }]
+    }, {
+      "title": "uses GPU @gpu",
+      "tests": [{
+        "projectName": "chromium",
+        "status": "skipped",
+        "results": [{"status": "skipped"}]
+      }]
+    }]
+  }]
+}`)
+
+	run, err := parsePlaywrightJSON(input)
+	if err != nil {
+		t.Fatalf("parsePlaywrightJSON returned error: %v", err)
+	}
+
+	if len(run.Tests) != 3 {
+		t.Fatalf("test count = %d", len(run.Tests))
+	}
+
+	stats := calculateStats(run.Tests)
+	if stats.Total != 3 || stats.Passed != 1 || stats.Failed != 1 || stats.Skipped != 1 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	if run.Duration != 4200*time.Millisecond {
+		t.Fatalf("duration = %s", run.Duration)
+	}
+
+	failed := run.Tests[0]
+	if failed.ID != "src/spec/compute/instance.spec.ts::creates instance @smoke::chromium" {
+		t.Fatalf("failed id = %q", failed.ID)
+	}
+	if failed.File != "src/spec/compute/instance.spec.ts" {
+		t.Fatalf("failed file = %q", failed.File)
+	}
+	if !strings.Contains(failed.Message, "expected visible") {
+		t.Fatalf("failed message = %q", failed.Message)
+	}
+}
+
+func TestParsePlaywrightJSONTreatsFlakyAsPassingFinalStatus(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{
+  "suites": [{
+    "title": "src/spec/settings.spec.ts",
+    "file": "src/spec/settings.spec.ts",
+    "specs": [{
+      "title": "saves settings",
+      "tests": [{
+        "projectName": "chromium",
+        "status": "flaky",
+        "results": [
+          {"status": "failed", "duration": 1000, "error": {"message": "first attempt failed"}},
+          {"status": "passed", "duration": 500}
+        ]
+      }]
+    }]
+  }]
+}`)
+
+	run, err := parsePlaywrightJSON(input)
+	if err != nil {
+		t.Fatalf("parsePlaywrightJSON returned error: %v", err)
+	}
+
+	stats := calculateStats(run.Tests)
+	if stats.Passed != 1 || stats.Failed != 0 {
+		t.Fatalf("unexpected stats for flaky final status: %+v", stats)
+	}
+}
+
+func TestParseGinkgoJSONReport(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`[
+  {
+    "SuiteDescription": "API Test Suites",
+    "SuiteSucceeded": false,
+    "RunTime": 2500000000,
+    "SpecReports": [
+      {
+        "ContainerHierarchyTexts": ["Core Cluster Management", "When listing clusters"],
+        "LeafNodeText": "returns all clusters",
+        "State": "passed",
+        "RunTime": 1000000000
+      },
+      {
+        "ContainerHierarchyTexts": ["Core Cluster Management", "When creating clusters"],
+        "LeafNodeText": "creates a cluster",
+        "State": "failed",
+        "RunTime": 1500000000,
+        "Failure": {
+          "Message": "Expected status 200 but got 500",
+          "Location": {"FileName": "cluster_test.go", "LineNumber": 123}
+        },
+        "CapturedGinkgoWriterOutput": "request logs"
+      }
+    ]
+  }
+]`)
+
+	run, err := parseGinkgoJSON(input)
+	if err != nil {
+		t.Fatalf("parseGinkgoJSON returned error: %v", err)
+	}
+
+	if run.Name != "API Test Suites" {
+		t.Fatalf("run name = %q", run.Name)
+	}
+	stats := calculateStats(run.Tests)
+	if stats.Total != 2 || stats.Passed != 1 || stats.Failed != 1 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+
+	failed := run.Tests[1]
+	if failed.ID != "Core Cluster Management > When creating clusters > creates a cluster" {
+		t.Fatalf("failed id = %q", failed.ID)
+	}
+	if failed.File != "cluster_test.go" || failed.Line != 123 {
+		t.Fatalf("failed location = %s:%d", failed.File, failed.Line)
+	}
+}
+
+func TestAnalyzeWithPreviousResults(t *testing.T) {
+	t.Parallel()
+
+	current := TestRun{Duration: 12 * time.Second, Tests: []TestCase{
+		{ID: "passes-now", Name: "passes now", Status: StatusPassed},
+		{ID: "new-failure", Name: "new failure", Status: StatusFailed},
+		{ID: "recurring-failure", Name: "recurring failure", Status: StatusFailed},
+		{ID: "new-skip", Name: "new skip", Status: StatusSkipped},
+		{ID: "recurring-skip", Name: "recurring skip", Status: StatusSkipped},
+	}}
+	previous := TestRun{Duration: 10 * time.Second, Tests: []TestCase{
+		{ID: "passes-now", Name: "passes now", Status: StatusFailed},
+		{ID: "recurring-failure", Name: "recurring failure", Status: StatusFailed},
+		{ID: "resolved-failure", Name: "resolved failure", Status: StatusFailed},
+		{ID: "recurring-skip", Name: "recurring skip", Status: StatusSkipped},
+		{ID: "resolved-skip", Name: "resolved skip", Status: StatusSkipped},
+	}}
+
+	analysis := analyze(current, &previous)
+	if analysis.Compare == nil {
+		t.Fatal("expected comparison")
+	}
+
+	if len(analysis.Compare.NewFailures) != 1 || analysis.Compare.NewFailures[0].ID != "new-failure" {
+		t.Fatalf("new failures = %+v", analysis.Compare.NewFailures)
+	}
+	if len(analysis.Compare.RecurringFailures) != 1 || analysis.Compare.RecurringFailures[0].ID != "recurring-failure" {
+		t.Fatalf("recurring failures = %+v", analysis.Compare.RecurringFailures)
+	}
+	if len(analysis.Compare.ResolvedFailures) != 2 {
+		t.Fatalf("resolved failures = %+v", analysis.Compare.ResolvedFailures)
+	}
+	if len(analysis.Compare.NewSkips) != 1 || len(analysis.Compare.RecurringSkips) != 1 || len(analysis.Compare.ResolvedSkips) != 1 {
+		t.Fatalf("skip comparison = %+v", analysis.Compare)
+	}
+	if analysis.Compare.DurationDelta != 2*time.Second {
+		t.Fatalf("duration delta = %s", analysis.Compare.DurationDelta)
+	}
+}
+
+func TestMarkdownSummaryIncludesFailuresSkipsAndComparison(t *testing.T) {
+	t.Parallel()
+
+	analysis := Analysis{
+		Current: TestRun{Name: "Console E2E", Duration: 12 * time.Second},
+		Stats:   Stats{Total: 3, Passed: 1, Failed: 1, Skipped: 1},
+		Failures: []TestCase{{
+			ID:      "failed-test",
+			Suite:   "compute.instance",
+			Name:    "creates instance",
+			File:    "src/spec/compute/instance.spec.ts",
+			Message: "Expected button to be visible",
+		}},
+		Skipped: []TestCase{{
+			ID:      "skipped-test",
+			Suite:   "network.vpc",
+			Name:    "deletes VPC",
+			Message: "feature flag disabled",
+		}},
+		Compare: &Comparison{
+			NewFailures:       []TestCase{{ID: "failed-test", Name: "creates instance"}},
+			RecurringFailures: []TestCase{{ID: "old-failure", Name: "still failing"}},
+			ResolvedFailures:  []TestCase{{ID: "resolved", Name: "now passing"}},
+			NewSkips:          []TestCase{{ID: "skipped-test", Name: "deletes VPC"}},
+		},
+	}
+
+	markdown := renderStepSummary(analysis, RenderOptions{
+		Title:        "E2E Test Results",
+		Environment:  "dev",
+		WorkflowURL:  "https://github.example/run",
+		ReportURL:    "https://reports.example/allure",
+		MaxFailures:  5,
+		MaxSkips:     5,
+		IncludeSkips: true,
+	})
+
+	for _, expected := range []string{
+		"## E2E Test Results",
+		"| Total | Passed | Failed | Skipped | Duration |",
+		"### Previous Result Comparison",
+		"New failures",
+		"### Failed Tests",
+		"creates instance",
+		"### Skipped Tests",
+		"feature flag disabled",
+		"https://reports.example/allure",
+	} {
+		if !strings.Contains(markdown, expected) {
+			t.Fatalf("summary missing %q:\n%s", expected, markdown)
+		}
+	}
+}
+
+func TestDetectFormatAndParseAuto(t *testing.T) {
+	t.Parallel()
+
+	junit := []byte(`<testsuite name="unit"><testcase classname="pkg" name="passes"/></testsuite>`)
+	playwright := []byte(`{"suites":[{"title":"example.spec.ts","file":"example.spec.ts","specs":[{"title":"passes","tests":[{"projectName":"chromium","status":"expected","results":[{"status":"passed"}]}]}]}]}`)
+	ginkgo := []byte(`[{"SuiteDescription":"api","SpecReports":[{"LeafNodeText":"passes","State":"passed"}]}]`)
+
+	for name, tc := range map[string]struct {
+		data       []byte
+		wantFormat string
+	}{
+		"junit":      {data: junit, wantFormat: "junit"},
+		"playwright": {data: playwright, wantFormat: "playwright-json"},
+		"ginkgo":     {data: ginkgo, wantFormat: "ginkgo-json"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			format, err := detectFormat(tc.data)
+			if err != nil {
+				t.Fatalf("detectFormat returned error: %v", err)
+			}
+			if format != tc.wantFormat {
+				t.Fatalf("format = %q, want %q", format, tc.wantFormat)
+			}
+
+			run, err := parseTestResults(tc.data, "auto")
+			if err != nil {
+				t.Fatalf("parseTestResults returned error: %v", err)
+			}
+			if len(run.Tests) != 1 || run.Tests[0].Status != StatusPassed {
+				t.Fatalf("unexpected parsed run: %+v", run)
+			}
+		})
+	}
+}
+
+func TestBuildSlackPayloadIncludesBotFieldsButtonsAndAnalysis(t *testing.T) {
+	t.Parallel()
+
+	analysis := Analysis{
+		Current: TestRun{Name: "Console E2E"},
+		Stats:   Stats{Total: 2, Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:    "creates instance",
+			Suite:   "compute.instance",
+			Message: "Expected button to be visible",
+		}},
+		Compare: &Comparison{NewFailures: []TestCase{{Name: "creates instance"}}},
+	}
+
+	payload := buildSlackPayload(analysis, SlackOptions{
+		Title:       "E2E Test Results",
+		Environment: "dev",
+		WorkflowURL: "https://github.example/run",
+		ReportURL:   "https://reports.example/allure",
+		Channel:     "#e2e",
+		AIAnalysis:  "The failure is isolated to instance creation.",
+		MaxFailures: 5,
+	})
+
+	if payload.Channel != "#e2e" {
+		t.Fatalf("channel = %q", payload.Channel)
+	}
+	if !strings.Contains(payload.Text, "E2E Test Results (dev)") {
+		t.Fatalf("text = %q", payload.Text)
+	}
+	rendered := slackPayloadText(payload)
+	for _, expected := range []string{
+		"Failed",
+		"New failures",
+		"creates instance",
+		"Failure Analysis",
+		"GitHub Build",
+		"Allure Report",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("payload missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestConfigDefaults(t *testing.T) {
+	t.Parallel()
+
+	config := configFromEnv(map[string]string{
+		"INPUT_TEST_RESULTS_PATH": "results.xml",
+	})
+
+	if config.Format != "auto" {
+		t.Fatalf("format = %q", config.Format)
+	}
+	if config.Title != "Test Results" {
+		t.Fatalf("title = %q", config.Title)
+	}
+	if !config.WriteStepSummary {
+		t.Fatal("write step summary should default true")
+	}
+	if config.MaxFailures != 5 || config.MaxSkips != 10 {
+		t.Fatalf("limits = failures %d skips %d", config.MaxFailures, config.MaxSkips)
+	}
+	if config.PreviousResultsSource != "path" {
+		t.Fatalf("previous source = %q", config.PreviousResultsSource)
+	}
+	if config.SendSlack {
+		t.Fatal("send slack should default false when no credentials are configured")
+	}
+}
+
+func TestClaudePromptRequestsCategorisedSlackSummary(t *testing.T) {
+	t.Parallel()
+
+	prompt := claudePrompt()
+	for _, expected := range []string{
+		"4-5 lines",
+		"categorised",
+		"failures and skips",
+		"%%SLACK%%",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
+func slackPayloadText(payload SlackPayload) string {
+	var parts []string
+	parts = append(parts, payload.Text)
+	for _, block := range payload.Blocks {
+		if block.Text != nil {
+			parts = append(parts, block.Text.Text)
+		}
+		for _, field := range block.Fields {
+			parts = append(parts, field.Text)
+		}
+		for _, element := range block.Elements {
+			if element.Text != nil {
+				parts = append(parts, element.Text.Text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}

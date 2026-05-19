@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="Console E2E Test Suites" tests="3" failures="1" skipped="1" time="12.5">
+  <testsuite name="chromium" tests="3" failures="1" skipped="1" time="12.5">
+    <testcase classname="settings.organisation" name="creates organisation group" time="1.2"/>
+    <testcase classname="compute.instance" name="creates instance" time="8.5">
+      <failure message="Expected button to be visible">TimeoutError: locator.click timed out at src/spec/compute/instance.spec.ts:42:11</failure>
+    </testcase>
+    <testcase classname="network.vpc" name="deletes VPC" time="0">
+      <skipped message="feature flag disabled"/>
+    </testcase>
+  </testsuite>
+</testsuites>

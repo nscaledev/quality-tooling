@@ -1,0 +1,183 @@
+name: 'Test Results Report'
+description: 'Analyze test failures/skips, write a GitHub step summary, and optionally notify Slack'
+author: 'Nscale'
+
+branding:
+  icon: 'bar-chart-2'
+  color: 'blue'
+
+inputs:
+  test-results-path:
+    description: 'Path to current test results. Supports a file or directory containing results.xml, junit.xml, results.json, or test-results.json.'
+    required: true
+  format:
+    description: 'Current test result format: auto, ginkgo-json, junit, or playwright-json.'
+    required: false
+    default: 'auto'
+  previous-results-path:
+    description: 'Optional path to previous/baseline test results. Supports a file or directory.'
+    required: false
+    default: ''
+  previous-results-format:
+    description: 'Previous test result format: auto, ginkgo-json, junit, or playwright-json. Defaults to format.'
+    required: false
+    default: 'auto'
+  previous-results-source:
+    description: 'Previous result source. Only path is currently supported.'
+    required: false
+    default: 'path'
+  compare-with-previous:
+    description: 'Compare current results with previous results: auto, true, or false. Auto enables comparison when previous-results-path is set.'
+    required: false
+    default: 'auto'
+  write-step-summary:
+    description: 'Append the analysis report to GITHUB_STEP_SUMMARY.'
+    required: false
+    default: 'true'
+  send-slack:
+    description: 'Send Slack notification: auto, true, or false. Auto sends when webhook or bot credentials are provided.'
+    required: false
+    default: 'auto'
+  slack-webhook-url:
+    description: 'Slack incoming webhook URL. Backward-compatible with webhook-based notifications.'
+    required: false
+    default: ''
+  slack-bot-token:
+    description: 'Slack bot token for chat.postMessage.'
+    required: false
+    default: ''
+  slack-channel:
+    description: 'Slack channel name or ID when using slack-bot-token.'
+    required: false
+    default: ''
+  fail-on-slack-error:
+    description: 'Fail the action when Slack notification fails.'
+    required: false
+    default: 'false'
+  environment:
+    description: 'Environment name shown in the summary and Slack message.'
+    required: false
+    default: ''
+  title:
+    description: 'Report title.'
+    required: false
+    default: 'Test Results'
+  workflow-url:
+    description: 'GitHub Actions workflow run URL. Defaults from GitHub environment when omitted.'
+    required: false
+    default: ''
+  report-url:
+    description: 'Optional published report URL, such as Allure.'
+    required: false
+    default: ''
+  max-failures:
+    description: 'Maximum failure details included in Slack and step summary.'
+    required: false
+    default: '5'
+  max-skips:
+    description: 'Maximum skipped test details included in the step summary.'
+    required: false
+    default: '10'
+  include-skips:
+    description: 'Include skipped test details in the step summary.'
+    required: false
+    default: 'true'
+  enable-ai-analysis:
+    description: 'Run Claude failure analysis and include it in the step summary and Slack.'
+    required: false
+    default: 'false'
+  claude-token:
+    description: 'Claude Code OAuth token. If omitted, CLAUDE_CODE_OAUTH_TOKEN is used.'
+    required: false
+    default: ''
+
+outputs:
+  total:
+    description: 'Total tests parsed.'
+    value: ${{ steps.report.outputs.total }}
+  passed:
+    description: 'Passed tests parsed.'
+    value: ${{ steps.report.outputs.passed }}
+  failed:
+    description: 'Failed tests parsed.'
+    value: ${{ steps.report.outputs.failed }}
+  skipped:
+    description: 'Skipped tests parsed.'
+    value: ${{ steps.report.outputs.skipped }}
+  duration:
+    description: 'Formatted test duration.'
+    value: ${{ steps.report.outputs.duration }}
+  duration-ms:
+    description: 'Test duration in milliseconds.'
+    value: ${{ steps.report.outputs.duration-ms }}
+  conclusion:
+    description: 'success when no failed tests were parsed, otherwise failure.'
+    value: ${{ steps.report.outputs.conclusion }}
+  new-failures:
+    description: 'Failures present in current results but not previous results.'
+    value: ${{ steps.report.outputs.new-failures }}
+  recurring-failures:
+    description: 'Failures present in both current and previous results.'
+    value: ${{ steps.report.outputs.recurring-failures }}
+  resolved-failures:
+    description: 'Previous failures no longer failing in current results.'
+    value: ${{ steps.report.outputs.resolved-failures }}
+  new-skips:
+    description: 'Skipped tests present in current results but not previous results.'
+    value: ${{ steps.report.outputs.new-skips }}
+  recurring-skips:
+    description: 'Skipped tests present in both current and previous results.'
+    value: ${{ steps.report.outputs.recurring-skips }}
+  resolved-skips:
+    description: 'Previous skipped tests no longer skipped in current results.'
+    value: ${{ steps.report.outputs.resolved-skips }}
+  slack-sent:
+    description: 'true if a Slack notification was sent successfully.'
+    value: ${{ steps.report.outputs.slack-sent }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate Test Results Report
+      id: report
+      shell: bash
+      env:
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_PREVIOUS_RESULTS_FORMAT: ${{ inputs.previous-results-format }}
+        INPUT_PREVIOUS_RESULTS_SOURCE: ${{ inputs.previous-results-source }}
+        INPUT_COMPARE_WITH_PREVIOUS: ${{ inputs.compare-with-previous }}
+        INPUT_WRITE_STEP_SUMMARY: ${{ inputs.write-step-summary }}
+        INPUT_SEND_SLACK: ${{ inputs.send-slack }}
+        INPUT_SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
+        INPUT_SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+        INPUT_SLACK_CHANNEL: ${{ inputs.slack-channel }}
+        INPUT_FAIL_ON_SLACK_ERROR: ${{ inputs.fail-on-slack-error }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_TITLE: ${{ inputs.title }}
+        INPUT_WORKFLOW_URL: ${{ inputs.workflow-url }}
+        INPUT_REPORT_URL: ${{ inputs.report-url }}
+        INPUT_MAX_FAILURES: ${{ inputs.max-failures }}
+        INPUT_MAX_SKIPS: ${{ inputs.max-skips }}
+        INPUT_INCLUDE_SKIPS: ${{ inputs.include-skips }}
+        INPUT_ENABLE_AI_ANALYSIS: ${{ inputs.enable-ai-analysis }}
+        INPUT_CLAUDE_TOKEN: ${{ inputs.claude-token }}
+      run: |
+        set -euo pipefail
+
+        WORKSPACE_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+
+        TEST_RESULTS_PATH="${{ inputs.test-results-path }}"
+        if [[ ! "$TEST_RESULTS_PATH" = /* ]]; then
+          TEST_RESULTS_PATH="$WORKSPACE_DIR/$TEST_RESULTS_PATH"
+        fi
+
+        PREVIOUS_RESULTS_PATH="${{ inputs.previous-results-path }}"
+        if [[ -n "$PREVIOUS_RESULTS_PATH" && ! "$PREVIOUS_RESULTS_PATH" = /* ]]; then
+          PREVIOUS_RESULTS_PATH="$WORKSPACE_DIR/$PREVIOUS_RESULTS_PATH"
+        fi
+
+        export INPUT_TEST_RESULTS_PATH="$TEST_RESULTS_PATH"
+        export INPUT_PREVIOUS_RESULTS_PATH="$PREVIOUS_RESULTS_PATH"
+
+        cd "${{ github.action_path }}"
+        go run .
