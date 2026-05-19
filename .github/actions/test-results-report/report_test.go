@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -340,6 +342,37 @@ func TestDetectFormatAndParseAuto(t *testing.T) {
 				t.Fatalf("unexpected parsed run: %+v", run)
 			}
 		})
+	}
+}
+
+func TestResolveResultsPathFiltersDirectoryByRequestedFormat(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "results.json")
+	xmlPath := filepath.Join(dir, "results.xml")
+
+	if err := os.WriteFile(jsonPath, []byte(`{"suites":[]}`), 0o600); err != nil {
+		t.Fatalf("write json: %v", err)
+	}
+	if err := os.WriteFile(xmlPath, []byte(`<testsuite name="unit"></testsuite>`), 0o600); err != nil {
+		t.Fatalf("write xml: %v", err)
+	}
+
+	resolved, err := resolveResultsPath(dir, "junit")
+	if err != nil {
+		t.Fatalf("resolveResultsPath returned error: %v", err)
+	}
+	if resolved != xmlPath {
+		t.Fatalf("resolved path = %q, want %q", resolved, xmlPath)
+	}
+
+	resolved, err = resolveResultsPath(dir, "playwright-json")
+	if err != nil {
+		t.Fatalf("resolveResultsPath returned error: %v", err)
+	}
+	if resolved != jsonPath {
+		t.Fatalf("resolved path = %q, want %q", resolved, jsonPath)
 	}
 }
 

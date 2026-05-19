@@ -100,7 +100,7 @@ func run(ctx context.Context, config Config) error {
 }
 
 func readAndParse(path, format string) (TestRun, error) {
-	resolvedPath, err := resolveResultsPath(path)
+	resolvedPath, err := resolveResultsPath(path, format)
 	if err != nil {
 		return TestRun{}, err
 	}
@@ -115,7 +115,7 @@ func readAndParse(path, format string) (TestRun, error) {
 	return run, nil
 }
 
-func resolveResultsPath(path string) (string, error) {
+func resolveResultsPath(path, format string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", fmt.Errorf("stat test results path %s: %w", path, err)
@@ -130,7 +130,7 @@ func resolveResultsPath(path string) (string, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || !isKnownResultsFile(entry.Name()) {
+		if entry.IsDir() || !isKnownResultsFile(entry.Name(), format) {
 			return nil
 		}
 		info, err := entry.Info()
@@ -152,12 +152,21 @@ func resolveResultsPath(path string) (string, error) {
 	return newestPath, nil
 }
 
-func isKnownResultsFile(name string) bool {
+func isKnownResultsFile(name, format string) bool {
 	lower := strings.ToLower(name)
-	return lower == "results.xml" ||
-		lower == "junit.xml" ||
-		lower == "results.json" ||
-		lower == "test-results.json"
+	switch normalizeFormat(format) {
+	case formatJUnit:
+		return lower == "results.xml" || lower == "junit.xml"
+	case formatPlaywrightJSON:
+		return lower == "results.json"
+	case formatGinkgoJSON:
+		return lower == "test-results.json"
+	default:
+		return lower == "results.xml" ||
+			lower == "junit.xml" ||
+			lower == "results.json" ||
+			lower == "test-results.json"
+	}
 }
 
 func appendStepSummary(path, content string) error {
