@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -232,6 +233,56 @@ var _ = Describe("Test Results Report", func() {
 				}))
 
 				GinkgoWriter.Printf("Report outputs: %+v\n", outputs)
+			})
+
+			It("should wire successful AI analysis into the summary and Slack without raw test detail tables", func() {
+				var slackPayload SlackPayload
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+					Expect(json.NewDecoder(request.Body).Decode(&slackPayload)).To(Succeed())
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer server.Close()
+
+				previousRunner := runAIAnalysis
+				runAIAnalysis = func(_ context.Context, receivedConfig Config, analysis Analysis) (*AIAnalysis, error) {
+					Expect(receivedConfig.EnableAIAnalysis).To(BeTrue())
+					Expect(receivedConfig.MaxFailures).To(Equal(5))
+					Expect(analysis.Failures).To(HaveLen(1))
+					Expect(analysis.Skipped).To(HaveLen(1))
+					return &AIAnalysis{
+						StepSummary:  "## Test Failure Analysis\n\nAI grouped failure summary.",
+						SlackSummary: "- *Compute:* AI grouped Slack summary.",
+					}, nil
+				}
+				DeferCleanup(func() {
+					runAIAnalysis = previousRunner
+				})
+
+				config.EnableAIAnalysis = true
+				config.ClaudeToken = "test-claude-token"
+				config.SendSlack = true
+				config.SlackWebhookURL = server.URL
+
+				err := run(context.Background(), config)
+
+				Expect(err).NotTo(HaveOccurred())
+
+				summary := readTestFile(summaryPath)
+				Expect(summary).To(ContainSubstring("## E2E Test Results"))
+				Expect(summary).To(ContainSubstring("## Test Failure Analysis"))
+				Expect(summary).To(ContainSubstring("AI grouped failure summary."))
+				Expect(summary).NotTo(ContainSubstring("### Failed Tests"))
+				Expect(summary).NotTo(ContainSubstring("### Skipped Tests"))
+				Expect(summary).NotTo(ContainSubstring("Expected button to be visible"))
+
+				slackText := slackPayloadText(slackPayload)
+				Expect(slackText).To(ContainSubstring(":mag: *Failure Analysis*"))
+				Expect(slackText).To(ContainSubstring("- *Compute:* AI grouped Slack summary."))
+				Expect(slackText).NotTo(ContainSubstring("*Failed Tests:*"))
+				Expect(slackText).NotTo(ContainSubstring("*Test:* creates instance"))
+
+				outputs := readOutputFile(outputPath)
+				Expect(outputs).To(HaveKeyWithValue("slack-sent", "true"))
 			})
 
 			It("should continue when previous results cannot be parsed", func() {

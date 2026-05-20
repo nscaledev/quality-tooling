@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+var runAIAnalysis = runClaudeAnalysis
+
 func main() {
 	if err := run(context.Background(), loadConfig()); err != nil {
 		fmt.Fprintf(os.Stderr, "test-results-report: %v\n", err)
@@ -37,7 +39,7 @@ func run(ctx context.Context, config Config) error {
 
 	analysis := analyze(current, previous)
 
-	aiAnalysis, err := runClaudeAnalysis(ctx, config, analysis)
+	aiAnalysis, err := runAIAnalysis(ctx, config, analysis)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: AI failure analysis skipped: %v\n", err)
 	}

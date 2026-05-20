@@ -194,6 +194,9 @@ func TestParseUniRegionJUnitFixture(t *testing.T) {
 	if !strings.Contains(failed.Message, "deleting filestorage") {
 		t.Fatalf("failed message = %q", failed.Message)
 	}
+	if !strings.Contains(failed.Message, "/home/runner/work/uni-region/uni-region/test/api/suites/filestorage_test.go:620") {
+		t.Fatalf("failed message does not preserve source location: %q", failed.Message)
+	}
 	if failed.File != "/home/runner/work/uni-region/uni-region/test/api/suites/filestorage_test.go" || failed.Line != 620 {
 		t.Fatalf("failed location = %s:%d", failed.File, failed.Line)
 	}
