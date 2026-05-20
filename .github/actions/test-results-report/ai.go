@@ -89,11 +89,11 @@ Section 2: Plain text Slack summary.
 - Include counts, confidence when the category is uncertain, and useful evidence from the test output.
 - Use supporting bullets such as '- *Evidence:*', '- *Impact:*', or '- *Confidence:*' when they make Slack easier to act on.
 - For intentional or sentinel test failures, describe them as temporary validation tests and make the action remove or disable them before review; do not mention issue alerting unless it appears in the evidence.
-- When failed tests are present, include a details bullet that says test-level failure reasons are available in the GitHub build summary.
-- Do not include the details bullet for skip-only runs.
 - Do not list every failed or skipped test.
 - Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
 - End with exactly one '- *Action:*' bullet.
+- When failed tests are present, the Action bullet must mention that test-level failure reasons are available in the GitHub build summary before the next action.
+- Do not mention test-level failure reasons for skip-only runs.
 
 Use this shape:
 - *Auth / all suites* (infra/external): 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
@@ -101,8 +101,7 @@ Use this shape:
 - *Impact:* Network, LoadBalancer, FileStorage, SSH CA, SecurityGroup, and Region suites are blocked by the same auth/config signal.
 - *Validation paths* (test/false failure): 3 negative-path tests likely received 401 before the expected 403/404 assertions.
 - *Confidence:* High for the auth/config failure pattern; medium for validation paths until credentials are refreshed.
-- *Details:* Test-level failure reasons are available in the GitHub build summary.
-- *Action:* refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
+- *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 
 func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string {

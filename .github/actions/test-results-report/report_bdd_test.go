@@ -567,10 +567,10 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("remove or disable them before review"))
 				Expect(prompt).To(ContainSubstring("do not mention issue alerting unless it appears in the evidence"))
 				Expect(prompt).To(ContainSubstring("When failed tests are present"))
-				Expect(prompt).To(ContainSubstring("test-level failure reasons are available in the GitHub build summary"))
-				Expect(prompt).To(ContainSubstring("Do not include the details bullet for skip-only runs"))
 				Expect(prompt).To(ContainSubstring("Do not restate the test run title"))
 				Expect(prompt).To(ContainSubstring("End with exactly one '- *Action:*' bullet"))
+				Expect(prompt).To(ContainSubstring("the Action bullet must mention that test-level failure reasons are available in the GitHub build summary"))
+				Expect(prompt).To(ContainSubstring("Do not mention test-level failure reasons for skip-only runs"))
 			})
 
 			It("should include a concrete compact example for step summary and Slack output", func() {
@@ -585,8 +585,8 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("- *Impact:* Network, LoadBalancer, FileStorage, SSH CA, SecurityGroup, and Region suites"))
 				Expect(prompt).To(ContainSubstring("- *Validation paths* (test/false failure): 3 negative-path tests"))
 				Expect(prompt).To(ContainSubstring("- *Confidence:* High for the auth/config failure pattern"))
-				Expect(prompt).To(ContainSubstring("- *Details:* Test-level failure reasons are available in the GitHub build summary."))
-				Expect(prompt).To(ContainSubstring("- *Action:* refresh the token or config"))
+				Expect(prompt).NotTo(ContainSubstring("- *Details:* Test-level failure reasons are available in the GitHub build summary."))
+				Expect(prompt).To(ContainSubstring("- *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config"))
 			})
 		})
 

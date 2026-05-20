@@ -598,11 +598,13 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Use supporting bullets such as '- *Evidence:*', '- *Impact:*', or '- *Confidence:*'",
 		"For intentional or sentinel test failures",
 		"remove or disable them before review",
-		"test-level failure reasons are available in the GitHub build summary",
 		"Do not list every failed or skipped test",
 		"End with exactly one '- *Action:*' bullet",
+		"the Action bullet must mention that test-level failure reasons are available in the GitHub build summary",
+		"Do not mention test-level failure reasons for skip-only runs",
 		"- *Auth / all suites* (infra/external):",
 		"- *Evidence:* Fixture setup and negative-path checks both receive 401 responses",
+		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
 		aiSlackDelimiter,
 	} {
 		if !strings.Contains(prompt, expected) {
