@@ -405,6 +405,22 @@ var _ = Describe("Test Results Report", func() {
 	})
 
 	Context("When sending Slack notifications", func() {
+		Describe("Given a lower-case report environment", func() {
+			It("should render the environment in upper case in the title header", func() {
+				payload := buildSlackPayload(Analysis{
+					Current: TestRun{Name: "Region API Test Suites"},
+					Stats:   Stats{Total: 1, Passed: 1},
+				}, SlackOptions{
+					Title:       "Region API Test Results",
+					Environment: "dev",
+				})
+
+				rendered := slackPayloadText(payload)
+				Expect(payload.Text).To(ContainSubstring("Region API Test Results (DEV) Region API Test Suites - Passed"))
+				Expect(rendered).To(ContainSubstring("*Environment:*\n`dev`"))
+			})
+		})
+
 		Describe("Given a Slack bot token and channel", func() {
 			It("should post JSON with bearer authentication and channel fallback", func() {
 				var (

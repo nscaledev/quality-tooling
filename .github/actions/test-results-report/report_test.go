@@ -405,7 +405,7 @@ func TestBuildSlackPayloadIncludesBotFieldsButtonsAndAnalysis(t *testing.T) {
 	if payload.Channel != "#e2e" {
 		t.Fatalf("channel = %q", payload.Channel)
 	}
-	if !strings.Contains(payload.Text, "E2E Test Results (dev)") {
+	if !strings.Contains(payload.Text, "E2E Test Results (DEV)") {
 		t.Fatalf("text = %q", payload.Text)
 	}
 	rendered := slackPayloadText(payload)
@@ -458,7 +458,7 @@ func TestBuildSlackPayloadOmitsFailureDetailsWhenAIAnalysisSummarisesPatterns(t 
 		}
 	}
 	for _, expected := range []string{
-		"Region API Test Results (dev)",
+		"Region API Test Results (DEV)",
 		"Failed",
 		"Failure Analysis",
 		"Auth/config issue",

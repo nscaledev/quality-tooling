@@ -66,7 +66,7 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 
 	envSuffix := ""
 	if options.Environment != "" {
-		envSuffix = fmt.Sprintf(" (%s)", options.Environment)
+		envSuffix = fmt.Sprintf(" (%s)", strings.ToUpper(options.Environment))
 	}
 
 	text := fmt.Sprintf("%s%s %s - %s", options.Title, envSuffix, firstNonEmpty(analysis.Current.Name, "Test run"), statusText)
