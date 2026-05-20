@@ -23,6 +23,10 @@ inputs:
     description: 'Notification title shown in the Slack message header (e.g. "Compute API Test Results")'
     required: false
     default: 'API Test Results'
+  format:
+    description: 'Test results format: ginkgo (default) or junit'
+    required: false
+    default: 'ginkgo'
 
 runs:
   using: 'composite'
@@ -45,3 +49,4 @@ runs:
         SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
         ENVIRONMENT: ${{ inputs.environment }}
         TITLE: ${{ inputs.title }}
+        FORMAT: ${{ inputs.format }}
