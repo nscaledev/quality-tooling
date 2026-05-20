@@ -251,7 +251,7 @@ var _ = Describe("Test Results Report", func() {
 					Expect(analysis.Skipped).To(HaveLen(1))
 					return &AIAnalysis{
 						StepSummary:  "## Test Failure Analysis\n\nAI grouped failure summary.",
-						SlackSummary: "- *infra/external - Compute:* AI grouped Slack summary.",
+						SlackSummary: "- *Compute* (infra/external): AI grouped Slack summary.",
 					}, nil
 				}
 				DeferCleanup(func() {
@@ -277,7 +277,7 @@ var _ = Describe("Test Results Report", func() {
 
 				slackText := slackPayloadText(slackPayload)
 				Expect(slackText).To(ContainSubstring(":mag: *Failure Analysis*"))
-				Expect(slackText).To(ContainSubstring("- *infra/external - Compute:* AI grouped Slack summary."))
+				Expect(slackText).To(ContainSubstring("- *Compute* (infra/external): AI grouped Slack summary."))
 				Expect(slackText).NotTo(ContainSubstring("*Failed Tests:*"))
 				Expect(slackText).NotTo(ContainSubstring("*Test:* creates instance"))
 
@@ -559,8 +559,10 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed"))
 				Expect(prompt).To(ContainSubstring("Use unknown/mixed when there is not enough evidence"))
 				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
-				Expect(prompt).To(ContainSubstring("Each triage bullet must start with '- *<suite/category>* (<category>):'"))
+				Expect(prompt).To(ContainSubstring("6-10 concise Slack mrkdwn bullet lines"))
+				Expect(prompt).To(ContainSubstring("Each pattern bullet must start with '- *<suite/category>* (<category>):'"))
 				Expect(prompt).To(ContainSubstring("Group by suite name when one suite is affected"))
+				Expect(prompt).To(ContainSubstring("Use supporting bullets such as '- *Evidence:*', '- *Impact:*', or '- *Confidence:*'"))
 				Expect(prompt).To(ContainSubstring("For intentional or sentinel test failures"))
 				Expect(prompt).To(ContainSubstring("remove or disable them before review"))
 				Expect(prompt).To(ContainSubstring("do not mention issue alerting unless it appears in the evidence"))
@@ -568,6 +570,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("test-level failure reasons are available in the GitHub build summary"))
 				Expect(prompt).To(ContainSubstring("Do not include the details bullet for skip-only runs"))
 				Expect(prompt).To(ContainSubstring("Do not restate the test run title"))
+				Expect(prompt).To(ContainSubstring("End with exactly one '- *Action:*' bullet"))
 			})
 
 			It("should include a concrete compact example for step summary and Slack output", func() {
@@ -578,7 +581,10 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("Auth / 401 responses"))
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
 				Expect(prompt).To(ContainSubstring("- *Auth / all suites* (infra/external): 23 failures and 37 skips"))
+				Expect(prompt).To(ContainSubstring("- *Evidence:* Fixture setup and negative-path checks both receive 401 responses"))
+				Expect(prompt).To(ContainSubstring("- *Impact:* Network, LoadBalancer, FileStorage, SSH CA, SecurityGroup, and Region suites"))
 				Expect(prompt).To(ContainSubstring("- *Validation paths* (test/false failure): 3 negative-path tests"))
+				Expect(prompt).To(ContainSubstring("- *Confidence:* High for the auth/config failure pattern"))
 				Expect(prompt).To(ContainSubstring("- *Details:* Test-level failure reasons are available in the GitHub build summary."))
 				Expect(prompt).To(ContainSubstring("- *Action:* refresh the token or config"))
 			})

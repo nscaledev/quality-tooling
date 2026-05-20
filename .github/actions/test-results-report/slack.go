@@ -135,7 +135,7 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 	if strings.TrimSpace(options.AIAnalysis) != "" {
 		blocks = append(blocks, SlackBlock{
 			Type: "section",
-			Text: &SlackText{Type: "mrkdwn", Text: fmt.Sprintf(":mag: *Failure Analysis*\n%s", truncate(strings.TrimSpace(options.AIAnalysis), 1200))},
+			Text: &SlackText{Type: "mrkdwn", Text: fmt.Sprintf(":mag: *Failure Analysis*\n%s", truncate(strings.TrimSpace(options.AIAnalysis), 2400))},
 		})
 	}
 

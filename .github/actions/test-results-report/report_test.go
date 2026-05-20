@@ -460,6 +460,26 @@ func TestBuildSlackPayloadIncludesContextButtonsAndAnalysis(t *testing.T) {
 	}
 }
 
+func TestBuildSlackPayloadKeepsLongerAIAnalysisForSlack(t *testing.T) {
+	t.Parallel()
+
+	analysis := Analysis{
+		Current: TestRun{Name: "Console E2E"},
+		Stats:   Stats{Total: 4, Passed: 1, Failed: 3},
+	}
+	longAnalysis := strings.Repeat("a", 1300) + " marker-after-old-limit"
+
+	payload := buildSlackPayload(analysis, SlackOptions{
+		Title:      "E2E Test Results",
+		AIAnalysis: longAnalysis,
+	})
+
+	rendered := slackPayloadText(payload)
+	if !strings.Contains(rendered, "marker-after-old-limit") {
+		t.Fatalf("payload truncated AI analysis at the old short limit:\n%s", rendered)
+	}
+}
+
 func TestBuildSlackPayloadOmitsFailureDetailsWhenAIAnalysisSummarisesPatterns(t *testing.T) {
 	t.Parallel()
 
@@ -571,15 +591,18 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 
 	prompt := claudePrompt()
 	for _, expected := range []string{
-		"3-5 short Slack mrkdwn bullet lines",
+		"6-10 concise Slack mrkdwn bullet lines",
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed",
-		"Each triage bullet must start with '- *<suite/category>* (<category>):'",
+		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
 		"Group by suite name when one suite is affected",
+		"Use supporting bullets such as '- *Evidence:*', '- *Impact:*', or '- *Confidence:*'",
 		"For intentional or sentinel test failures",
 		"remove or disable them before review",
 		"test-level failure reasons are available in the GitHub build summary",
 		"Do not list every failed or skipped test",
+		"End with exactly one '- *Action:*' bullet",
 		"- *Auth / all suites* (infra/external):",
+		"- *Evidence:* Fixture setup and negative-path checks both receive 401 responses",
 		aiSlackDelimiter,
 	} {
 		if !strings.Contains(prompt, expected) {
