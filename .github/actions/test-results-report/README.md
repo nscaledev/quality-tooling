@@ -94,7 +94,7 @@ When enabled, the report includes:
 | `title` | No | `Test Results` | Report title |
 | `workflow-url` | No | inferred | GitHub Actions workflow URL |
 | `report-url` | No | empty | Published report URL, e.g. Allure |
-| `max-failures` | No | `5` | Failure detail limit |
+| `max-failures` | No | `10` | Failure detail limit |
 | `max-skips` | No | `10` | Skip detail limit |
 | `include-skips` | No | `true` | Include skipped test details in summary |
 | `enable-ai-analysis` | No | `false` | Run Claude analysis |

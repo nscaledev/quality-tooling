@@ -575,7 +575,7 @@ func TestConfigDefaults(t *testing.T) {
 	if !config.WriteStepSummary {
 		t.Fatal("write step summary should default true")
 	}
-	if config.MaxFailures != 5 || config.MaxSkips != 10 {
+	if config.MaxFailures != 10 || config.MaxSkips != 10 {
 		t.Fatalf("limits = failures %d skips %d", config.MaxFailures, config.MaxSkips)
 	}
 	if config.PreviousResultsSource != "path" {
@@ -593,7 +593,10 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	for _, expected := range []string{
 		"4-6 high-signal Slack mrkdwn bullet lines",
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed",
+		`add a "### Representative Failed Tests" table capped at 10 rows`,
+		"group tests with the same failure reason into one row",
 		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
+		"Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason",
 		"Group by suite name when one suite is affected",
 		"Lead with the highest-attention real product, infra, or environment blocker",
 		"keep temporary sentinel/test-validation failures short",
@@ -607,6 +610,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"the Action bullet must mention that test-level failure reasons are available in the GitHub build summary",
 		"Do not mention test-level failure reasons for skip-only runs",
 		"- *Auth / all suites* (infra/external):",
+		"| Suite / area | Representative tests | Failure reason | Count |",
 		"- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.",
 		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
 		aiSlackDelimiter,

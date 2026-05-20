@@ -67,15 +67,22 @@ Section 1: Markdown for the GitHub step summary.
 - Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed.
 - Use unknown/mixed when there is not enough evidence to choose a category confidently.
 - Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
-- Focus on likely cause, blast radius, confidence, and the next check.
+- The pattern table must make clear what failed, why it failed, the likely reason, impact, and the next check.
+- When test-level detail is useful, add a "### Representative Failed Tests" table capped at 10 rows.
+- In the representative tests table, group tests with the same failure reason into one row instead of listing duplicate failures separately.
 
 Use this shape:
 ## Test Failure Analysis
 
 ### Patterns
-| Category | Area / signal | Impact | Likely cause | Confidence | Next check |
-| --- | --- | ---: | --- | --- | --- |
-| infra/external | Auth / 401 responses | 23 failed, 37 skipped | Expired or invalid API token blocked setup-dependent specs | High | Validate the API token, then rerun one representative suite |
+| Category | What failed | Why it failed | Likely reason | Impact | Next check |
+| --- | --- | --- | --- | ---: | --- |
+| infra/external | Auth-dependent setup across suites | API calls returned 401 before product assertions | Expired or invalid API token | 23 failed, 37 skipped | Validate the API token, then rerun one representative suite |
+
+### Representative Failed Tests
+| Suite / area | Representative tests | Failure reason | Count |
+| --- | --- | --- | ---: |
+| File Storage Management | attach storage, detach storage | HTTP 401 access_denied before product assertions | 8 |
 
 ### Suggested Next Checks
 - Confirm whether the failures share the same status/error before opening individual test issues.
@@ -84,7 +91,9 @@ Use this shape:
 %s
 Section 2: Plain text Slack summary.
 - 4-6 high-signal Slack mrkdwn bullet lines.
+- Do not use tables in the Slack summary; Slack should stay short bullet lines.
 - Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, unknown/mixed.
+- Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
 - Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
 - Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
@@ -97,7 +106,7 @@ Section 2: Plain text Slack summary.
 - Do not mention test-level failure reasons for skip-only runs.
 
 Use this shape:
-- *Auth / all suites* (infra/external): 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
+- *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
 - *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.
 - *Validation paths* (test/false failure): 3 negative-path tests are likely side effects of the same 401 auth failure.
 - *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)

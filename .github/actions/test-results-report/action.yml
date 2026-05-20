@@ -73,7 +73,7 @@ inputs:
   max-failures:
     description: 'Maximum failure details included in Slack and step summary.'
     required: false
-    default: '5'
+    default: '10'
   max-skips:
     description: 'Maximum skipped test details included in the step summary.'
     required: false

@@ -77,7 +77,7 @@ func configFromEnv(env map[string]string) Config {
 		Actor:                 firstNonEmpty(env["INPUT_ACTOR"], env["GITHUB_ACTOR"]),
 		WorkflowURL:           firstNonEmpty(env["INPUT_WORKFLOW_URL"], defaultWorkflowURL(env)),
 		ReportURL:             env["INPUT_REPORT_URL"],
-		MaxFailures:           parseIntDefault(env["INPUT_MAX_FAILURES"], 5),
+		MaxFailures:           parseIntDefault(env["INPUT_MAX_FAILURES"], 10),
 		MaxSkips:              parseIntDefault(env["INPUT_MAX_SKIPS"], 10),
 		IncludeSkips:          parseBoolDefault(env["INPUT_INCLUDE_SKIPS"], true),
 		EnableAIAnalysis:      parseBoolDefault(env["INPUT_ENABLE_AI_ANALYSIS"], false),

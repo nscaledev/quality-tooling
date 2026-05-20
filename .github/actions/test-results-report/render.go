@@ -105,7 +105,7 @@ func normalizeRenderOptions(options RenderOptions) RenderOptions {
 		options.Title = "Test Results"
 	}
 	if options.MaxFailures <= 0 {
-		options.MaxFailures = 5
+		options.MaxFailures = 10
 	}
 	if options.MaxSkips <= 0 {
 		options.MaxSkips = 10

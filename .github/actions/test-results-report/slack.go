@@ -52,7 +52,7 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 		options.Title = "Test Results"
 	}
 	if options.MaxFailures <= 0 {
-		options.MaxFailures = 5
+		options.MaxFailures = 10
 	}
 
 	statusText := "Passed"
