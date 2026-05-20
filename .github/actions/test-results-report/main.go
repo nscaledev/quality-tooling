@@ -74,7 +74,6 @@ func run(ctx context.Context, config Config) error {
 			Actor:              config.Actor,
 			WorkflowURL:        config.WorkflowURL,
 			ReportURL:          config.ReportURL,
-			Channel:            config.SlackChannel,
 			AIAnalysis:         slackSummary,
 			MaxFailures:        config.MaxFailures,
 			OmitFailureDetails: strings.TrimSpace(slackSummary) != "",

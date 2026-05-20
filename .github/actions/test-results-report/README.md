@@ -11,7 +11,7 @@ This action is additive. Existing users of `slack-test-notifications` can keep u
 - Writes a GitHub step summary by default
 - Compares against previous results when `previous-results-path` is provided
 - Reports new, recurring, and resolved failures/skips
-- Sends Slack via incoming webhook or Slack bot `chat.postMessage`
+- Sends Slack via incoming webhook
 - Optionally adds concise Claude failure analysis grouped by failure pattern, without repeating the raw test tables
 - Fails open for Slack and Claude by default
 
@@ -43,8 +43,7 @@ Place this after the Allure report URL is known.
     environment: ${{ needs.e2e-smoke-tests.outputs.target-env }}
     workflow-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     report-url: ${{ steps.report-url.outputs.url }}
-    slack-bot-token: ${{ secrets.E2E_UI_AUTOMATION_SLACK_BOT_TOKEN }}
-    slack-channel: ${{ vars.E2E_SLACK_CHANNEL_NAME }}
+    slack-webhook-url: ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
     enable-ai-analysis: 'true'
     claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -82,10 +81,8 @@ When enabled, the report includes:
 | `previous-results-source` | No | `path` | Only `path` is currently supported |
 | `compare-with-previous` | No | `auto` | Auto enables comparison when previous path is set |
 | `write-step-summary` | No | `true` | Append markdown to `$GITHUB_STEP_SUMMARY` |
-| `send-slack` | No | `auto` | Auto sends when Slack credentials are supplied |
+| `send-slack` | No | `auto` | Auto sends when `slack-webhook-url` is supplied |
 | `slack-webhook-url` | No | empty | Incoming webhook URL |
-| `slack-bot-token` | No | empty | Bot token for `chat.postMessage` |
-| `slack-channel` | No | empty | Slack channel for bot mode |
 | `fail-on-slack-error` | No | `false` | Fail action on Slack errors |
 | `environment` | No | empty | Environment label |
 | `branch` | No | `GITHUB_REF_NAME` | Branch shown in Slack |
@@ -122,4 +119,4 @@ The action emits counts and comparison values:
 
 This action does not replace or change `slack-test-notifications`. Existing Ginkgo webhook consumers can continue using that action.
 
-For new migrations, use this action. It preserves the old webhook model through `slack-webhook-url` while also supporting bot-token Slack messages and non-Ginkgo result formats.
+For new migrations, use this action. It preserves the old webhook model through `slack-webhook-url` while also supporting non-Ginkgo result formats.

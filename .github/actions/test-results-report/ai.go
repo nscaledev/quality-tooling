@@ -75,14 +75,15 @@ Section 2: Plain text Slack summary.
 - Each bullet must start with '- *<suite/category>:*'.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
 - Include counts and the top next action.
-- Include a details bullet that says test-level failure reasons can be found in the GitHub build summary.
+- When failed tests are present, include a details bullet that says test-level failure reasons are available in the GitHub build summary.
+- Do not include the details bullet for skip-only runs.
 - Do not list every failed or skipped test.
 - Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
 
 Use this shape:
 - *Auth / all suites:* 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
 - *Validation paths:* 3 negative-path tests likely received 401 before the expected 403/404 assertions.
-- *Details:* Test-level failure reasons can be found in the GitHub build summary.
+- *Details:* Test-level failure reasons are available in the GitHub build summary.
 - *Next:* refresh the token or config, then rerun one focused smoke suite.`
 }
 

@@ -19,16 +19,14 @@ type SlackOptions struct {
 	Actor              string
 	WorkflowURL        string
 	ReportURL          string
-	Channel            string
 	AIAnalysis         string
 	MaxFailures        int
 	OmitFailureDetails bool
 }
 
 type SlackPayload struct {
-	Channel string       `json:"channel,omitempty"`
-	Text    string       `json:"text"`
-	Blocks  []SlackBlock `json:"blocks,omitempty"`
+	Text   string       `json:"text"`
+	Blocks []SlackBlock `json:"blocks,omitempty"`
 }
 
 type SlackBlock struct {
@@ -161,31 +159,20 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 	}
 
 	return SlackPayload{
-		Channel: options.Channel,
-		Text:    text,
-		Blocks:  blocks,
+		Text:   text,
+		Blocks: blocks,
 	}
 }
 
 func sendSlack(ctx context.Context, config Config, payload SlackPayload) error {
-	if config.SlackBotToken != "" {
-		return sendSlackBotMessage(ctx, config, payload)
-	}
 	return sendSlackWebhook(ctx, config.SlackWebhookURL, payload)
 }
 
 func sendSlackWebhook(ctx context.Context, webhookURL string, payload SlackPayload) error {
-	return postSlackPayload(ctx, webhookURL, "", payload, false)
+	return postSlackPayload(ctx, webhookURL, payload)
 }
 
-func sendSlackBotMessage(ctx context.Context, config Config, payload SlackPayload) error {
-	if payload.Channel == "" {
-		payload.Channel = config.SlackChannel
-	}
-	return postSlackPayload(ctx, config.SlackAPIURL, config.SlackBotToken, payload, true)
-}
-
-func postSlackPayload(ctx context.Context, url, token string, payload SlackPayload, expectSlackOK bool) error {
+func postSlackPayload(ctx context.Context, url string, payload SlackPayload) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal slack payload: %w", err)
@@ -196,9 +183,6 @@ func postSlackPayload(ctx context.Context, url, token string, payload SlackPaylo
 		return fmt.Errorf("create slack request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -210,16 +194,6 @@ func postSlackPayload(ctx context.Context, url, token string, payload SlackPaylo
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("slack returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-
-	if expectSlackOK {
-		var slackResp struct {
-			OK    bool   `json:"ok"`
-			Error string `json:"error"`
-		}
-		if err := json.Unmarshal(respBody, &slackResp); err == nil && !slackResp.OK {
-			return fmt.Errorf("slack API returned ok=false: %s", slackResp.Error)
-		}
 	}
 
 	return nil

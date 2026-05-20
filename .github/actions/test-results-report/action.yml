@@ -35,19 +35,11 @@ inputs:
     required: false
     default: 'true'
   send-slack:
-    description: 'Send Slack notification: auto, true, or false. Auto sends when webhook or bot credentials are provided.'
+    description: 'Send Slack notification: auto, true, or false. Auto sends when slack-webhook-url is provided.'
     required: false
     default: 'auto'
   slack-webhook-url:
     description: 'Slack incoming webhook URL. Backward-compatible with webhook-based notifications.'
-    required: false
-    default: ''
-  slack-bot-token:
-    description: 'Slack bot token for chat.postMessage.'
-    required: false
-    default: ''
-  slack-channel:
-    description: 'Slack channel name or ID when using slack-bot-token.'
     required: false
     default: ''
   fail-on-slack-error:
@@ -165,8 +157,6 @@ runs:
         INPUT_WRITE_STEP_SUMMARY: ${{ inputs.write-step-summary }}
         INPUT_SEND_SLACK: ${{ inputs.send-slack }}
         INPUT_SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
-        INPUT_SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
-        INPUT_SLACK_CHANNEL: ${{ inputs.slack-channel }}
         INPUT_FAIL_ON_SLACK_ERROR: ${{ inputs.fail-on-slack-error }}
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
         INPUT_BRANCH: ${{ inputs.branch }}

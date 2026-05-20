@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -279,8 +278,7 @@ var _ = Describe("Test Results Report", func() {
 					"INPUT_TEST_RESULTS_PATH":       "results.xml",
 					"INPUT_PREVIOUS_RESULTS_PATH":   "previous.xml",
 					"INPUT_SEND_SLACK":              "auto",
-					"INPUT_SLACK_BOT_TOKEN":         "xoxb-token",
-					"INPUT_SLACK_CHANNEL":           "C123",
+					"INPUT_SLACK_WEBHOOK_URL":       "https://hooks.slack.example/test",
 					"INPUT_COMPARE_WITH_PREVIOUS":   "auto",
 					"INPUT_PREVIOUS_RESULTS_FORMAT": "",
 					"INPUT_FORMAT":                  "junit",
@@ -308,7 +306,7 @@ var _ = Describe("Test Results Report", func() {
 			It("should reject Slack mode without usable credentials", func() {
 				config := Config{TestResultsPath: "results.xml", SendSlack: true}
 
-				Expect(config.validate()).To(MatchError(ContainSubstring("neither slack-webhook-url nor slack-bot-token + slack-channel")))
+				Expect(config.validate()).To(MatchError(ContainSubstring("slack-webhook-url was not provided")))
 			})
 
 			It("should reject unsupported previous result sources", func() {
@@ -421,63 +419,6 @@ var _ = Describe("Test Results Report", func() {
 			})
 		})
 
-		Describe("Given a Slack bot token and channel", func() {
-			It("should post JSON with bearer authentication and channel fallback", func() {
-				var (
-					received    SlackPayload
-					method      string
-					authHeader  string
-					contentType string
-					decodeErr   error
-				)
-
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-					method = request.Method
-					authHeader = request.Header.Get("Authorization")
-					contentType = request.Header.Get("Content-Type")
-					decodeErr = json.NewDecoder(request.Body).Decode(&received)
-
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(`{"ok":true}`))
-				}))
-				defer server.Close()
-
-				config := Config{
-					SlackBotToken: "xoxb-token",
-					SlackChannel:  "C123",
-					SlackAPIURL:   server.URL,
-				}
-
-				err := sendSlackBotMessage(context.Background(), config, SlackPayload{Text: "hello"})
-
-				Expect(err).NotTo(HaveOccurred())
-				Expect(method).To(Equal(http.MethodPost))
-				Expect(authHeader).To(Equal("Bearer xoxb-token"))
-				Expect(contentType).To(Equal("application/json"))
-				Expect(decodeErr).NotTo(HaveOccurred())
-				Expect(received.Channel).To(Equal("C123"))
-				Expect(received.Text).To(Equal("hello"))
-			})
-
-			It("should fail when Slack returns ok=false", func() {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(`{"ok":false,"error":"channel_not_found"}`))
-				}))
-				defer server.Close()
-
-				config := Config{
-					SlackBotToken: "xoxb-token",
-					SlackChannel:  "C123",
-					SlackAPIURL:   server.URL,
-				}
-
-				err := sendSlackBotMessage(context.Background(), config, SlackPayload{Text: "hello"})
-
-				Expect(err).To(MatchError(ContainSubstring("channel_not_found")))
-			})
-		})
-
 		Describe("Given a Slack webhook", func() {
 			It("should not send bearer authentication", func() {
 				var (
@@ -526,7 +467,9 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
 				Expect(prompt).To(ContainSubstring("Each bullet must start with '- *<suite/category>:*'"))
 				Expect(prompt).To(ContainSubstring("Group by suite name when one suite is affected"))
-				Expect(prompt).To(ContainSubstring("test-level failure reasons can be found in the GitHub build summary"))
+				Expect(prompt).To(ContainSubstring("When failed tests are present"))
+				Expect(prompt).To(ContainSubstring("test-level failure reasons are available in the GitHub build summary"))
+				Expect(prompt).To(ContainSubstring("Do not include the details bullet for skip-only runs"))
 				Expect(prompt).To(ContainSubstring("Do not restate the test run title"))
 			})
 
@@ -538,7 +481,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
 				Expect(prompt).To(ContainSubstring("- *Auth / all suites:* 23 failures and 37 skips"))
 				Expect(prompt).To(ContainSubstring("- *Validation paths:* 3 negative-path tests"))
-				Expect(prompt).To(ContainSubstring("- *Details:* Test-level failure reasons can be found in the GitHub build summary."))
+				Expect(prompt).To(ContainSubstring("- *Details:* Test-level failure reasons are available in the GitHub build summary."))
 				Expect(prompt).To(ContainSubstring("- *Next:* refresh the token or config"))
 			})
 		})

@@ -18,9 +18,6 @@ type Config struct {
 	StepSummaryPath       string
 	SendSlack             bool
 	SlackWebhookURL       string
-	SlackBotToken         string
-	SlackChannel          string
-	SlackAPIURL           string
 	FailOnSlackError      bool
 	Title                 string
 	Environment           string
@@ -43,8 +40,6 @@ func configFromEnv(envSource interface{}) Config {
 	env := normalizeEnv(envSource)
 
 	slackWebhookURL := env["INPUT_SLACK_WEBHOOK_URL"]
-	slackBotToken := env["INPUT_SLACK_BOT_TOKEN"]
-	slackChannel := env["INPUT_SLACK_CHANNEL"]
 
 	sendSlack := false
 	switch strings.ToLower(firstNonEmpty(env["INPUT_SEND_SLACK"], "auto")) {
@@ -53,7 +48,7 @@ func configFromEnv(envSource interface{}) Config {
 	case "false", "0", "no":
 		sendSlack = false
 	default:
-		sendSlack = slackWebhookURL != "" || (slackBotToken != "" && slackChannel != "")
+		sendSlack = slackWebhookURL != ""
 	}
 
 	compareWithPrevious := false
@@ -77,9 +72,6 @@ func configFromEnv(envSource interface{}) Config {
 		StepSummaryPath:       env["GITHUB_STEP_SUMMARY"],
 		SendSlack:             sendSlack,
 		SlackWebhookURL:       slackWebhookURL,
-		SlackBotToken:         slackBotToken,
-		SlackChannel:          slackChannel,
-		SlackAPIURL:           firstNonEmpty(env["SLACK_API_URL"], "https://slack.com/api/chat.postMessage"),
 		FailOnSlackError:      parseBoolDefault(env["INPUT_FAIL_ON_SLACK_ERROR"], false),
 		Title:                 firstNonEmpty(env["INPUT_TITLE"], "Test Results"),
 		Environment:           env["INPUT_ENVIRONMENT"],
@@ -99,8 +91,8 @@ func (config Config) validate() error {
 	if config.TestResultsPath == "" {
 		return fmt.Errorf("test-results-path is required")
 	}
-	if config.SendSlack && config.SlackWebhookURL == "" && (config.SlackBotToken == "" || config.SlackChannel == "") {
-		return fmt.Errorf("send-slack is enabled but neither slack-webhook-url nor slack-bot-token + slack-channel was provided")
+	if config.SendSlack && config.SlackWebhookURL == "" {
+		return fmt.Errorf("send-slack is enabled but slack-webhook-url was not provided")
 	}
 	if config.CompareWithPrevious && config.PreviousResultsSource != "path" {
 		return fmt.Errorf("previous-results-source %q is not supported yet; use path", config.PreviousResultsSource)

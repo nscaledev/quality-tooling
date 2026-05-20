@@ -376,7 +376,7 @@ func TestResolveResultsPathFiltersDirectoryByRequestedFormat(t *testing.T) {
 	}
 }
 
-func TestBuildSlackPayloadIncludesBotFieldsButtonsAndAnalysis(t *testing.T) {
+func TestBuildSlackPayloadIncludesContextButtonsAndAnalysis(t *testing.T) {
 	t.Parallel()
 
 	analysis := Analysis{
@@ -397,14 +397,10 @@ func TestBuildSlackPayloadIncludesBotFieldsButtonsAndAnalysis(t *testing.T) {
 		Actor:       "octocat",
 		WorkflowURL: "https://github.example/run",
 		ReportURL:   "https://reports.example/allure",
-		Channel:     "#e2e",
 		AIAnalysis:  "The failure is isolated to instance creation.",
 		MaxFailures: 5,
 	})
 
-	if payload.Channel != "#e2e" {
-		t.Fatalf("channel = %q", payload.Channel)
-	}
 	if !strings.Contains(payload.Text, "E2E Test Results (DEV)") {
 		t.Fatalf("text = %q", payload.Text)
 	}
@@ -539,7 +535,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"3-5 short Slack mrkdwn bullet lines",
 		"Each bullet must start with '- *<suite/category>:*'",
 		"Group by suite name when one suite is affected",
-		"test-level failure reasons can be found in the GitHub build summary",
+		"test-level failure reasons are available in the GitHub build summary",
 		"Do not list every failed or skipped test",
 		"%%SLACK%%",
 	} {
