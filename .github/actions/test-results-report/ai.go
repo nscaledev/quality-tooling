@@ -83,12 +83,13 @@ Use this shape:
 
 %s
 Section 2: Plain text Slack summary.
-- 6-10 concise Slack mrkdwn bullet lines.
+- 4-6 high-signal Slack mrkdwn bullet lines.
 - Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, unknown/mixed.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
-- Include counts, confidence when the category is uncertain, and useful evidence from the test output.
-- Use supporting bullets such as '- *Evidence:*', '- *Impact:*', or '- *Confidence:*' when they make Slack easier to act on.
-- For intentional or sentinel test failures, describe them as temporary validation tests and make the action remove or disable them before review; do not mention issue alerting unless it appears in the evidence.
+- Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
+- Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
+- Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*' when it makes Slack easier to act on.
+- For intentional or sentinel test failures, use one short phrase that says it is temporary and should be removed or disabled before review; do not mention issue alerting unless it appears in the evidence.
 - Do not list every failed or skipped test.
 - Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
 - End with exactly one '- *Action:*' bullet.
@@ -97,10 +98,8 @@ Section 2: Plain text Slack summary.
 
 Use this shape:
 - *Auth / all suites* (infra/external): 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
-- *Evidence:* Fixture setup and negative-path checks both receive 401 responses before product-level assertions run.
-- *Impact:* Network, LoadBalancer, FileStorage, SSH CA, SecurityGroup, and Region suites are blocked by the same auth/config signal.
-- *Validation paths* (test/false failure): 3 negative-path tests likely received 401 before the expected 403/404 assertions.
-- *Confidence:* High for the auth/config failure pattern; medium for validation paths until credentials are refreshed.
+- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.
+- *Validation paths* (test/false failure): 3 negative-path tests are likely side effects of the same 401 auth failure.
 - *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 

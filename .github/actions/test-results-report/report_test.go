@@ -591,25 +591,32 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 
 	prompt := claudePrompt()
 	for _, expected := range []string{
-		"6-10 concise Slack mrkdwn bullet lines",
+		"4-6 high-signal Slack mrkdwn bullet lines",
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed",
 		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
 		"Group by suite name when one suite is affected",
-		"Use supporting bullets such as '- *Evidence:*', '- *Impact:*', or '- *Confidence:*'",
+		"Lead with the highest-attention real product, infra, or environment blocker",
+		"keep temporary sentinel/test-validation failures short",
+		"Include only the evidence needed to justify the category",
+		"avoid selector names, file paths, and retry details",
+		"Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*'",
 		"For intentional or sentinel test failures",
-		"remove or disable them before review",
+		"removed or disabled before review",
 		"Do not list every failed or skipped test",
 		"End with exactly one '- *Action:*' bullet",
 		"the Action bullet must mention that test-level failure reasons are available in the GitHub build summary",
 		"Do not mention test-level failure reasons for skip-only runs",
 		"- *Auth / all suites* (infra/external):",
-		"- *Evidence:* Fixture setup and negative-path checks both receive 401 responses",
+		"- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.",
 		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
 		aiSlackDelimiter,
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q:\n%s", expected, prompt)
 		}
+	}
+	if strings.Contains(prompt, "- *Details:* Test-level failure reasons are available in the GitHub build summary.") {
+		t.Fatalf("prompt should not include a separate Details bullet:\n%s", prompt)
 	}
 }
 
