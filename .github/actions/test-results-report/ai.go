@@ -46,10 +46,40 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 }
 
 func claudePrompt() string {
-	return `Analyze these test failures and skips. Output two sections separated by a line containing only '%%SLACK%%':
-Section 1: A markdown step summary with '## Test Failure Analysis' heading and a concise table of failed/skipped tests, likely causes, and recommended next checks.
+	return `Analyze these test failures and skips. The GitHub step summary already includes raw Failed Tests and Skipped Tests tables before your output, so do not repeat those tables, do not add separate "Failed Tests" or "Skipped Tests" sections, and do not list every test.
+
+Output exactly two sections separated by a line containing only '%%SLACK%%':
+
+Section 1: Markdown for the GitHub step summary.
+- Start with '## Test Failure Analysis'.
+- Keep it concise: one compact pattern table plus up to 4 bullets.
+- Group failures and skips by likely area or pattern, not by individual test.
+- Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
+- Focus on likely cause, blast radius, confidence, and the next check.
+
+Use this shape:
+## Test Failure Analysis
+
+### Patterns
+| Area / signal | Impact | Likely cause | Next check |
+| --- | ---: | --- | --- |
+| Auth / 401 responses | 23 failed, 37 skipped | Expired or invalid API token blocked setup-dependent specs | Validate the API token, then rerun one representative suite |
+
+### Suggested Next Checks
+- Confirm whether the failures share the same status/error before opening individual test issues.
+- Rerun one representative failing suite after credentials or environment config are refreshed.
+
 %%SLACK%%
-Section 2: A categorised 4-5 lines plain text Slack summary. Categorise the failures and skips by likely area or pattern, call out new vs recurring signals when present, and keep each line concise.`
+Section 2: Plain text Slack summary.
+- 3-4 short lines.
+- Group by pattern or likely area.
+- Include counts and the top next action.
+- Do not list every failed or skipped test.
+
+Use this shape:
+Auth/config issue: 23 failures and 37 skips appear blocked by 401 responses.
+Likely cause: invalid or expired API credentials.
+Next: refresh the token or config, then rerun one focused smoke suite.`
 }
 
 func renderAIInput(analysis Analysis) string {

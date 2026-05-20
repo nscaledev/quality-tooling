@@ -12,7 +12,7 @@ This action is additive. Existing users of `slack-test-notifications` can keep u
 - Compares against previous results when `previous-results-path` is provided
 - Reports new, recurring, and resolved failures/skips
 - Sends Slack via incoming webhook or Slack bot `chat.postMessage`
-- Optionally adds Claude failure analysis
+- Optionally adds concise Claude failure analysis grouped by failure pattern, without repeating the raw test tables
 - Fails open for Slack and Claude by default
 
 ## Basic Usage

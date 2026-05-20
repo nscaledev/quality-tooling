@@ -452,14 +452,14 @@ func TestConfigDefaults(t *testing.T) {
 	}
 }
 
-func TestClaudePromptRequestsCategorisedSlackSummary(t *testing.T) {
+func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	t.Parallel()
 
 	prompt := claudePrompt()
 	for _, expected := range []string{
-		"4-5 lines",
-		"categorised",
-		"failures and skips",
+		"3-4 short lines",
+		"Group by pattern or likely area",
+		"Do not list every failed or skipped test",
 		"%%SLACK%%",
 	} {
 		if !strings.Contains(prompt, expected) {

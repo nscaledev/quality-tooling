@@ -500,6 +500,27 @@ var _ = Describe("Test Results Report", func() {
 	})
 
 	Context("When rendering input for AI analysis", func() {
+		Describe("Given Claude is asked to write the report section", func() {
+			It("should ask for pattern-level triage instead of repeated raw test lists", func() {
+				prompt := claudePrompt()
+
+				Expect(prompt).To(ContainSubstring("already includes raw Failed Tests and Skipped Tests tables"))
+				Expect(prompt).To(ContainSubstring(`do not add separate "Failed Tests" or "Skipped Tests" sections`))
+				Expect(prompt).To(ContainSubstring("Group failures and skips by likely area or pattern"))
+				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
+			})
+
+			It("should include a concrete compact example for step summary and Slack output", func() {
+				prompt := claudePrompt()
+
+				Expect(prompt).To(ContainSubstring("| Area / signal | Impact | Likely cause | Next check |"))
+				Expect(prompt).To(ContainSubstring("Auth / 401 responses"))
+				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
+				Expect(prompt).To(ContainSubstring("Auth/config issue: 23 failures and 37 skips"))
+				Expect(prompt).To(ContainSubstring("Next: refresh the token or config"))
+			})
+		})
+
 		Describe("Given previous result comparison data is available", func() {
 			var analysis Analysis
 
