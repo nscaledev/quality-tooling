@@ -1,0 +1,34 @@
+name: Test Results Report Action
+
+on:
+  pull_request:
+    paths:
+      - '.github/actions/test-results-report/**'
+      - '.github/workflows/test-results-report.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/actions/test-results-report/**'
+      - '.github/workflows/test-results-report.yml'
+
+jobs:
+  test:
+    name: Go tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .github/actions/test-results-report
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: .github/actions/test-results-report/go.mod
+          cache-dependency-path: .github/actions/test-results-report/go.sum
+
+      - name: Run tests
+        run: go test -count=1 ./...
