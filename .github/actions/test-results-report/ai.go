@@ -46,7 +46,7 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 }
 
 func claudePrompt() string {
-	return `Analyze these test failures and skips. The GitHub step summary already includes raw Failed Tests and Skipped Tests tables before your output, so do not repeat those tables, do not add separate "Failed Tests" or "Skipped Tests" sections, and do not list every test.
+	return `Analyze these test failures and skips. The GitHub step summary already includes run totals, links, and any previous-result comparison before your output, so do not repeat those basics, do not add separate "Failed Tests" or "Skipped Tests" sections, and do not list every test.
 
 Output exactly two sections separated by a line containing only '%%SLACK%%':
 
@@ -75,6 +75,7 @@ Section 2: Plain text Slack summary.
 - Group by pattern or likely area.
 - Include counts and the top next action.
 - Do not list every failed or skipped test.
+- Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
 
 Use this shape:
 Auth/config issue: 23 failures and 37 skips appear blocked by 401 responses.

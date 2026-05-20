@@ -44,13 +44,14 @@ func run(ctx context.Context, config Config) error {
 
 	if config.WriteStepSummary {
 		summary := renderStepSummary(analysis, RenderOptions{
-			Title:        config.Title,
-			Environment:  config.Environment,
-			WorkflowURL:  config.WorkflowURL,
-			ReportURL:    config.ReportURL,
-			MaxFailures:  config.MaxFailures,
-			MaxSkips:     config.MaxSkips,
-			IncludeSkips: config.IncludeSkips,
+			Title:           config.Title,
+			Environment:     config.Environment,
+			WorkflowURL:     config.WorkflowURL,
+			ReportURL:       config.ReportURL,
+			MaxFailures:     config.MaxFailures,
+			MaxSkips:        config.MaxSkips,
+			IncludeSkips:    config.IncludeSkips,
+			OmitTestDetails: aiAnalysis != nil && aiAnalysis.StepSummary != "",
 		})
 		if aiAnalysis != nil && aiAnalysis.StepSummary != "" {
 			summary += "\n" + aiAnalysis.StepSummary + "\n"
@@ -67,15 +68,16 @@ func run(ctx context.Context, config Config) error {
 			slackSummary = aiAnalysis.SlackSummary
 		}
 		payload := buildSlackPayload(analysis, SlackOptions{
-			Title:       config.Title,
-			Environment: config.Environment,
-			Branch:      config.Branch,
-			Actor:       config.Actor,
-			WorkflowURL: config.WorkflowURL,
-			ReportURL:   config.ReportURL,
-			Channel:     config.SlackChannel,
-			AIAnalysis:  slackSummary,
-			MaxFailures: config.MaxFailures,
+			Title:              config.Title,
+			Environment:        config.Environment,
+			Branch:             config.Branch,
+			Actor:              config.Actor,
+			WorkflowURL:        config.WorkflowURL,
+			ReportURL:          config.ReportURL,
+			Channel:            config.SlackChannel,
+			AIAnalysis:         slackSummary,
+			MaxFailures:        config.MaxFailures,
+			OmitFailureDetails: strings.TrimSpace(slackSummary) != "",
 		})
 		if err := sendSlack(ctx, config, payload); err != nil {
 			if config.FailOnSlackError {

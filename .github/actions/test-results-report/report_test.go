@@ -425,6 +425,50 @@ func TestBuildSlackPayloadIncludesBotFieldsButtonsAndAnalysis(t *testing.T) {
 	}
 }
 
+func TestBuildSlackPayloadOmitsFailureDetailsWhenAIAnalysisSummarisesPatterns(t *testing.T) {
+	t.Parallel()
+
+	analysis := Analysis{
+		Current: TestRun{Name: "Region API Test Suites"},
+		Stats:   Stats{Total: 67, Passed: 7, Failed: 23, Skipped: 37},
+		Failures: []TestCase{{
+			Name:    "Flavor Discovery > should return all available flavors",
+			Suite:   "Flavor Discovery",
+			File:    "/home/runner/work/uni-region/uni-region/test/api/suites/regions_test.go",
+			Line:    139,
+			Message: "status code 401: token is invalid or has expired",
+		}},
+	}
+
+	payload := buildSlackPayload(analysis, SlackOptions{
+		Title:              "Region API Test Results",
+		Environment:        "dev",
+		AIAnalysis:         "Auth/config issue: 23 failures and 37 skips appear blocked by 401 responses.",
+		OmitFailureDetails: true,
+	})
+
+	rendered := slackPayloadText(payload)
+	for _, unexpected := range []string{
+		"Flavor Discovery > should return all available flavors",
+		"test/api/suites/regions_test.go:139",
+		"token is invalid or has expired",
+	} {
+		if strings.Contains(rendered, unexpected) {
+			t.Fatalf("payload should omit raw failure detail %q:\n%s", unexpected, rendered)
+		}
+	}
+	for _, expected := range []string{
+		"Region API Test Results (dev)",
+		"Failed",
+		"Failure Analysis",
+		"Auth/config issue",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("payload missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
 func TestConfigDefaults(t *testing.T) {
 	t.Parallel()
 

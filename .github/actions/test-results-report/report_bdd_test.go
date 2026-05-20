@@ -504,10 +504,11 @@ var _ = Describe("Test Results Report", func() {
 			It("should ask for pattern-level triage instead of repeated raw test lists", func() {
 				prompt := claudePrompt()
 
-				Expect(prompt).To(ContainSubstring("already includes raw Failed Tests and Skipped Tests tables"))
+				Expect(prompt).To(ContainSubstring("already includes run totals, links, and any previous-result comparison"))
 				Expect(prompt).To(ContainSubstring(`do not add separate "Failed Tests" or "Skipped Tests" sections`))
 				Expect(prompt).To(ContainSubstring("Group failures and skips by likely area or pattern"))
 				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
+				Expect(prompt).To(ContainSubstring("Do not restate the test run title"))
 			})
 
 			It("should include a concrete compact example for step summary and Slack output", func() {
@@ -610,6 +611,41 @@ var _ = Describe("Test Results Report", func() {
 				Expect(input).To(ContainSubstring("- creates VPC"))
 				Expect(input).To(ContainSubstring("Resolved skipped tests:"))
 				Expect(input).To(ContainSubstring("- updates VPC"))
+			})
+		})
+	})
+
+	Context("When rendering summaries with AI analysis", func() {
+		Describe("Given the AI section will describe failure patterns", func() {
+			It("should omit the raw failed and skipped test tables", func() {
+				summary := renderStepSummary(Analysis{
+					Current: TestRun{Name: "API Tests", Duration: 5 * time.Second},
+					Stats:   Stats{Total: 4, Passed: 1, Failed: 2, Skipped: 1},
+					Failures: []TestCase{{
+						Name:    "should return flavors",
+						Suite:   "Flavor Discovery",
+						Message: "status code 401",
+					}},
+					Skipped: []TestCase{{
+						Name:    "should list images",
+						Suite:   "Image Discovery",
+						Message: "skipped after setup failure",
+					}},
+				}, RenderOptions{
+					Title:           "Region API Test Results",
+					Environment:     "dev",
+					WorkflowURL:     "https://github.example/run",
+					IncludeSkips:    true,
+					OmitTestDetails: true,
+				})
+
+				Expect(summary).To(ContainSubstring("## Region API Test Results"))
+				Expect(summary).To(ContainSubstring("| Total | Passed | Failed | Skipped | Duration |"))
+				Expect(summary).To(ContainSubstring("GitHub workflow run"))
+				Expect(summary).NotTo(ContainSubstring("### Failed Tests"))
+				Expect(summary).NotTo(ContainSubstring("### Skipped Tests"))
+				Expect(summary).NotTo(ContainSubstring("should return flavors"))
+				Expect(summary).NotTo(ContainSubstring("should list images"))
 			})
 		})
 	})

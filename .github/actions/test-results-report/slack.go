@@ -12,15 +12,16 @@ import (
 )
 
 type SlackOptions struct {
-	Title       string
-	Environment string
-	Branch      string
-	Actor       string
-	WorkflowURL string
-	ReportURL   string
-	Channel     string
-	AIAnalysis  string
-	MaxFailures int
+	Title              string
+	Environment        string
+	Branch             string
+	Actor              string
+	WorkflowURL        string
+	ReportURL          string
+	Channel            string
+	AIAnalysis         string
+	MaxFailures        int
+	OmitFailureDetails bool
 }
 
 type SlackPayload struct {
@@ -111,7 +112,7 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 		})
 	}
 
-	if len(analysis.Failures) > 0 {
+	if len(analysis.Failures) > 0 && !options.OmitFailureDetails {
 		blocks = append(blocks, SlackBlock{Type: "divider"})
 		for i, failure := range analysis.Failures {
 			if i >= options.MaxFailures {

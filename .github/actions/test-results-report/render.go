@@ -7,13 +7,14 @@ import (
 )
 
 type RenderOptions struct {
-	Title        string
-	Environment  string
-	WorkflowURL  string
-	ReportURL    string
-	MaxFailures  int
-	MaxSkips     int
-	IncludeSkips bool
+	Title           string
+	Environment     string
+	WorkflowURL     string
+	ReportURL       string
+	MaxFailures     int
+	MaxSkips        int
+	IncludeSkips    bool
+	OmitTestDetails bool
 }
 
 func renderStepSummary(analysis Analysis, options RenderOptions) string {
@@ -50,9 +51,11 @@ func renderStepSummary(analysis Analysis, options RenderOptions) string {
 		sb.WriteString("\n")
 	}
 
-	renderTestTable(&sb, "Failed Tests", analysis.Failures, options.MaxFailures)
-	if options.IncludeSkips {
-		renderTestTable(&sb, "Skipped Tests", analysis.Skipped, options.MaxSkips)
+	if !options.OmitTestDetails {
+		renderTestTable(&sb, "Failed Tests", analysis.Failures, options.MaxFailures)
+		if options.IncludeSkips {
+			renderTestTable(&sb, "Skipped Tests", analysis.Skipped, options.MaxSkips)
+		}
 	}
 
 	return sb.String()
