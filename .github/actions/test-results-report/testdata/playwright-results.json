@@ -1,0 +1,131 @@
+{
+  "config": {
+    "rootDir": "packages/e2e-console"
+  },
+  "stats": {
+    "startTime": "2026-05-15T10:03:41.303Z",
+    "duration": 421938.855,
+    "expected": 1,
+    "skipped": 1,
+    "unexpected": 1,
+    "flaky": 0
+  },
+  "suites": [
+    {
+      "title": "spec/compute/instance.spec.ts",
+      "file": "spec/compute/instance.spec.ts",
+      "line": 0,
+      "column": 0,
+      "suites": [
+        {
+          "title": "Instance Management",
+          "file": "spec/compute/instance.spec.ts",
+          "line": 27,
+          "column": 6,
+          "specs": [
+            {
+              "title": "Should display existing instances in the list",
+              "file": "spec/compute/instance.spec.ts",
+              "line": 43,
+              "column": 3,
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "status": "expected",
+                  "results": [
+                    {
+                      "status": "passed",
+                      "duration": 13481
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "should create and delete instance successfully",
+              "file": "spec/compute/instance.spec.ts",
+              "line": 88,
+              "column": 3,
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "status": "unexpected",
+                  "results": [
+                    {
+                      "status": "failed",
+                      "duration": 165675,
+                      "error": {
+                        "message": "TimeoutError: locator.innerText: Timeout 20000ms exceeded.\nCall log:\n  - waiting for instance card to reach deprovisioned state\n",
+                        "location": {
+                          "file": "/home/runner/work/nscale-ui/nscale-ui/packages/e2e-console/src/utils/page-helpers.ts",
+                          "line": 15,
+                          "column": 25
+                        }
+                      },
+                      "errors": [
+                        {
+                          "message": "TimeoutError: locator.innerText: Timeout 20000ms exceeded.\n    at hasResourceStatus (/home/runner/work/nscale-ui/nscale-ui/packages/e2e-console/src/utils/page-helpers.ts:15:25)"
+                        }
+                      ],
+                      "stdout": [
+                        {
+                          "text": "[API] GET https://compute.example.com/api/v2/instances?organizationID=redacted-org-id\n"
+                        }
+                      ]
+                    },
+                    {
+                      "status": "failed",
+                      "duration": 180531,
+                      "error": {
+                        "message": "TimeoutError: locator.innerText: Timeout 20000ms exceeded.\nCall log:\n  - waiting for instance card to reach deprovisioned state\n"
+                      },
+                      "stdout": [
+                        {
+                          "text": "[Network Logs] Attached 1812 requests\n"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "spec/navigation/private-nav.spec.ts",
+      "file": "spec/navigation/private-nav.spec.ts",
+      "line": 0,
+      "column": 0,
+      "suites": [
+        {
+          "title": "Private Cloud - Navigation",
+          "file": "spec/navigation/private-nav.spec.ts",
+          "line": 30,
+          "column": 6,
+          "specs": [
+            {
+              "title": "NAV-03 - feature-flagged nav items hidden when flags disabled",
+              "file": "spec/navigation/private-nav.spec.ts",
+              "line": 78,
+              "column": 8,
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "status": "skipped",
+                  "results": [
+                    {
+                      "status": "skipped",
+                      "duration": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

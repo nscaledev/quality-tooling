@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="Console E2E Test Suites" tests="3" failures="1" skipped="1" time="10">
+  <testsuite name="chromium" tests="3" failures="1" skipped="1" time="10">
+    <testcase classname="settings.organisation" name="creates organisation group" time="1.1">
+      <failure message="Previous intermittent failure"/>
+    </testcase>
+    <testcase classname="compute.instance" name="creates instance" time="7">
+      <failure message="Expected button to be visible"/>
+    </testcase>
+    <testcase classname="network.vpc" name="deletes VPC" time="0">
+      <skipped message="feature flag disabled"/>
+    </testcase>
+  </testsuite>
+</testsuites>

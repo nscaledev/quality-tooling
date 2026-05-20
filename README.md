@@ -54,6 +54,36 @@ Send a Slack message summarising Ginkgo/Gomega test results — pass/fail counts
 
 [Full documentation](./.github/actions/slack-test-notifications/README.md)
 
+### Test Results Report
+
+Analyze Ginkgo, JUnit, or Playwright JSON test results, write a GitHub Actions step summary, optionally compare against previous results, optionally run Claude failure analysis, and optionally notify Slack.
+
+**Location**: `.github/actions/test-results-report/`
+
+**Usage**:
+```yaml
+- uses: nscaledev/quality-tooling/.github/actions/test-results-report@main
+  with:
+    test-results-path: path/to/results.xml
+    format: junit
+    title: E2E Test Results
+    environment: dev
+    report-url: ${{ steps.report-url.outputs.url }}
+    slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+    enable-ai-analysis: 'true'
+    claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+**Features**:
+- Supports `auto`, `ginkgo-json`, `junit`, and `playwright-json`
+- Writes `$GITHUB_STEP_SUMMARY` by default
+- Compares with previous results via `previous-results-path`
+- Reports new, recurring, and resolved failures/skips
+- Supports Slack notifications via incoming webhook
+- Optionally adds Claude failure analysis when `enable-ai-analysis` is true
+
+[Full documentation](./.github/actions/test-results-report/README.md)
+
 ### Uni Find Staging Constellation
 
 Scans open PRs in `uni-releases` for a candidate constellation and outputs the pinned service tag. Used as a preflight step before UAT tests to ensure tests run against the version deployed to staging.

@@ -1,0 +1,35 @@
+[
+  {
+    "SuiteDescription": "API Test Suites",
+    "SuiteSucceeded": false,
+    "RunTime": 2500000000,
+    "SpecReports": [
+      {
+        "ContainerHierarchyTexts": [
+          "Core Cluster Management",
+          "When listing clusters"
+        ],
+        "LeafNodeText": "returns all clusters",
+        "State": "passed",
+        "RunTime": 1000000000
+      },
+      {
+        "ContainerHierarchyTexts": [
+          "Core Cluster Management",
+          "When creating clusters"
+        ],
+        "LeafNodeText": "creates a cluster",
+        "State": "failed",
+        "RunTime": 1500000000,
+        "Failure": {
+          "Message": "Expected status 200 but got 500",
+          "Location": {
+            "FileName": "cluster_test.go",
+            "LineNumber": 123
+          }
+        },
+        "CapturedGinkgoWriterOutput": "request logs"
+      }
+    ]
+  }
+]
