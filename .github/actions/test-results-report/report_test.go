@@ -469,6 +469,41 @@ func TestBuildSlackPayloadOmitsFailureDetailsWhenAIAnalysisSummarisesPatterns(t 
 	}
 }
 
+func TestBuildSlackPayloadUsesLegacyFailureDetailsWhenAIAnalysisIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	analysis := Analysis{
+		Current: TestRun{Name: "Region API Test Suites"},
+		Stats:   Stats{Total: 2, Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:    "Flavor Discovery > should return all available flavors",
+			Suite:   "Flavor Discovery",
+			File:    "/home/runner/work/uni-region/uni-region/test/api/suites/regions_test.go",
+			Line:    139,
+			Message: "status code 401: token is invalid or has expired",
+		}},
+	}
+
+	payload := buildSlackPayload(analysis, SlackOptions{
+		Title:       "Region API Test Results",
+		Environment: "dev",
+		MaxFailures: 5,
+	})
+
+	rendered := slackPayloadText(payload)
+	for _, expected := range []string{
+		"*Failed Tests:*",
+		"*Test:* Flavor Discovery > should return all available flavors",
+		"*Suite:* `Flavor Discovery`",
+		"*Location:* `regions_test.go:139`",
+		"*Error:*\n```\nstatus code 401: token is invalid or has expired\n```",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("payload missing legacy failure detail %q:\n%s", expected, rendered)
+		}
+	}
+}
+
 func TestConfigDefaults(t *testing.T) {
 	t.Parallel()
 

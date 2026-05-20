@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -114,6 +115,10 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 
 	if len(analysis.Failures) > 0 && !options.OmitFailureDetails {
 		blocks = append(blocks, SlackBlock{Type: "divider"})
+		blocks = append(blocks, SlackBlock{
+			Type: "section",
+			Text: &SlackText{Type: "mrkdwn", Text: "*Failed Tests:*"},
+		})
 		for i, failure := range analysis.Failures {
 			if i >= options.MaxFailures {
 				blocks = append(blocks, SlackBlock{
@@ -227,10 +232,16 @@ func formatSlackFailure(test TestCase) string {
 		sb.WriteString(fmt.Sprintf("*Suite:* `%s`\n", test.Suite))
 	}
 	if location := formatLocation(test); location != "" {
+		if test.File != "" {
+			location = filepath.Base(test.File)
+			if test.Line > 0 {
+				location = fmt.Sprintf("%s:%d", location, test.Line)
+			}
+		}
 		sb.WriteString(fmt.Sprintf("*Location:* `%s`\n", location))
 	}
 	if test.Message != "" {
-		sb.WriteString(fmt.Sprintf("*Error:*\n```%s```", truncate(cleanOneLine(test.Message), 500)))
+		sb.WriteString(fmt.Sprintf("*Error:*\n```\n%s\n```", truncate(cleanOneLine(test.Message), 500)))
 	}
 	return sb.String()
 }
