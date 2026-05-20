@@ -524,6 +524,8 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring(`do not add separate "Failed Tests" or "Skipped Tests" sections`))
 				Expect(prompt).To(ContainSubstring("Group failures and skips by likely area or pattern"))
 				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
+				Expect(prompt).To(ContainSubstring("Each bullet must start with '- *<suite/category>:*'"))
+				Expect(prompt).To(ContainSubstring("Group by suite name when one suite is affected"))
 				Expect(prompt).To(ContainSubstring("Do not restate the test run title"))
 			})
 
@@ -533,8 +535,9 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("| Area / signal | Impact | Likely cause | Next check |"))
 				Expect(prompt).To(ContainSubstring("Auth / 401 responses"))
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
-				Expect(prompt).To(ContainSubstring("Auth/config issue: 23 failures and 37 skips"))
-				Expect(prompt).To(ContainSubstring("Next: refresh the token or config"))
+				Expect(prompt).To(ContainSubstring("- *Auth / all suites:* 23 failures and 37 skips"))
+				Expect(prompt).To(ContainSubstring("- *Validation paths:* 3 negative-path tests"))
+				Expect(prompt).To(ContainSubstring("- *Next:* refresh the token or config"))
 			})
 		})
 

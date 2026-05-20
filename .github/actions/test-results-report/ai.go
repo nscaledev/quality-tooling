@@ -71,16 +71,17 @@ Use this shape:
 
 %%SLACK%%
 Section 2: Plain text Slack summary.
-- 3-4 short lines.
-- Group by pattern or likely area.
+- 3-5 short Slack mrkdwn bullet lines.
+- Each bullet must start with '- *<suite/category>:*'.
+- Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
 - Include counts and the top next action.
 - Do not list every failed or skipped test.
 - Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
 
 Use this shape:
-Auth/config issue: 23 failures and 37 skips appear blocked by 401 responses.
-Likely cause: invalid or expired API credentials.
-Next: refresh the token or config, then rerun one focused smoke suite.`
+- *Auth / all suites:* 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
+- *Validation paths:* 3 negative-path tests likely received 401 before the expected 403/404 assertions.
+- *Next:* refresh the token or config, then rerun one focused smoke suite.`
 }
 
 func renderAIInput(analysis Analysis) string {

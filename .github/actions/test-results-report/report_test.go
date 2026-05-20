@@ -536,8 +536,9 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 
 	prompt := claudePrompt()
 	for _, expected := range []string{
-		"3-4 short lines",
-		"Group by pattern or likely area",
+		"3-5 short Slack mrkdwn bullet lines",
+		"Each bullet must start with '- *<suite/category>:*'",
+		"Group by suite name when one suite is affected",
 		"Do not list every failed or skipped test",
 		"%%SLACK%%",
 	} {
