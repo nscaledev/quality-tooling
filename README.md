@@ -69,8 +69,9 @@ Analyze Ginkgo, JUnit, or Playwright JSON test results, write a GitHub Actions s
     title: E2E Test Results
     environment: dev
     report-url: ${{ steps.report-url.outputs.url }}
-    slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
-    slack-channel: ${{ vars.SLACK_CHANNEL }}
+    slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+    enable-ai-analysis: 'true'
+    claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
 **Features**:
@@ -78,7 +79,8 @@ Analyze Ginkgo, JUnit, or Playwright JSON test results, write a GitHub Actions s
 - Writes `$GITHUB_STEP_SUMMARY` by default
 - Compares with previous results via `previous-results-path`
 - Reports new, recurring, and resolved failures/skips
-- Supports Slack webhook and bot-token notification modes
+- Supports Slack notifications via incoming webhook
+- Optionally adds Claude failure analysis when `enable-ai-analysis` is true
 
 [Full documentation](./.github/actions/test-results-report/README.md)
 
