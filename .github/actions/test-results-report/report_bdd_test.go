@@ -581,7 +581,7 @@ var _ = Describe("Test Results Report", func() {
 			})
 
 			It("should include explicit new recurring and resolved labels", func() {
-				input := renderAIInput(analysis)
+				input := renderAIInputWithOptions(analysis, AIInputOptions{})
 
 				Expect(input).To(ContainSubstring("Previous result comparison:"))
 				Expect(input).To(ContainSubstring("New failures: 1"))
@@ -597,7 +597,7 @@ var _ = Describe("Test Results Report", func() {
 			})
 
 			It("should include comparison groups with test names suite names and locations", func() {
-				input := renderAIInput(analysis)
+				input := renderAIInputWithOptions(analysis, AIInputOptions{})
 
 				Expect(input).To(ContainSubstring("New failure tests:"))
 				Expect(input).To(ContainSubstring("- creates instance [compute.instance] (src/spec/compute/instance.spec.ts:42)"))

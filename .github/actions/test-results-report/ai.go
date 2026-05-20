@@ -97,10 +97,6 @@ Use this shape:
 - *Next:* refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 
-func renderAIInput(analysis Analysis) string {
-	return renderAIInputWithOptions(analysis, AIInputOptions{})
-}
-
 func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Test run: %s\n", analysis.Current.Name))

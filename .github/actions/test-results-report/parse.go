@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+var locationPattern = regexp.MustCompile(`([A-Za-z0-9_./\\-]+\.(?:go|ts|tsx|js|jsx|py|java)):(\d+)`)
+
 func parseGinkgoJSON(data []byte) (TestRun, error) {
 	var reports []ginkgoReport
 	if err := json.Unmarshal(data, &reports); err != nil {
@@ -442,8 +444,7 @@ func normalizeStatus(value string) TestStatus {
 }
 
 func extractLocation(value string) (string, int) {
-	re := regexp.MustCompile(`([A-Za-z0-9_./\\-]+\.(?:go|ts|tsx|js|jsx|py|java)):(\d+)`)
-	match := re.FindStringSubmatch(value)
+	match := locationPattern.FindStringSubmatch(value)
 	if len(match) != 3 {
 		return "", 0
 	}

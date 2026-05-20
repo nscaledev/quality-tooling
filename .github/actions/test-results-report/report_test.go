@@ -66,40 +66,7 @@ func TestParseJUnitReport(t *testing.T) {
 func TestParsePlaywrightJSONReport(t *testing.T) {
 	t.Parallel()
 
-	input := []byte(`{
-  "stats": {"duration": 4200},
-  "suites": [{
-    "title": "src/spec/compute/instance.spec.ts",
-    "file": "src/spec/compute/instance.spec.ts",
-    "specs": [{
-      "title": "creates instance @smoke",
-      "tests": [{
-        "projectName": "chromium",
-        "status": "unexpected",
-        "results": [{
-          "status": "failed",
-          "duration": 3000,
-          "error": {"message": "Error: expected visible"},
-          "errors": [{"message": "TimeoutError: locator.click timed out"}]
-        }]
-      }]
-    }, {
-      "title": "deletes instance @smoke",
-      "tests": [{
-        "projectName": "chromium",
-        "status": "expected",
-        "results": [{"status": "passed", "duration": 1200}]
-      }]
-    }, {
-      "title": "uses GPU @gpu",
-      "tests": [{
-        "projectName": "chromium",
-        "status": "skipped",
-        "results": [{"status": "skipped"}]
-      }]
-    }]
-  }]
-}`)
+	input := readFixture(t, "playwright-results.json")
 
 	run, err := parsePlaywrightJSON(input)
 	if err != nil {
@@ -133,23 +100,7 @@ func TestParsePlaywrightJSONReport(t *testing.T) {
 func TestParsePlaywrightJSONTreatsFlakyAsPassingFinalStatus(t *testing.T) {
 	t.Parallel()
 
-	input := []byte(`{
-  "suites": [{
-    "title": "src/spec/settings.spec.ts",
-    "file": "src/spec/settings.spec.ts",
-    "specs": [{
-      "title": "saves settings",
-      "tests": [{
-        "projectName": "chromium",
-        "status": "flaky",
-        "results": [
-          {"status": "failed", "duration": 1000, "error": {"message": "first attempt failed"}},
-          {"status": "passed", "duration": 500}
-        ]
-      }]
-    }]
-  }]
-}`)
+	input := readFixture(t, "playwright-flaky-results.json")
 
 	run, err := parsePlaywrightJSON(input)
 	if err != nil {
@@ -165,32 +116,7 @@ func TestParsePlaywrightJSONTreatsFlakyAsPassingFinalStatus(t *testing.T) {
 func TestParseGinkgoJSONReport(t *testing.T) {
 	t.Parallel()
 
-	input := []byte(`[
-  {
-    "SuiteDescription": "API Test Suites",
-    "SuiteSucceeded": false,
-    "RunTime": 2500000000,
-    "SpecReports": [
-      {
-        "ContainerHierarchyTexts": ["Core Cluster Management", "When listing clusters"],
-        "LeafNodeText": "returns all clusters",
-        "State": "passed",
-        "RunTime": 1000000000
-      },
-      {
-        "ContainerHierarchyTexts": ["Core Cluster Management", "When creating clusters"],
-        "LeafNodeText": "creates a cluster",
-        "State": "failed",
-        "RunTime": 1500000000,
-        "Failure": {
-          "Message": "Expected status 200 but got 500",
-          "Location": {"FileName": "cluster_test.go", "LineNumber": 123}
-        },
-        "CapturedGinkgoWriterOutput": "request logs"
-      }
-    ]
-  }
-]`)
+	input := readFixture(t, "ginkgo-results.json")
 
 	run, err := parseGinkgoJSON(input)
 	if err != nil {
@@ -211,6 +137,20 @@ func TestParseGinkgoJSONReport(t *testing.T) {
 	}
 	if failed.File != "cluster_test.go" || failed.Line != 123 {
 		t.Fatalf("failed location = %s:%d", failed.File, failed.Line)
+	}
+}
+
+func TestExtractLocation(t *testing.T) {
+	t.Parallel()
+
+	file, line := extractLocation("TimeoutError at src/spec/compute/instance.spec.ts:42:11")
+	if file != "src/spec/compute/instance.spec.ts" || line != 42 {
+		t.Fatalf("location = %s:%d", file, line)
+	}
+
+	file, line = extractLocation("no source location here")
+	if file != "" || line != 0 {
+		t.Fatalf("unexpected location = %s:%d", file, line)
 	}
 }
 
@@ -548,7 +488,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 func TestRenderAIInputIncludesSkippedTests(t *testing.T) {
 	t.Parallel()
 
-	input := renderAIInput(Analysis{
+	input := renderAIInputWithOptions(Analysis{
 		Current: TestRun{Name: "Console E2E"},
 		Stats:   Stats{Passed: 1, Failed: 1, Skipped: 1},
 		Failures: []TestCase{{
@@ -559,7 +499,7 @@ func TestRenderAIInputIncludesSkippedTests(t *testing.T) {
 			Name:    "deletes VPC",
 			Message: "feature flag disabled",
 		}},
-	})
+	}, AIInputOptions{})
 
 	for _, expected := range []string{
 		"Failed tests:",
@@ -591,4 +531,14 @@ func slackPayloadText(payload SlackPayload) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func readFixture(t *testing.T, name string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	return data
 }

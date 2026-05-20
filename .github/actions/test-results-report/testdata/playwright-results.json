@@ -1,0 +1,65 @@
+{
+  "stats": {
+    "duration": 4200
+  },
+  "suites": [
+    {
+      "title": "src/spec/compute/instance.spec.ts",
+      "file": "src/spec/compute/instance.spec.ts",
+      "specs": [
+        {
+          "title": "creates instance @smoke",
+          "tests": [
+            {
+              "projectName": "chromium",
+              "status": "unexpected",
+              "results": [
+                {
+                  "status": "failed",
+                  "duration": 3000,
+                  "error": {
+                    "message": "Error: expected visible"
+                  },
+                  "errors": [
+                    {
+                      "message": "TimeoutError: locator.click timed out"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "deletes instance @smoke",
+          "tests": [
+            {
+              "projectName": "chromium",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "duration": 1200
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "uses GPU @gpu",
+          "tests": [
+            {
+              "projectName": "chromium",
+              "status": "skipped",
+              "results": [
+                {
+                  "status": "skipped"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
