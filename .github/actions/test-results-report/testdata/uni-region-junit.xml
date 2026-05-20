@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" disabled="1" errors="0" failures="1" time="224.280312214">
+  <testsuite name="Region API Test Suites" package="/home/runner/work/uni-region/uni-region/test/api/suites" tests="3" disabled="0" skipped="1" errors="0" failures="1" time="224.280312214" timestamp="2026-05-19T08:16:05">
+    <testcase name="[It] Region Discovery When listing regions Given valid organization access should return all available regions" classname="Region API Test Suites" status="passed" time="0.886836587">
+      <system-err>&gt; Enter [It] should return all available regions - /home/runner/work/uni-region/uni-region/test/api/suites/regions_test.go:38 @ 05/19/26 08:16:09.729&#xA;Found 4 regions&#xA;&lt; Exit [It] should return all available regions - /home/runner/work/uni-region/uni-region/test/api/suites/regions_test.go:38 @ 05/19/26 08:16:10.615 (887ms)&#xA;</system-err>
+    </testcase>
+    <testcase name="[It] File Storage Management When listing file storage resources Given invalid parameters should reject requests with invalid organization ID format" classname="Region API Test Suites" status="skipped" time="0.000310579">
+      <skipped message="skipped - Bug INST-457: File Storage API accepts invalid organizationId and returns data for different organization"></skipped>
+      <system-err>&gt; Enter [It] should reject requests with invalid organization ID format - /home/runner/work/uni-region/uni-region/test/api/suites/filestorage_test.go:127 @ 05/19/26 08:16:11.979&#xA;[SKIPPED] Bug INST-457: File Storage API accepts invalid organizationId and returns data for different organization&#xA;</system-err>
+    </testcase>
+    <testcase name="[It] File Storage Management When managing file storage attachments Given a network and file storage resource should delete the network resource" classname="Region API Test Suites" status="failed" time="5.614438062">
+      <failure message="Expected success, but got an error: deleting filestorage: expected 202, got 404, body: {&quot;error&quot;:&quot;not_found&quot;,&quot;error_description&quot;:&quot;resource not found&quot;,&quot;trace_id&quot;:&quot;redacted-trace-id&quot;} (traceID=redacted-trace-id spanID=redacted-span-id): unexpected status code" type="failed">[FAILED] Expected success, but got an error: deleting filestorage: expected 202, got 404, body: {&quot;error&quot;:&quot;not_found&quot;,&quot;error_description&quot;:&quot;resource not found&quot;,&quot;trace_id&quot;:&quot;redacted-trace-id&quot;} (traceID=redacted-trace-id spanID=redacted-span-id): unexpected status code&#xA;In [AfterAll] at: /home/runner/work/uni-region/uni-region/test/api/suites/filestorage_test.go:620 @ 05/19/26 08:17:43.417&#xA;</failure>
+      <system-err>&gt; Enter [It] should delete the network resource - /home/runner/work/uni-region/uni-region/test/api/suites/filestorage_test.go:585 @ 05/19/26 08:17:37.803&#xA;Deleted network: redacted-network-id&#xA;Confirmed network deleted: redacted-network-id&#xA;[FAILED] Expected success, but got an error: deleting filestorage: expected 202, got 404&#xA;</system-err>
+    </testcase>
+  </testsuite>
+</testsuites>

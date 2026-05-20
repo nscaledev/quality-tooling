@@ -81,26 +81,53 @@ func TestParsePlaywrightJSONReport(t *testing.T) {
 	if stats.Total != 3 || stats.Passed != 1 || stats.Failed != 1 || stats.Skipped != 1 {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
-	if run.Duration != 4200*time.Millisecond {
+	if run.Duration != 421938855*time.Microsecond {
 		t.Fatalf("duration = %s", run.Duration)
 	}
 
-	failed := run.Tests[0]
-	if failed.ID != "src/spec/compute/instance.spec.ts::creates instance @smoke::chromium" {
+	failed := firstTestWithStatus(t, run.Tests, StatusFailed)
+	if failed.ID != "spec/compute/instance.spec.ts > Instance Management::should create and delete instance successfully::chromium" {
 		t.Fatalf("failed id = %q", failed.ID)
 	}
-	if failed.File != "src/spec/compute/instance.spec.ts" {
+	if failed.File != "spec/compute/instance.spec.ts" {
 		t.Fatalf("failed file = %q", failed.File)
 	}
-	if !strings.Contains(failed.Message, "expected visible") {
+	if failed.Line != 88 {
+		t.Fatalf("failed line = %d", failed.Line)
+	}
+	if !strings.Contains(failed.Message, "TimeoutError") {
 		t.Fatalf("failed message = %q", failed.Message)
+	}
+	if !strings.Contains(failed.Output, "Network Logs") {
+		t.Fatalf("failed output = %q", failed.Output)
+	}
+
+	skipped := firstTestWithStatus(t, run.Tests, StatusSkipped)
+	if skipped.ID != "spec/navigation/private-nav.spec.ts > Private Cloud - Navigation::NAV-03 - feature-flagged nav items hidden when flags disabled::chromium" {
+		t.Fatalf("skipped id = %q", skipped.ID)
 	}
 }
 
 func TestParsePlaywrightJSONTreatsFlakyAsPassingFinalStatus(t *testing.T) {
 	t.Parallel()
 
-	input := readFixture(t, "playwright-flaky-results.json")
+	input := []byte(`{
+  "suites": [{
+    "title": "spec/settings.spec.ts",
+    "file": "spec/settings.spec.ts",
+    "specs": [{
+      "title": "saves settings",
+      "tests": [{
+        "projectName": "chromium",
+        "status": "flaky",
+        "results": [
+          {"status": "failed", "duration": 1000, "error": {"message": "first attempt failed"}},
+          {"status": "passed", "duration": 500}
+        ]
+      }]
+    }]
+  }]
+}`)
 
 	run, err := parsePlaywrightJSON(input)
 	if err != nil {
@@ -137,6 +164,43 @@ func TestParseGinkgoJSONReport(t *testing.T) {
 	}
 	if failed.File != "cluster_test.go" || failed.Line != 123 {
 		t.Fatalf("failed location = %s:%d", failed.File, failed.Line)
+	}
+}
+
+func TestParseUniRegionJUnitFixture(t *testing.T) {
+	t.Parallel()
+
+	run, err := parseJUnit(readFixture(t, "uni-region-junit.xml"))
+	if err != nil {
+		t.Fatalf("parseJUnit returned error: %v", err)
+	}
+
+	if run.Name != "JUnit Test Results" {
+		t.Fatalf("run name = %q", run.Name)
+	}
+	if len(run.Tests) != 3 {
+		t.Fatalf("test count = %d", len(run.Tests))
+	}
+
+	stats := calculateStats(run.Tests)
+	if stats.Total != 3 || stats.Passed != 1 || stats.Failed != 1 || stats.Skipped != 1 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	if run.Duration != 224280312214*time.Nanosecond {
+		t.Fatalf("duration = %s", run.Duration)
+	}
+
+	failed := firstTestWithStatus(t, run.Tests, StatusFailed)
+	if !strings.Contains(failed.Message, "deleting filestorage") {
+		t.Fatalf("failed message = %q", failed.Message)
+	}
+	if failed.File != "/home/runner/work/uni-region/uni-region/test/api/suites/filestorage_test.go" || failed.Line != 620 {
+		t.Fatalf("failed location = %s:%d", failed.File, failed.Line)
+	}
+
+	skipped := firstTestWithStatus(t, run.Tests, StatusSkipped)
+	if !strings.Contains(skipped.Message, "INST-457") {
+		t.Fatalf("skipped message = %q", skipped.Message)
 	}
 }
 
@@ -541,4 +605,16 @@ func readFixture(t *testing.T, name string) []byte {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}
 	return data
+}
+
+func firstTestWithStatus(t *testing.T, tests []TestCase, status TestStatus) TestCase {
+	t.Helper()
+
+	for _, test := range tests {
+		if test.Status == status {
+			return test
+		}
+	}
+	t.Fatalf("no test with status %s in %+v", status, tests)
+	return TestCase{}
 }

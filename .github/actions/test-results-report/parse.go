@@ -413,10 +413,21 @@ func formatJUnitFailure(failure junitFailure) string {
 	if message == "" {
 		return text
 	}
+	if text != "" && !hasLocation(message) && hasLocation(text) {
+		if strings.Contains(text, message) {
+			return text
+		}
+		return message + "\n" + text
+	}
 	if text == "" || strings.Contains(text, message) {
 		return message
 	}
 	return message + "\n" + text
+}
+
+func hasLocation(value string) bool {
+	file, _ := extractLocation(value)
+	return file != ""
 }
 
 func parseSecondsDuration(value string) time.Duration {
