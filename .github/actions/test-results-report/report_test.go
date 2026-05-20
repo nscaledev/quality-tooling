@@ -539,6 +539,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"3-5 short Slack mrkdwn bullet lines",
 		"Each bullet must start with '- *<suite/category>:*'",
 		"Group by suite name when one suite is affected",
+		"test-level failure reasons can be found in the GitHub build summary",
 		"Do not list every failed or skipped test",
 		"%%SLACK%%",
 	} {

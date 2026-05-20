@@ -526,6 +526,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
 				Expect(prompt).To(ContainSubstring("Each bullet must start with '- *<suite/category>:*'"))
 				Expect(prompt).To(ContainSubstring("Group by suite name when one suite is affected"))
+				Expect(prompt).To(ContainSubstring("test-level failure reasons can be found in the GitHub build summary"))
 				Expect(prompt).To(ContainSubstring("Do not restate the test run title"))
 			})
 
@@ -537,6 +538,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
 				Expect(prompt).To(ContainSubstring("- *Auth / all suites:* 23 failures and 37 skips"))
 				Expect(prompt).To(ContainSubstring("- *Validation paths:* 3 negative-path tests"))
+				Expect(prompt).To(ContainSubstring("- *Details:* Test-level failure reasons can be found in the GitHub build summary."))
 				Expect(prompt).To(ContainSubstring("- *Next:* refresh the token or config"))
 			})
 		})
