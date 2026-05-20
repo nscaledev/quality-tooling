@@ -57,6 +57,10 @@ func renderAIInput(analysis Analysis) string {
 	sb.WriteString(fmt.Sprintf("Test run: %s\n", analysis.Current.Name))
 	sb.WriteString(fmt.Sprintf("Totals: %d passed, %d failed, %d skipped\n\n", analysis.Stats.Passed, analysis.Stats.Failed, analysis.Stats.Skipped))
 
+	if analysis.Compare != nil {
+		renderAIComparison(&sb, analysis.Compare)
+	}
+
 	if len(analysis.Failures) > 0 {
 		sb.WriteString("Failed tests:\n")
 	}
@@ -95,6 +99,45 @@ func renderAIInput(analysis Analysis) string {
 	}
 
 	return sb.String()
+}
+
+func renderAIComparison(sb *strings.Builder, comparison *Comparison) {
+	sb.WriteString("Previous result comparison:\n")
+	sb.WriteString(fmt.Sprintf("New failures: %d\n", len(comparison.NewFailures)))
+	sb.WriteString(fmt.Sprintf("Recurring failures: %d\n", len(comparison.RecurringFailures)))
+	sb.WriteString(fmt.Sprintf("Resolved failures: %d\n", len(comparison.ResolvedFailures)))
+	sb.WriteString(fmt.Sprintf("New skips: %d\n", len(comparison.NewSkips)))
+	sb.WriteString(fmt.Sprintf("Recurring skips: %d\n", len(comparison.RecurringSkips)))
+	sb.WriteString(fmt.Sprintf("Resolved skips: %d\n", len(comparison.ResolvedSkips)))
+	sb.WriteString(fmt.Sprintf("Passed delta: %+d\n", comparison.PassedDelta))
+	sb.WriteString(fmt.Sprintf("Failed delta: %+d\n", comparison.FailedDelta))
+	sb.WriteString(fmt.Sprintf("Skipped delta: %+d\n", comparison.SkippedDelta))
+	sb.WriteString(fmt.Sprintf("Duration delta: %s\n", formatSignedDuration(comparison.DurationDelta)))
+
+	renderAIComparisonGroup(sb, "New failure tests", comparison.NewFailures)
+	renderAIComparisonGroup(sb, "Recurring failure tests", comparison.RecurringFailures)
+	renderAIComparisonGroup(sb, "Resolved failure tests", comparison.ResolvedFailures)
+	renderAIComparisonGroup(sb, "New skipped tests", comparison.NewSkips)
+	renderAIComparisonGroup(sb, "Recurring skipped tests", comparison.RecurringSkips)
+	renderAIComparisonGroup(sb, "Resolved skipped tests", comparison.ResolvedSkips)
+	sb.WriteString("\n")
+}
+
+func renderAIComparisonGroup(sb *strings.Builder, title string, tests []TestCase) {
+	if len(tests) == 0 {
+		return
+	}
+	sb.WriteString(title + ":\n")
+	for _, test := range tests {
+		sb.WriteString(fmt.Sprintf("- %s", firstNonEmpty(test.Name, test.ID)))
+		if test.Suite != "" {
+			sb.WriteString(fmt.Sprintf(" [%s]", test.Suite))
+		}
+		if location := formatLocation(test); location != "" {
+			sb.WriteString(fmt.Sprintf(" (%s)", location))
+		}
+		sb.WriteString("\n")
+	}
 }
 
 func parseAIAnalysis(output string) *AIAnalysis {

@@ -297,7 +297,7 @@ func collectPlaywrightSuite(suite playwrightSuite, parents []string, tests *[]Te
 
 	for _, spec := range suite.Specs {
 		file := firstNonEmpty(spec.File, suite.File, firstFile(path))
-		suiteName := firstNonEmpty(file, strings.Join(path, " > "))
+		suiteName := playwrightSuiteName(path, file)
 
 		for _, test := range spec.Tests {
 			status := playwrightStatus(test)
@@ -323,6 +323,21 @@ func collectPlaywrightSuite(suite playwrightSuite, parents []string, tests *[]Te
 			})
 		}
 	}
+}
+
+func playwrightSuiteName(path []string, file string) string {
+	path = nonEmpty(path)
+	if file == "" {
+		return strings.Join(path, " > ")
+	}
+
+	parts := []string{file}
+	for _, part := range path {
+		if part != file {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(nonEmpty(parts), " > ")
 }
 
 func playwrightStatus(test playwrightTest) TestStatus {

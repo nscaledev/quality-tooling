@@ -128,20 +128,23 @@ func resolveResultsPath(path, format string) (string, error) {
 
 	var newestPath string
 	var newestTime int64
+	var bestPreference int
 	err = filepath.WalkDir(path, func(candidate string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || !isKnownResultsFile(entry.Name(), format) {
+		preference := resultFilePreference(entry.Name(), format)
+		if entry.IsDir() || preference == 0 {
 			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		if newestPath == "" || info.ModTime().UnixNano() > newestTime {
+		if newestPath == "" || preference > bestPreference || (preference == bestPreference && info.ModTime().UnixNano() > newestTime) {
 			newestPath = candidate
 			newestTime = info.ModTime().UnixNano()
+			bestPreference = preference
 		}
 		return nil
 	})
@@ -154,21 +157,36 @@ func resolveResultsPath(path, format string) (string, error) {
 	return newestPath, nil
 }
 
-func isKnownResultsFile(name, format string) bool {
+func resultFilePreference(name, format string) int {
 	lower := strings.ToLower(name)
 	switch normalizeFormat(format) {
 	case formatJUnit:
-		return lower == "results.xml" || lower == "junit.xml"
+		if lower == "results.xml" || lower == "junit.xml" {
+			return 2
+		}
 	case formatPlaywrightJSON:
-		return lower == "results.json"
+		if lower == "results.json" {
+			return 2
+		}
+		if lower == "test-results.json" {
+			return 1
+		}
 	case formatGinkgoJSON:
-		return lower == "test-results.json"
+		if lower == "test-results.json" {
+			return 2
+		}
+		if lower == "results.json" {
+			return 1
+		}
 	default:
-		return lower == "results.xml" ||
+		if lower == "results.xml" ||
 			lower == "junit.xml" ||
 			lower == "results.json" ||
-			lower == "test-results.json"
+			lower == "test-results.json" {
+			return 1
+		}
 	}
+	return 0
 }
 
 func appendStepSummary(path, content string) error {
