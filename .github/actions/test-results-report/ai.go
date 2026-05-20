@@ -15,6 +15,13 @@ type AIAnalysis struct {
 	SlackSummary string
 }
 
+type AIInputOptions struct {
+	MaxFailures int
+	MaxSkips    int
+}
+
+const aiSlackDelimiter = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
+
 func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*AIAnalysis, error) {
 	if !config.EnableAIAnalysis {
 		return nil, nil
@@ -31,7 +38,10 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 
 	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", claudePrompt())
 	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
-	cmd.Stdin = strings.NewReader(renderAIInput(analysis))
+	cmd.Stdin = strings.NewReader(renderAIInputWithOptions(analysis, AIInputOptions{
+		MaxFailures: config.MaxFailures,
+		MaxSkips:    config.MaxSkips,
+	}))
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -46,9 +56,9 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 }
 
 func claudePrompt() string {
-	return `Analyze these test failures and skips. The GitHub step summary already includes run totals, links, and any previous-result comparison before your output, so do not repeat those basics, do not add separate "Failed Tests" or "Skipped Tests" sections, and do not list every test.
+	return fmt.Sprintf(`Analyze these test failures and skips. The GitHub step summary already includes run totals, links, and any previous-result comparison before your output, so do not repeat those basics, do not add separate "Failed Tests" or "Skipped Tests" sections, and do not list every test.
 
-Output exactly two sections separated by a line containing only '%%SLACK%%':
+Output exactly two sections separated by a line containing only %q. Do not write this delimiter anywhere else.
 
 Section 1: Markdown for the GitHub step summary.
 - Start with '## Test Failure Analysis'.
@@ -69,7 +79,7 @@ Use this shape:
 - Confirm whether the failures share the same status/error before opening individual test issues.
 - Rerun one representative failing suite after credentials or environment config are refreshed.
 
-%%SLACK%%
+%s
 Section 2: Plain text Slack summary.
 - 3-5 short Slack mrkdwn bullet lines.
 - Each bullet must start with '- *<suite/category>:*'.
@@ -84,22 +94,26 @@ Use this shape:
 - *Auth / all suites:* 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
 - *Validation paths:* 3 negative-path tests likely received 401 before the expected 403/404 assertions.
 - *Details:* Test-level failure reasons are available in the GitHub build summary.
-- *Next:* refresh the token or config, then rerun one focused smoke suite.`
+- *Next:* refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 
 func renderAIInput(analysis Analysis) string {
+	return renderAIInputWithOptions(analysis, AIInputOptions{})
+}
+
+func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Test run: %s\n", analysis.Current.Name))
 	sb.WriteString(fmt.Sprintf("Totals: %d passed, %d failed, %d skipped\n\n", analysis.Stats.Passed, analysis.Stats.Failed, analysis.Stats.Skipped))
 
 	if analysis.Compare != nil {
-		renderAIComparison(&sb, analysis.Compare)
+		renderAIComparison(&sb, analysis.Compare, options)
 	}
 
 	if len(analysis.Failures) > 0 {
-		sb.WriteString("Failed tests:\n")
+		renderAITestListHeader(&sb, "Failed tests", len(analysis.Failures), options.MaxFailures)
 	}
-	for _, failure := range analysis.Failures {
+	for _, failure := range limitAITests(analysis.Failures, options.MaxFailures) {
 		sb.WriteString(fmt.Sprintf("Test: %s\n", failure.Name))
 		if failure.Suite != "" {
 			sb.WriteString(fmt.Sprintf("Suite: %s\n", failure.Suite))
@@ -115,11 +129,14 @@ func renderAIInput(analysis Analysis) string {
 		}
 		sb.WriteString("\n")
 	}
+	if omitted := omittedAITestCount(len(analysis.Failures), options.MaxFailures); omitted > 0 {
+		sb.WriteString(fmt.Sprintf("%d additional failed tests omitted from AI input.\n\n", omitted))
+	}
 
 	if len(analysis.Skipped) > 0 {
-		sb.WriteString("Skipped tests:\n")
+		renderAITestListHeader(&sb, "Skipped tests", len(analysis.Skipped), options.MaxSkips)
 	}
-	for _, skipped := range analysis.Skipped {
+	for _, skipped := range limitAITests(analysis.Skipped, options.MaxSkips) {
 		sb.WriteString(fmt.Sprintf("Test: %s\n", skipped.Name))
 		if skipped.Suite != "" {
 			sb.WriteString(fmt.Sprintf("Suite: %s\n", skipped.Suite))
@@ -132,11 +149,14 @@ func renderAIInput(analysis Analysis) string {
 		}
 		sb.WriteString("\n")
 	}
+	if omitted := omittedAITestCount(len(analysis.Skipped), options.MaxSkips); omitted > 0 {
+		sb.WriteString(fmt.Sprintf("%d additional skipped tests omitted from AI input.\n\n", omitted))
+	}
 
 	return sb.String()
 }
 
-func renderAIComparison(sb *strings.Builder, comparison *Comparison) {
+func renderAIComparison(sb *strings.Builder, comparison *Comparison, options AIInputOptions) {
 	sb.WriteString("Previous result comparison:\n")
 	sb.WriteString(fmt.Sprintf("New failures: %d\n", len(comparison.NewFailures)))
 	sb.WriteString(fmt.Sprintf("Recurring failures: %d\n", len(comparison.RecurringFailures)))
@@ -149,21 +169,21 @@ func renderAIComparison(sb *strings.Builder, comparison *Comparison) {
 	sb.WriteString(fmt.Sprintf("Skipped delta: %+d\n", comparison.SkippedDelta))
 	sb.WriteString(fmt.Sprintf("Duration delta: %s\n", formatSignedDuration(comparison.DurationDelta)))
 
-	renderAIComparisonGroup(sb, "New failure tests", comparison.NewFailures)
-	renderAIComparisonGroup(sb, "Recurring failure tests", comparison.RecurringFailures)
-	renderAIComparisonGroup(sb, "Resolved failure tests", comparison.ResolvedFailures)
-	renderAIComparisonGroup(sb, "New skipped tests", comparison.NewSkips)
-	renderAIComparisonGroup(sb, "Recurring skipped tests", comparison.RecurringSkips)
-	renderAIComparisonGroup(sb, "Resolved skipped tests", comparison.ResolvedSkips)
+	renderAIComparisonGroup(sb, "New failure tests", comparison.NewFailures, options.MaxFailures)
+	renderAIComparisonGroup(sb, "Recurring failure tests", comparison.RecurringFailures, options.MaxFailures)
+	renderAIComparisonGroup(sb, "Resolved failure tests", comparison.ResolvedFailures, options.MaxFailures)
+	renderAIComparisonGroup(sb, "New skipped tests", comparison.NewSkips, options.MaxSkips)
+	renderAIComparisonGroup(sb, "Recurring skipped tests", comparison.RecurringSkips, options.MaxSkips)
+	renderAIComparisonGroup(sb, "Resolved skipped tests", comparison.ResolvedSkips, options.MaxSkips)
 	sb.WriteString("\n")
 }
 
-func renderAIComparisonGroup(sb *strings.Builder, title string, tests []TestCase) {
+func renderAIComparisonGroup(sb *strings.Builder, title string, tests []TestCase, limit int) {
 	if len(tests) == 0 {
 		return
 	}
-	sb.WriteString(title + ":\n")
-	for _, test := range tests {
+	renderAITestListHeader(sb, title, len(tests), limit)
+	for _, test := range limitAITests(tests, limit) {
 		sb.WriteString(fmt.Sprintf("- %s", firstNonEmpty(test.Name, test.ID)))
 		if test.Suite != "" {
 			sb.WriteString(fmt.Sprintf(" [%s]", test.Suite))
@@ -173,13 +193,35 @@ func renderAIComparisonGroup(sb *strings.Builder, title string, tests []TestCase
 		}
 		sb.WriteString("\n")
 	}
+	if omitted := omittedAITestCount(len(tests), limit); omitted > 0 {
+		sb.WriteString(fmt.Sprintf("- %d additional tests omitted from AI input.\n", omitted))
+	}
+}
+
+func renderAITestListHeader(sb *strings.Builder, title string, count int, limit int) {
+	if omittedAITestCount(count, limit) > 0 {
+		sb.WriteString(fmt.Sprintf("%s (showing first %d of %d):\n", title, limit, count))
+		return
+	}
+	sb.WriteString(title + ":\n")
+}
+
+func limitAITests(tests []TestCase, limit int) []TestCase {
+	if limit <= 0 || len(tests) <= limit {
+		return tests
+	}
+	return tests[:limit]
+}
+
+func omittedAITestCount(count int, limit int) int {
+	if limit <= 0 || count <= limit {
+		return 0
+	}
+	return count - limit
 }
 
 func parseAIAnalysis(output string) *AIAnalysis {
-	before, after, found := strings.Cut(output, "\n%%SLACK%%\n")
-	if !found {
-		before, after, found = strings.Cut(output, "%%SLACK%%")
-	}
+	before, after, found := cutAIAnalysisOnDelimiter(output)
 	if !found {
 		return &AIAnalysis{StepSummary: strings.TrimSpace(output)}
 	}
@@ -187,4 +229,20 @@ func parseAIAnalysis(output string) *AIAnalysis {
 		StepSummary:  strings.TrimSpace(before),
 		SlackSummary: strings.TrimSpace(after),
 	}
+}
+
+func cutAIAnalysisOnDelimiter(output string) (string, string, bool) {
+	lines := strings.SplitAfter(output, "\n")
+	offset := 0
+	for _, line := range lines {
+		lineWithoutNewline := strings.TrimSuffix(line, "\n")
+		lineWithoutNewline = strings.TrimSuffix(lineWithoutNewline, "\r")
+		if strings.TrimSpace(lineWithoutNewline) == aiSlackDelimiter {
+			before := output[:offset]
+			after := output[offset+len(line):]
+			return before, after, true
+		}
+		offset += len(line)
+	}
+	return "", "", false
 }

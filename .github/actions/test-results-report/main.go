@@ -211,29 +211,39 @@ func writeOutputs(path string, analysis Analysis, slackSent bool) error {
 		return nil
 	}
 
-	values := map[string]string{
-		"total":              fmt.Sprint(analysis.Stats.Total),
-		"passed":             fmt.Sprint(analysis.Stats.Passed),
-		"failed":             fmt.Sprint(analysis.Stats.Failed),
-		"skipped":            fmt.Sprint(analysis.Stats.Skipped),
-		"duration":           formatDuration(analysis.Current.Duration),
-		"duration-ms":        fmt.Sprint(analysis.Current.Duration.Milliseconds()),
-		"conclusion":         conclusion(analysis),
-		"slack-sent":         fmt.Sprint(slackSent),
-		"new-failures":       "0",
-		"recurring-failures": "0",
-		"resolved-failures":  "0",
-		"new-skips":          "0",
-		"recurring-skips":    "0",
-		"resolved-skips":     "0",
-	}
+	newFailures := 0
+	recurringFailures := 0
+	resolvedFailures := 0
+	newSkips := 0
+	recurringSkips := 0
+	resolvedSkips := 0
 	if analysis.Compare != nil {
-		values["new-failures"] = fmt.Sprint(len(analysis.Compare.NewFailures))
-		values["recurring-failures"] = fmt.Sprint(len(analysis.Compare.RecurringFailures))
-		values["resolved-failures"] = fmt.Sprint(len(analysis.Compare.ResolvedFailures))
-		values["new-skips"] = fmt.Sprint(len(analysis.Compare.NewSkips))
-		values["recurring-skips"] = fmt.Sprint(len(analysis.Compare.RecurringSkips))
-		values["resolved-skips"] = fmt.Sprint(len(analysis.Compare.ResolvedSkips))
+		newFailures = len(analysis.Compare.NewFailures)
+		recurringFailures = len(analysis.Compare.RecurringFailures)
+		resolvedFailures = len(analysis.Compare.ResolvedFailures)
+		newSkips = len(analysis.Compare.NewSkips)
+		recurringSkips = len(analysis.Compare.RecurringSkips)
+		resolvedSkips = len(analysis.Compare.ResolvedSkips)
+	}
+
+	values := []struct {
+		key   string
+		value string
+	}{
+		{"total", fmt.Sprint(analysis.Stats.Total)},
+		{"passed", fmt.Sprint(analysis.Stats.Passed)},
+		{"failed", fmt.Sprint(analysis.Stats.Failed)},
+		{"skipped", fmt.Sprint(analysis.Stats.Skipped)},
+		{"duration", formatDuration(analysis.Current.Duration)},
+		{"duration-ms", fmt.Sprint(analysis.Current.Duration.Milliseconds())},
+		{"conclusion", conclusion(analysis)},
+		{"new-failures", fmt.Sprint(newFailures)},
+		{"recurring-failures", fmt.Sprint(recurringFailures)},
+		{"resolved-failures", fmt.Sprint(resolvedFailures)},
+		{"new-skips", fmt.Sprint(newSkips)},
+		{"recurring-skips", fmt.Sprint(recurringSkips)},
+		{"resolved-skips", fmt.Sprint(resolvedSkips)},
+		{"slack-sent", fmt.Sprint(slackSent)},
 	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -242,8 +252,8 @@ func writeOutputs(path string, analysis Analysis, slackSent bool) error {
 	}
 	defer file.Close()
 
-	for key, value := range values {
-		if _, err := fmt.Fprintf(file, "%s=%s\n", key, value); err != nil {
+	for _, value := range values {
+		if _, err := fmt.Fprintf(file, "%s=%s\n", value.key, value.value); err != nil {
 			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
 		}
 	}

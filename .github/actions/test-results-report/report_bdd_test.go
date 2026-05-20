@@ -219,6 +219,18 @@ var _ = Describe("Test Results Report", func() {
 				Expect(outputs).To(HaveKeyWithValue("new-skips", "1"))
 				Expect(outputs).To(HaveKeyWithValue("slack-sent", "false"))
 
+				outputLines := strings.Split(strings.TrimSpace(readTestFile(outputPath)), "\n")
+				Expect(outputLines[:8]).To(Equal([]string{
+					"total=3",
+					"passed=1",
+					"failed=1",
+					"skipped=1",
+					"duration=12.5s",
+					"duration-ms=12500",
+					"conclusion=failure",
+					"new-failures=0",
+				}))
+
 				GinkgoWriter.Printf("Report outputs: %+v\n", outputs)
 			})
 
@@ -295,6 +307,20 @@ var _ = Describe("Test Results Report", func() {
 				Expect(config.WorkflowURL).To(Equal("https://github.example/nscaledev/quality-tooling/actions/runs/12345"))
 				Expect(config.Branch).To(Equal("feat/report"))
 				Expect(config.Actor).To(Equal("octocat"))
+			})
+
+			It("should parse process environment entries into a typed environment map", func() {
+				env := envMapFromList([]string{
+					"INPUT_TEST_RESULTS_PATH=results.xml",
+					"INPUT_FORMAT=junit",
+					"INVALID_ENTRY",
+					"INPUT_TITLE=API=Results",
+				})
+
+				Expect(env).To(HaveKeyWithValue("INPUT_TEST_RESULTS_PATH", "results.xml"))
+				Expect(env).To(HaveKeyWithValue("INPUT_FORMAT", "junit"))
+				Expect(env).To(HaveKeyWithValue("INPUT_TITLE", "API=Results"))
+				Expect(env).NotTo(HaveKey("INVALID_ENTRY"))
 			})
 		})
 
@@ -399,6 +425,16 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).NotTo(ContainSubstring(`TEST_RESULTS_PATH="${{ inputs.test-results-path }}"`))
 				Expect(action).NotTo(ContainSubstring(`PREVIOUS_RESULTS_PATH="${{ inputs.previous-results-path }}"`))
 			})
+
+			It("should mask webhook and Claude token inputs before running the reporter", func() {
+				Expect(action).To(ContainSubstring(`echo "::add-mask::${INPUT_SLACK_WEBHOOK_URL}"`))
+				Expect(action).To(ContainSubstring(`echo "::add-mask::${INPUT_CLAUDE_TOKEN}"`))
+			})
+
+			It("should cache Go modules for the action dependencies", func() {
+				Expect(action).To(ContainSubstring("cache: true"))
+				Expect(action).To(ContainSubstring("cache-dependency-path: ${{ github.action_path }}/go.sum"))
+			})
 		})
 	})
 
@@ -433,7 +469,7 @@ var _ = Describe("Test Results Report", func() {
 				}))
 				defer server.Close()
 
-				err := sendSlackWebhook(context.Background(), server.URL, SlackPayload{Text: "hello"})
+				err := sendSlack(context.Background(), Config{SlackWebhookURL: server.URL}, SlackPayload{Text: "hello"})
 
 				Expect(err).NotTo(HaveOccurred())
 				Expect(authHeader).To(BeEmpty())
@@ -446,7 +482,7 @@ var _ = Describe("Test Results Report", func() {
 				}))
 				defer server.Close()
 
-				err := sendSlackWebhook(context.Background(), server.URL, SlackPayload{Text: "hello"})
+				err := sendSlack(context.Background(), Config{SlackWebhookURL: server.URL}, SlackPayload{Text: "hello"})
 
 				Expect(err).To(MatchError(And(
 					ContainSubstring("status 400"),
@@ -577,6 +613,62 @@ var _ = Describe("Test Results Report", func() {
 				Expect(input).To(ContainSubstring("- updates VPC"))
 			})
 		})
+
+		Describe("Given many failures and skipped tests are present", func() {
+			It("should cap the rendered AI input to the configured report limits", func() {
+				analysis := Analysis{
+					Current: TestRun{Name: "API Tests"},
+					Stats:   Stats{Passed: 1, Failed: 4, Skipped: 3},
+					Failures: []TestCase{
+						{ID: "failure-1", Name: "failure one", Status: StatusFailed, Message: "one"},
+						{ID: "failure-2", Name: "failure two", Status: StatusFailed, Message: "two"},
+						{ID: "failure-3", Name: "failure three", Status: StatusFailed, Message: "three"},
+						{ID: "failure-4", Name: "failure four", Status: StatusFailed, Message: "four"},
+					},
+					Skipped: []TestCase{
+						{ID: "skip-1", Name: "skip one", Status: StatusSkipped, Message: "one"},
+						{ID: "skip-2", Name: "skip two", Status: StatusSkipped, Message: "two"},
+						{ID: "skip-3", Name: "skip three", Status: StatusSkipped, Message: "three"},
+					},
+					Compare: &Comparison{
+						NewFailures: []TestCase{
+							{ID: "new-failure-1", Name: "new failure one", Status: StatusFailed},
+							{ID: "new-failure-2", Name: "new failure two", Status: StatusFailed},
+							{ID: "new-failure-3", Name: "new failure three", Status: StatusFailed},
+						},
+						NewSkips: []TestCase{
+							{ID: "new-skip-1", Name: "new skip one", Status: StatusSkipped},
+							{ID: "new-skip-2", Name: "new skip two", Status: StatusSkipped},
+						},
+					},
+				}
+
+				input := renderAIInputWithOptions(analysis, AIInputOptions{MaxFailures: 2, MaxSkips: 1})
+
+				Expect(input).To(ContainSubstring("Failed tests (showing first 2 of 4):"))
+				Expect(input).To(ContainSubstring("Test: failure one"))
+				Expect(input).To(ContainSubstring("Test: failure two"))
+				Expect(input).To(ContainSubstring("2 additional failed tests omitted"))
+				Expect(input).NotTo(ContainSubstring("failure three"))
+				Expect(input).NotTo(ContainSubstring("failure four"))
+
+				Expect(input).To(ContainSubstring("Skipped tests (showing first 1 of 3):"))
+				Expect(input).To(ContainSubstring("Test: skip one"))
+				Expect(input).To(ContainSubstring("2 additional skipped tests omitted"))
+				Expect(input).NotTo(ContainSubstring("skip two"))
+				Expect(input).NotTo(ContainSubstring("skip three"))
+
+				Expect(input).To(ContainSubstring("New failure tests (showing first 2 of 3):"))
+				Expect(input).To(ContainSubstring("- new failure one"))
+				Expect(input).To(ContainSubstring("- new failure two"))
+				Expect(input).To(ContainSubstring("- 1 additional tests omitted"))
+				Expect(input).NotTo(ContainSubstring("new failure three"))
+
+				Expect(input).To(ContainSubstring("New skipped tests (showing first 1 of 2):"))
+				Expect(input).To(ContainSubstring("- new skip one"))
+				Expect(input).NotTo(ContainSubstring("new skip two"))
+			})
+		})
 	})
 
 	Context("When rendering summaries with AI analysis", func() {
@@ -616,10 +708,17 @@ var _ = Describe("Test Results Report", func() {
 
 	Context("When parsing AI analysis output", func() {
 		It("should split step summary and Slack summary on the delimiter", func() {
-			analysis := parseAIAnalysis("## Test Failure Analysis\nbody\n%%SLACK%%\nshort slack summary")
+			analysis := parseAIAnalysis("## Test Failure Analysis\nbody\n" + aiSlackDelimiter + "\nshort slack summary")
 
 			Expect(analysis.StepSummary).To(Equal("## Test Failure Analysis\nbody"))
 			Expect(analysis.SlackSummary).To(Equal("short slack summary"))
+		})
+
+		It("should ignore old or embedded delimiter text unless the configured delimiter is on its own line", func() {
+			analysis := parseAIAnalysis("## Test Failure Analysis\nfailed test output:\n%%SLACK%%\nnot a delimiter\ninline " + aiSlackDelimiter + " text\n" + aiSlackDelimiter + "\n- *Next:* rerun")
+
+			Expect(analysis.StepSummary).To(Equal("## Test Failure Analysis\nfailed test output:\n%%SLACK%%\nnot a delimiter\ninline " + aiSlackDelimiter + " text"))
+			Expect(analysis.SlackSummary).To(Equal("- *Next:* rerun"))
 		})
 
 		It("should keep all output as step summary when no delimiter exists", func() {
@@ -691,6 +790,13 @@ var _ = Describe("Test Results Report", func() {
 				GinkgoWriter.Printf("Checking Playwright status case: %s\n", testCase.name)
 				Expect(playwrightStatus(testCase.test)).To(Equal(testCase.want), testCase.name)
 			}
+		})
+
+		It("should classify result statuses case-insensitively", func() {
+			Expect(normalizeStatus("timedOut")).To(Equal(StatusFailed))
+			Expect(normalizeStatus("TIMEDOUT")).To(Equal(StatusFailed))
+			Expect(normalizeStatus("FlAkY")).To(Equal(StatusPassed))
+			Expect(normalizeStatus("PENDING")).To(Equal(StatusSkipped))
 		})
 	})
 

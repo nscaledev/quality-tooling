@@ -33,12 +33,10 @@ type Config struct {
 }
 
 func loadConfig() Config {
-	return configFromEnv(os.Environ)
+	return configFromEnv(envMapFromList(os.Environ()))
 }
 
-func configFromEnv(envSource interface{}) Config {
-	env := normalizeEnv(envSource)
-
+func configFromEnv(env map[string]string) Config {
 	slackWebhookURL := env["INPUT_SLACK_WEBHOOK_URL"]
 
 	sendSlack := false
@@ -100,20 +98,11 @@ func (config Config) validate() error {
 	return nil
 }
 
-func normalizeEnv(envSource interface{}) map[string]string {
+func envMapFromList(entries []string) map[string]string {
 	result := map[string]string{}
-	switch env := envSource.(type) {
-	case []string:
-		for _, entry := range env {
-			key, value, found := strings.Cut(entry, "=")
-			if found {
-				result[key] = value
-			}
-		}
-	case func() []string:
-		return normalizeEnv(env())
-	case map[string]string:
-		for key, value := range env {
+	for _, entry := range entries {
+		key, value, found := strings.Cut(entry, "=")
+		if found {
 			result[key] = value
 		}
 	}

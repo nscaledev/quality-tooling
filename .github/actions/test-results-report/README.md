@@ -48,6 +48,10 @@ Place this after the Allure report URL is known.
     claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
+Pass `slack-webhook-url` and `claude-token` from GitHub secrets. The action masks both inputs before running the reporter, but callers should still avoid storing webhook URLs or Claude tokens in repository variables.
+
+AI analysis shells out through `npx @anthropic-ai/claude-code`, so the runner must have Node.js/npm available.
+
 ## Previous Result Comparison
 
 For MVP, previous results are read from a local path. The path can be a file or a directory. Directory mode recursively picks the newest supported result file named `results.xml`, `junit.xml`, `results.json`, or `test-results.json`.

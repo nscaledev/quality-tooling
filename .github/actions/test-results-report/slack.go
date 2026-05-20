@@ -165,20 +165,12 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 }
 
 func sendSlack(ctx context.Context, config Config, payload SlackPayload) error {
-	return sendSlackWebhook(ctx, config.SlackWebhookURL, payload)
-}
-
-func sendSlackWebhook(ctx context.Context, webhookURL string, payload SlackPayload) error {
-	return postSlackPayload(ctx, webhookURL, payload)
-}
-
-func postSlackPayload(ctx context.Context, url string, payload SlackPayload) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal slack payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, config.SlackWebhookURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create slack request: %w", err)
 	}

@@ -537,7 +537,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Group by suite name when one suite is affected",
 		"test-level failure reasons are available in the GitHub build summary",
 		"Do not list every failed or skipped test",
-		"%%SLACK%%",
+		aiSlackDelimiter,
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q:\n%s", expected, prompt)
