@@ -251,7 +251,7 @@ var _ = Describe("Test Results Report", func() {
 					Expect(analysis.Skipped).To(HaveLen(1))
 					return &AIAnalysis{
 						StepSummary:  "## Test Failure Analysis\n\nAI grouped failure summary.",
-						SlackSummary: "- *Compute:* AI grouped Slack summary.",
+						SlackSummary: "- *infra/external - Compute:* AI grouped Slack summary.",
 					}, nil
 				}
 				DeferCleanup(func() {
@@ -277,7 +277,7 @@ var _ = Describe("Test Results Report", func() {
 
 				slackText := slackPayloadText(slackPayload)
 				Expect(slackText).To(ContainSubstring(":mag: *Failure Analysis*"))
-				Expect(slackText).To(ContainSubstring("- *Compute:* AI grouped Slack summary."))
+				Expect(slackText).To(ContainSubstring("- *infra/external - Compute:* AI grouped Slack summary."))
 				Expect(slackText).NotTo(ContainSubstring("*Failed Tests:*"))
 				Expect(slackText).NotTo(ContainSubstring("*Test:* creates instance"))
 
@@ -556,8 +556,10 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("already includes run totals, links, and any previous-result comparison"))
 				Expect(prompt).To(ContainSubstring(`do not add separate "Failed Tests" or "Skipped Tests" sections`))
 				Expect(prompt).To(ContainSubstring("Group failures and skips by likely area or pattern"))
+				Expect(prompt).To(ContainSubstring("Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed"))
+				Expect(prompt).To(ContainSubstring("Use unknown/mixed when there is not enough evidence"))
 				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
-				Expect(prompt).To(ContainSubstring("Each bullet must start with '- *<suite/category>:*'"))
+				Expect(prompt).To(ContainSubstring("Each triage bullet must start with '- *<category> - <suite/category>:*'"))
 				Expect(prompt).To(ContainSubstring("Group by suite name when one suite is affected"))
 				Expect(prompt).To(ContainSubstring("When failed tests are present"))
 				Expect(prompt).To(ContainSubstring("test-level failure reasons are available in the GitHub build summary"))
@@ -568,11 +570,12 @@ var _ = Describe("Test Results Report", func() {
 			It("should include a concrete compact example for step summary and Slack output", func() {
 				prompt := claudePrompt()
 
-				Expect(prompt).To(ContainSubstring("| Area / signal | Impact | Likely cause | Next check |"))
+				Expect(prompt).To(ContainSubstring("| Category | Area / signal | Impact | Likely cause | Confidence | Next check |"))
+				Expect(prompt).To(ContainSubstring("| infra/external | Auth / 401 responses"))
 				Expect(prompt).To(ContainSubstring("Auth / 401 responses"))
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
-				Expect(prompt).To(ContainSubstring("- *Auth / all suites:* 23 failures and 37 skips"))
-				Expect(prompt).To(ContainSubstring("- *Validation paths:* 3 negative-path tests"))
+				Expect(prompt).To(ContainSubstring("- *infra/external - Auth / all suites:* 23 failures and 37 skips"))
+				Expect(prompt).To(ContainSubstring("- *test/false failure - Validation paths:* 3 negative-path tests"))
 				Expect(prompt).To(ContainSubstring("- *Details:* Test-level failure reasons are available in the GitHub build summary."))
 				Expect(prompt).To(ContainSubstring("- *Next:* refresh the token or config"))
 			})

@@ -572,10 +572,12 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	prompt := claudePrompt()
 	for _, expected := range []string{
 		"3-5 short Slack mrkdwn bullet lines",
-		"Each bullet must start with '- *<suite/category>:*'",
+		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed",
+		"Each triage bullet must start with '- *<category> - <suite/category>:*'",
 		"Group by suite name when one suite is affected",
 		"test-level failure reasons are available in the GitHub build summary",
 		"Do not list every failed or skipped test",
+		"- *infra/external - Auth / all suites:*",
 		aiSlackDelimiter,
 	} {
 		if !strings.Contains(prompt, expected) {

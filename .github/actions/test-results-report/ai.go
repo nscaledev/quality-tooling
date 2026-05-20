@@ -64,6 +64,8 @@ Section 1: Markdown for the GitHub step summary.
 - Start with '## Test Failure Analysis'.
 - Keep it concise: one compact pattern table plus up to 4 bullets.
 - Group failures and skips by likely area or pattern, not by individual test.
+- Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed.
+- Use unknown/mixed when there is not enough evidence to choose a category confidently.
 - Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
 - Focus on likely cause, blast radius, confidence, and the next check.
 
@@ -71,9 +73,9 @@ Use this shape:
 ## Test Failure Analysis
 
 ### Patterns
-| Area / signal | Impact | Likely cause | Next check |
-| --- | ---: | --- | --- |
-| Auth / 401 responses | 23 failed, 37 skipped | Expired or invalid API token blocked setup-dependent specs | Validate the API token, then rerun one representative suite |
+| Category | Area / signal | Impact | Likely cause | Confidence | Next check |
+| --- | --- | ---: | --- | --- | --- |
+| infra/external | Auth / 401 responses | 23 failed, 37 skipped | Expired or invalid API token blocked setup-dependent specs | High | Validate the API token, then rerun one representative suite |
 
 ### Suggested Next Checks
 - Confirm whether the failures share the same status/error before opening individual test issues.
@@ -82,17 +84,17 @@ Use this shape:
 %s
 Section 2: Plain text Slack summary.
 - 3-5 short Slack mrkdwn bullet lines.
-- Each bullet must start with '- *<suite/category>:*'.
+- Each triage bullet must start with '- *<category> - <suite/category>:*', where category is one of infra/external, code/core logic, test/false failure, unknown/mixed.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
-- Include counts and the top next action.
+- Include counts, confidence when the category is uncertain, and the top next action.
 - When failed tests are present, include a details bullet that says test-level failure reasons are available in the GitHub build summary.
 - Do not include the details bullet for skip-only runs.
 - Do not list every failed or skipped test.
 - Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
 
 Use this shape:
-- *Auth / all suites:* 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
-- *Validation paths:* 3 negative-path tests likely received 401 before the expected 403/404 assertions.
+- *infra/external - Auth / all suites:* 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
+- *test/false failure - Validation paths:* 3 negative-path tests likely received 401 before the expected 403/404 assertions.
 - *Details:* Test-level failure reasons are available in the GitHub build summary.
 - *Next:* refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
