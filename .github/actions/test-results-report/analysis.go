@@ -41,16 +41,6 @@ func analyze(current TestRun, previous *TestRun) Analysis {
 }
 
 func compareRuns(current, previous TestRun) *Comparison {
-	currentByID := map[string]TestCase{}
-	previousByID := map[string]TestCase{}
-
-	for _, test := range current.Tests {
-		currentByID[test.ID] = test
-	}
-	for _, test := range previous.Tests {
-		previousByID[test.ID] = test
-	}
-
 	comparison := &Comparison{
 		DurationDelta: current.Duration - previous.Duration,
 	}
@@ -61,33 +51,54 @@ func compareRuns(current, previous TestRun) *Comparison {
 	comparison.FailedDelta = currentStats.Failed - previousStats.Failed
 	comparison.SkippedDelta = currentStats.Skipped - previousStats.Skipped
 
-	for _, test := range current.Tests {
-		previousTest, existed := previousByID[test.ID]
-		switch test.Status {
-		case StatusFailed:
-			if existed && previousTest.Status == StatusFailed {
-				comparison.RecurringFailures = append(comparison.RecurringFailures, test)
-			} else {
-				comparison.NewFailures = append(comparison.NewFailures, test)
-			}
-		case StatusSkipped:
-			if existed && previousTest.Status == StatusSkipped {
-				comparison.RecurringSkips = append(comparison.RecurringSkips, test)
-			} else {
-				comparison.NewSkips = append(comparison.NewSkips, test)
-			}
+	currentFailures, currentFailureOrder := firstTestsByStatus(current.Tests, StatusFailed)
+	previousFailures, previousFailureOrder := firstTestsByStatus(previous.Tests, StatusFailed)
+	currentSkips, currentSkipOrder := firstTestsByStatus(current.Tests, StatusSkipped)
+	previousSkips, previousSkipOrder := firstTestsByStatus(previous.Tests, StatusSkipped)
+
+	for _, id := range currentFailureOrder {
+		test := currentFailures[id]
+		if _, existed := previousFailures[id]; existed {
+			comparison.RecurringFailures = append(comparison.RecurringFailures, test)
+		} else {
+			comparison.NewFailures = append(comparison.NewFailures, test)
+		}
+	}
+	for _, id := range currentSkipOrder {
+		test := currentSkips[id]
+		if _, existed := previousSkips[id]; existed {
+			comparison.RecurringSkips = append(comparison.RecurringSkips, test)
+		} else {
+			comparison.NewSkips = append(comparison.NewSkips, test)
 		}
 	}
 
-	for _, test := range previous.Tests {
-		currentTest, existsNow := currentByID[test.ID]
-		if test.Status == StatusFailed && (!existsNow || currentTest.Status != StatusFailed) {
-			comparison.ResolvedFailures = append(comparison.ResolvedFailures, test)
+	for _, id := range previousFailureOrder {
+		if _, existsNow := currentFailures[id]; !existsNow {
+			comparison.ResolvedFailures = append(comparison.ResolvedFailures, previousFailures[id])
 		}
-		if test.Status == StatusSkipped && (!existsNow || currentTest.Status != StatusSkipped) {
-			comparison.ResolvedSkips = append(comparison.ResolvedSkips, test)
+	}
+	for _, id := range previousSkipOrder {
+		if _, existsNow := currentSkips[id]; !existsNow {
+			comparison.ResolvedSkips = append(comparison.ResolvedSkips, previousSkips[id])
 		}
 	}
 
 	return comparison
+}
+
+func firstTestsByStatus(tests []TestCase, status TestStatus) (map[string]TestCase, []string) {
+	byID := map[string]TestCase{}
+	var order []string
+	for _, test := range tests {
+		if test.Status != status {
+			continue
+		}
+		if _, exists := byID[test.ID]; exists {
+			continue
+		}
+		byID[test.ID] = test
+		order = append(order, test.ID)
+	}
+	return byID, order
 }

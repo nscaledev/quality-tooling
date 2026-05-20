@@ -19,9 +19,9 @@ inputs:
     required: false
     default: ''
   previous-results-format:
-    description: 'Previous test result format: auto, ginkgo-json, junit, or playwright-json. Defaults to format.'
+    description: 'Previous test result format: auto, ginkgo-json, junit, or playwright-json. Defaults to the current format.'
     required: false
-    default: 'auto'
+    default: ''
   previous-results-source:
     description: 'Previous result source. Only path is currently supported.'
     required: false

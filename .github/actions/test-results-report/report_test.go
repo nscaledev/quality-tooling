@@ -261,6 +261,38 @@ func TestAnalyzeWithPreviousResults(t *testing.T) {
 	}
 }
 
+func TestCompareRunsHandlesDuplicateIDsByOutcome(t *testing.T) {
+	t.Parallel()
+
+	current := TestRun{Tests: []TestCase{
+		{ID: "retry-case", Name: "retry case first attempt", Status: StatusFailed},
+		{ID: "retry-case", Name: "retry case retry", Status: StatusPassed},
+		{ID: "skip-case", Name: "skip case first attempt", Status: StatusSkipped},
+		{ID: "skip-case", Name: "skip case retry", Status: StatusPassed},
+	}}
+	previous := TestRun{Tests: []TestCase{
+		{ID: "retry-case", Name: "retry case previous attempt", Status: StatusFailed},
+		{ID: "retry-case", Name: "retry case previous retry", Status: StatusPassed},
+		{ID: "skip-case", Name: "skip case previous attempt", Status: StatusSkipped},
+		{ID: "skip-case", Name: "skip case previous retry", Status: StatusPassed},
+	}}
+
+	comparison := compareRuns(current, previous)
+
+	if len(comparison.RecurringFailures) != 1 || comparison.RecurringFailures[0].ID != "retry-case" {
+		t.Fatalf("recurring failures = %+v", comparison.RecurringFailures)
+	}
+	if len(comparison.NewFailures) != 0 || len(comparison.ResolvedFailures) != 0 {
+		t.Fatalf("failure comparison should not be order-dependent: %+v", comparison)
+	}
+	if len(comparison.RecurringSkips) != 1 || comparison.RecurringSkips[0].ID != "skip-case" {
+		t.Fatalf("recurring skips = %+v", comparison.RecurringSkips)
+	}
+	if len(comparison.NewSkips) != 0 || len(comparison.ResolvedSkips) != 0 {
+		t.Fatalf("skip comparison should not be order-dependent: %+v", comparison)
+	}
+}
+
 func TestMarkdownSummaryIncludesFailuresSkipsAndComparison(t *testing.T) {
 	t.Parallel()
 

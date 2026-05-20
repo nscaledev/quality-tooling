@@ -81,7 +81,7 @@ When enabled, the report includes:
 | `test-results-path` | Yes | - | Current results file or directory |
 | `format` | No | `auto` | `auto`, `ginkgo-json`, `junit`, `playwright-json` |
 | `previous-results-path` | No | empty | Previous results file or directory |
-| `previous-results-format` | No | `auto` | Format for previous results |
+| `previous-results-format` | No | current `format` | Format for previous results. Set to `auto` to detect independently |
 | `previous-results-source` | No | `path` | Only `path` is currently supported |
 | `compare-with-previous` | No | `auto` | Auto enables comparison when previous path is set |
 | `write-step-summary` | No | `true` | Append markdown to `$GITHUB_STEP_SUMMARY` |

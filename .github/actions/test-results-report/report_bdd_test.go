@@ -338,18 +338,17 @@ var _ = Describe("Test Results Report", func() {
 		Describe("Given GitHub Actions environment variables", func() {
 			It("should derive defaults for Slack, comparison, and workflow URL", func() {
 				config := configFromEnv(map[string]string{
-					"INPUT_TEST_RESULTS_PATH":       "results.xml",
-					"INPUT_PREVIOUS_RESULTS_PATH":   "previous.xml",
-					"INPUT_SEND_SLACK":              "auto",
-					"INPUT_SLACK_WEBHOOK_URL":       "https://hooks.slack.example/test",
-					"INPUT_COMPARE_WITH_PREVIOUS":   "auto",
-					"INPUT_PREVIOUS_RESULTS_FORMAT": "",
-					"INPUT_FORMAT":                  "junit",
-					"GITHUB_SERVER_URL":             "https://github.example",
-					"GITHUB_REPOSITORY":             "nscaledev/quality-tooling",
-					"GITHUB_RUN_ID":                 "12345",
-					"GITHUB_REF_NAME":               "feat/report",
-					"GITHUB_ACTOR":                  "octocat",
+					"INPUT_TEST_RESULTS_PATH":     "results.xml",
+					"INPUT_PREVIOUS_RESULTS_PATH": "previous.xml",
+					"INPUT_SEND_SLACK":            "auto",
+					"INPUT_SLACK_WEBHOOK_URL":     "https://hooks.slack.example/test",
+					"INPUT_COMPARE_WITH_PREVIOUS": "auto",
+					"INPUT_FORMAT":                "junit",
+					"GITHUB_SERVER_URL":           "https://github.example",
+					"GITHUB_REPOSITORY":           "nscaledev/quality-tooling",
+					"GITHUB_RUN_ID":               "12345",
+					"GITHUB_REF_NAME":             "feat/report",
+					"GITHUB_ACTOR":                "octocat",
 				})
 
 				Expect(config.SendSlack).To(BeTrue())
@@ -485,6 +484,12 @@ var _ = Describe("Test Results Report", func() {
 			It("should cache Go modules for the action dependencies", func() {
 				Expect(action).To(ContainSubstring("cache: true"))
 				Expect(action).To(ContainSubstring("cache-dependency-path: ${{ github.action_path }}/go.sum"))
+			})
+
+			It("should leave previous result format empty so it inherits the current format", func() {
+				Expect(action).To(ContainSubstring("previous-results-format:"))
+				Expect(action).To(ContainSubstring("Defaults to the current format"))
+				Expect(action).To(ContainSubstring("default: ''"))
 			})
 		})
 	})
