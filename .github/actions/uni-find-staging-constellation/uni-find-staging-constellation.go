@@ -70,6 +70,39 @@ var tagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 var errNotFound = errors.New("not found")
 
 func main() {
+	useStagingConstellation := !strings.EqualFold(strings.TrimSpace(os.Getenv("USE_STAGING_CONSTELLATION")), "false")
+
+	if !useStagingConstellation {
+		if eventName := os.Getenv("GITHUB_EVENT_NAME"); eventName != "workflow_dispatch" {
+			fmt.Fprintln(os.Stderr, "ERROR: USE_STAGING_CONSTELLATION=false is only supported for workflow_dispatch runs")
+			os.Exit(1)
+		}
+
+		ref := strings.TrimSpace(os.Getenv("GITHUB_REF_NAME"))
+		if ref == "" {
+			fmt.Fprintln(os.Stderr, "ERROR: GITHUB_REF_NAME environment variable not set")
+			os.Exit(1)
+		}
+
+		fmt.Printf("Using selected workflow ref for UAT: %s\n", ref)
+
+		if outputFile := os.Getenv("GITHUB_OUTPUT"); outputFile != "" {
+			f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_WRONLY, 0o600)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: failed to open GITHUB_OUTPUT: %v\n", err)
+				os.Exit(1)
+			}
+			defer f.Close()
+
+			if _, err := fmt.Fprintf(f, "ref=%s\n", ref); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: failed to write GITHUB_OUTPUT: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
+		return
+	}
+
 	service := os.Getenv("SERVICE")
 	if service == "" {
 		fmt.Fprintln(os.Stderr, "ERROR: SERVICE environment variable not set")
@@ -109,6 +142,11 @@ func main() {
 		defer f.Close()
 
 		if _, err := fmt.Fprintf(f, "tag=%s\n", tag); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: failed to write GITHUB_OUTPUT: %v\n", err)
+			os.Exit(1)
+		}
+
+		if _, err := fmt.Fprintf(f, "ref=%s\n", tag); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: failed to write GITHUB_OUTPUT: %v\n", err)
 			os.Exit(1)
 		}

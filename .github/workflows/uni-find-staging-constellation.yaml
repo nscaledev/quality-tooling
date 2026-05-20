@@ -1,0 +1,33 @@
+name: Uni Find Staging Constellation
+
+on:
+  pull_request:
+    paths:
+      - '.github/actions/uni-find-staging-constellation/**'
+      - '.github/workflows/uni-find-staging-constellation.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/actions/uni-find-staging-constellation/**'
+      - '.github/workflows/uni-find-staging-constellation.yaml'
+
+jobs:
+  test:
+    name: Test action
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .github/actions/uni-find-staging-constellation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: .github/actions/uni-find-staging-constellation/go.mod
+          cache-dependency-path: .github/actions/uni-find-staging-constellation/go.sum
+
+      - name: Run tests
+        run: go test ./...

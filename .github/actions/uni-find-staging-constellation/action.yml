@@ -13,11 +13,18 @@ inputs:
     description: 'Releases repository in owner/repo format'
     required: false
     default: 'nscaledev/uni-releases'
+  use-staging-constellation:
+    description: 'When true, resolve the ref from the staged constellation; when false on workflow_dispatch, use the selected workflow ref'
+    required: false
+    default: 'true'
 
 outputs:
   tag:
     description: 'Git tag pinned in the candidate constellation (e.g. v1.16.4), empty if no candidate found'
     value: ${{ steps.find.outputs.tag }}
+  ref:
+    description: 'Checkout ref for UAT tests: the staged constellation tag or the selected workflow ref'
+    value: ${{ steps.find.outputs.ref }}
 
 runs:
   using: 'composite'
@@ -31,3 +38,4 @@ runs:
         GH_TOKEN: ${{ inputs.releases-read-token }}
         SERVICE: ${{ inputs.service }}
         RELEASES_REPO: ${{ inputs.releases-repo }}
+        USE_STAGING_CONSTELLATION: ${{ inputs.use-staging-constellation }}
