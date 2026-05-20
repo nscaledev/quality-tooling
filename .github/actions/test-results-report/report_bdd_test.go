@@ -559,8 +559,11 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed"))
 				Expect(prompt).To(ContainSubstring("Use unknown/mixed when there is not enough evidence"))
 				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
-				Expect(prompt).To(ContainSubstring("Each triage bullet must start with '- *<category> - <suite/category>:*'"))
+				Expect(prompt).To(ContainSubstring("Each triage bullet must start with '- *<suite/category>* (<category>):'"))
 				Expect(prompt).To(ContainSubstring("Group by suite name when one suite is affected"))
+				Expect(prompt).To(ContainSubstring("For intentional or sentinel test failures"))
+				Expect(prompt).To(ContainSubstring("remove or disable them before review"))
+				Expect(prompt).To(ContainSubstring("do not mention issue alerting unless it appears in the evidence"))
 				Expect(prompt).To(ContainSubstring("When failed tests are present"))
 				Expect(prompt).To(ContainSubstring("test-level failure reasons are available in the GitHub build summary"))
 				Expect(prompt).To(ContainSubstring("Do not include the details bullet for skip-only runs"))
@@ -574,10 +577,10 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("| infra/external | Auth / 401 responses"))
 				Expect(prompt).To(ContainSubstring("Auth / 401 responses"))
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
-				Expect(prompt).To(ContainSubstring("- *infra/external - Auth / all suites:* 23 failures and 37 skips"))
-				Expect(prompt).To(ContainSubstring("- *test/false failure - Validation paths:* 3 negative-path tests"))
+				Expect(prompt).To(ContainSubstring("- *Auth / all suites* (infra/external): 23 failures and 37 skips"))
+				Expect(prompt).To(ContainSubstring("- *Validation paths* (test/false failure): 3 negative-path tests"))
 				Expect(prompt).To(ContainSubstring("- *Details:* Test-level failure reasons are available in the GitHub build summary."))
-				Expect(prompt).To(ContainSubstring("- *Next:* refresh the token or config"))
+				Expect(prompt).To(ContainSubstring("- *Action:* refresh the token or config"))
 			})
 		})
 
@@ -774,10 +777,10 @@ var _ = Describe("Test Results Report", func() {
 		})
 
 		It("should ignore old or embedded delimiter text unless the configured delimiter is on its own line", func() {
-			analysis := parseAIAnalysis("## Test Failure Analysis\nfailed test output:\n%%SLACK%%\nnot a delimiter\ninline " + aiSlackDelimiter + " text\n" + aiSlackDelimiter + "\n- *Next:* rerun")
+			analysis := parseAIAnalysis("## Test Failure Analysis\nfailed test output:\n%%SLACK%%\nnot a delimiter\ninline " + aiSlackDelimiter + " text\n" + aiSlackDelimiter + "\n- *Action:* rerun")
 
 			Expect(analysis.StepSummary).To(Equal("## Test Failure Analysis\nfailed test output:\n%%SLACK%%\nnot a delimiter\ninline " + aiSlackDelimiter + " text"))
-			Expect(analysis.SlackSummary).To(Equal("- *Next:* rerun"))
+			Expect(analysis.SlackSummary).To(Equal("- *Action:* rerun"))
 		})
 
 		It("should keep all output as step summary when no delimiter exists", func() {

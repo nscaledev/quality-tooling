@@ -84,19 +84,20 @@ Use this shape:
 %s
 Section 2: Plain text Slack summary.
 - 3-5 short Slack mrkdwn bullet lines.
-- Each triage bullet must start with '- *<category> - <suite/category>:*', where category is one of infra/external, code/core logic, test/false failure, unknown/mixed.
+- Each triage bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, unknown/mixed.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
 - Include counts, confidence when the category is uncertain, and the top next action.
+- For intentional or sentinel test failures, describe them as temporary validation tests and make the action remove or disable them before review; do not mention issue alerting unless it appears in the evidence.
 - When failed tests are present, include a details bullet that says test-level failure reasons are available in the GitHub build summary.
 - Do not include the details bullet for skip-only runs.
 - Do not list every failed or skipped test.
 - Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
 
 Use this shape:
-- *infra/external - Auth / all suites:* 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
-- *test/false failure - Validation paths:* 3 negative-path tests likely received 401 before the expected 403/404 assertions.
+- *Auth / all suites* (infra/external): 23 failures and 37 skips appear blocked by 401 responses from expired or invalid API credentials.
+- *Validation paths* (test/false failure): 3 negative-path tests likely received 401 before the expected 403/404 assertions.
 - *Details:* Test-level failure reasons are available in the GitHub build summary.
-- *Next:* refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
+- *Action:* refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 
 func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string {

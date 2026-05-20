@@ -573,11 +573,13 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	for _, expected := range []string{
 		"3-5 short Slack mrkdwn bullet lines",
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed",
-		"Each triage bullet must start with '- *<category> - <suite/category>:*'",
+		"Each triage bullet must start with '- *<suite/category>* (<category>):'",
 		"Group by suite name when one suite is affected",
+		"For intentional or sentinel test failures",
+		"remove or disable them before review",
 		"test-level failure reasons are available in the GitHub build summary",
 		"Do not list every failed or skipped test",
-		"- *infra/external - Auth / all suites:*",
+		"- *Auth / all suites* (infra/external):",
 		aiSlackDelimiter,
 	} {
 		if !strings.Contains(prompt, expected) {
