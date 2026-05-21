@@ -54,6 +54,7 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 	if options.MaxFailures <= 0 {
 		options.MaxFailures = 10
 	}
+	hasAIAnalysis := strings.TrimSpace(options.AIAnalysis) != ""
 
 	statusText := "Passed"
 	statusEmoji := ":white_check_mark:"
@@ -113,9 +114,16 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 
 	if len(analysis.Failures) > 0 && !options.OmitFailureDetails {
 		blocks = append(blocks, SlackBlock{Type: "divider"})
+		heading := "*Failed Tests:*"
+		formatFailure := formatSlackFailure
+		if hasAIAnalysis {
+			visible := min(len(analysis.Failures), options.MaxFailures)
+			heading = fmt.Sprintf("*Failed Tests (first %d of %d):*", visible, len(analysis.Failures))
+			formatFailure = formatSlackFailureCompact
+		}
 		blocks = append(blocks, SlackBlock{
 			Type: "section",
-			Text: &SlackText{Type: "mrkdwn", Text: "*Failed Tests:*"},
+			Text: &SlackText{Type: "mrkdwn", Text: heading},
 		})
 		for i, failure := range analysis.Failures {
 			if i >= options.MaxFailures {
@@ -127,12 +135,12 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 			}
 			blocks = append(blocks, SlackBlock{
 				Type: "section",
-				Text: &SlackText{Type: "mrkdwn", Text: formatSlackFailure(failure)},
+				Text: &SlackText{Type: "mrkdwn", Text: formatFailure(failure)},
 			})
 		}
 	}
 
-	if strings.TrimSpace(options.AIAnalysis) != "" {
+	if hasAIAnalysis {
 		blocks = append(blocks, SlackBlock{
 			Type: "section",
 			Text: &SlackText{Type: "mrkdwn", Text: fmt.Sprintf(":mag: *Failure Analysis*\n%s", truncate(strings.TrimSpace(options.AIAnalysis), 2400))},
@@ -197,17 +205,43 @@ func formatSlackFailure(test TestCase) string {
 	if test.Suite != "" {
 		sb.WriteString(fmt.Sprintf("*Suite:* `%s`\n", test.Suite))
 	}
-	if location := formatLocation(test); location != "" {
-		if test.File != "" {
-			location = filepath.Base(test.File)
-			if test.Line > 0 {
-				location = fmt.Sprintf("%s:%d", location, test.Line)
-			}
-		}
+	if location := formatSlackLocation(test); location != "" {
 		sb.WriteString(fmt.Sprintf("*Location:* `%s`\n", location))
 	}
 	if test.Message != "" {
 		sb.WriteString(fmt.Sprintf("*Error:*\n```\n%s\n```", truncate(cleanOneLine(test.Message), 500)))
 	}
 	return sb.String()
+}
+
+func formatSlackFailureCompact(test TestCase) string {
+	var sb strings.Builder
+	name := firstNonEmpty(test.Name, test.ID, "Unnamed test")
+	if test.Suite != "" {
+		sb.WriteString(fmt.Sprintf("- *%s:* %s", test.Suite, name))
+	} else {
+		sb.WriteString(fmt.Sprintf("- *%s*", name))
+	}
+	if location := formatSlackLocation(test); location != "" {
+		sb.WriteString(fmt.Sprintf(" (`%s`)", location))
+	}
+	if reason := firstNonEmpty(test.Message, test.Output, test.RawState); reason != "" {
+		sb.WriteString(fmt.Sprintf("\n  _Reason:_ %s", truncate(cleanOneLine(reason), 220)))
+	}
+	return sb.String()
+}
+
+func formatSlackLocation(test TestCase) string {
+	location := formatLocation(test)
+	if location == "" {
+		return ""
+	}
+	if test.File == "" {
+		return location
+	}
+	location = filepath.Base(test.File)
+	if test.Line > 0 {
+		location = fmt.Sprintf("%s:%d", location, test.Line)
+	}
+	return location
 }

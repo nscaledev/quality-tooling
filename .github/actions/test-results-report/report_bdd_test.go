@@ -235,7 +235,7 @@ var _ = Describe("Test Results Report", func() {
 				GinkgoWriter.Printf("Report outputs: %+v\n", outputs)
 			})
 
-			It("should wire successful AI analysis into the summary and Slack without raw test detail tables", func() {
+			It("should wire successful AI analysis into the summary and Slack with compact failed test details", func() {
 				var slackPayload SlackPayload
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 					Expect(json.NewDecoder(request.Body).Decode(&slackPayload)).To(Succeed())
@@ -276,9 +276,11 @@ var _ = Describe("Test Results Report", func() {
 				Expect(summary).NotTo(ContainSubstring("Expected button to be visible"))
 
 				slackText := slackPayloadText(slackPayload)
+				Expect(slackText).To(ContainSubstring("*Failed Tests (first 1 of 1):*"))
+				Expect(slackText).To(ContainSubstring("- *compute.instance:* creates instance"))
+				Expect(slackText).To(ContainSubstring("_Reason:_ Expected button to be visible"))
 				Expect(slackText).To(ContainSubstring(":mag: *Failure Analysis*"))
 				Expect(slackText).To(ContainSubstring("- *Compute* (infra/external): AI grouped Slack summary."))
-				Expect(slackText).NotTo(ContainSubstring("*Failed Tests:*"))
 				Expect(slackText).NotTo(ContainSubstring("*Test:* creates instance"))
 
 				outputs := readOutputFile(outputPath)

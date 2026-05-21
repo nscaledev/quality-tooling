@@ -70,15 +70,14 @@ func run(ctx context.Context, config Config) error {
 			slackSummary = aiAnalysis.SlackSummary
 		}
 		payload := buildSlackPayload(analysis, SlackOptions{
-			Title:              config.Title,
-			Environment:        config.Environment,
-			Branch:             config.Branch,
-			Actor:              config.Actor,
-			WorkflowURL:        config.WorkflowURL,
-			ReportURL:          config.ReportURL,
-			AIAnalysis:         slackSummary,
-			MaxFailures:        config.MaxFailures,
-			OmitFailureDetails: strings.TrimSpace(slackSummary) != "",
+			Title:       config.Title,
+			Environment: config.Environment,
+			Branch:      config.Branch,
+			Actor:       config.Actor,
+			WorkflowURL: config.WorkflowURL,
+			ReportURL:   config.ReportURL,
+			AIAnalysis:  slackSummary,
+			MaxFailures: config.MaxFailures,
 		})
 		if err := sendSlack(ctx, config, payload); err != nil {
 			if config.FailOnSlackError {
