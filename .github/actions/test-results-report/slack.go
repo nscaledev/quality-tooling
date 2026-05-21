@@ -20,6 +20,7 @@ type SlackOptions struct {
 	WorkflowURL        string
 	ReportURL          string
 	AIAnalysis         string
+	FailureReasons     map[int]string
 	MaxFailures        int
 	OmitFailureDetails bool
 }
@@ -115,11 +116,9 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 	if len(analysis.Failures) > 0 && !options.OmitFailureDetails {
 		blocks = append(blocks, SlackBlock{Type: "divider"})
 		heading := "*Failed Tests:*"
-		formatFailure := formatSlackFailure
 		if hasAIAnalysis {
 			visible := min(len(analysis.Failures), options.MaxFailures)
 			heading = fmt.Sprintf("*Failed Tests (first %d of %d):*", visible, len(analysis.Failures))
-			formatFailure = formatSlackFailureCompact
 		}
 		blocks = append(blocks, SlackBlock{
 			Type: "section",
@@ -133,9 +132,13 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 				})
 				break
 			}
+			failureText := formatSlackFailure(failure)
+			if hasAIAnalysis {
+				failureText = formatSlackFailureCompact(failure, options.FailureReasons[i])
+			}
 			blocks = append(blocks, SlackBlock{
 				Type: "section",
-				Text: &SlackText{Type: "mrkdwn", Text: formatFailure(failure)},
+				Text: &SlackText{Type: "mrkdwn", Text: failureText},
 			})
 		}
 	}
@@ -214,7 +217,7 @@ func formatSlackFailure(test TestCase) string {
 	return sb.String()
 }
 
-func formatSlackFailureCompact(test TestCase) string {
+func formatSlackFailureCompact(test TestCase, likelyReason string) string {
 	var sb strings.Builder
 	name := formatSlackFailureName(test)
 	if test.Suite != "" {
@@ -226,9 +229,12 @@ func formatSlackFailureCompact(test TestCase) string {
 		sb.WriteString(fmt.Sprintf(" (`%s`)", location))
 	}
 	if reason := firstNonEmpty(test.Message, test.RawState); reason != "" {
-		sb.WriteString(fmt.Sprintf("\n  _Reason:_ %s", truncate(cleanOneLine(reason), 220)))
+		sb.WriteString(fmt.Sprintf("\n  _Error:_ %s", truncate(cleanOneLine(reason), 220)))
 	} else if test.Output != "" {
-		sb.WriteString("\n  _Reason:_ See GitHub build summary for captured output.")
+		sb.WriteString("\n  _Error:_ See GitHub build summary for captured output.")
+	}
+	if likelyReason = strings.TrimSpace(likelyReason); likelyReason != "" {
+		sb.WriteString(fmt.Sprintf("\n  _Likely reason:_ %s", truncate(cleanOneLine(likelyReason), 220)))
 	}
 	return sb.String()
 }

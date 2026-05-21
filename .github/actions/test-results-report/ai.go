@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,8 +12,18 @@ import (
 )
 
 type AIAnalysis struct {
-	StepSummary  string
-	SlackSummary string
+	StepSummary    string
+	FailureReasons map[int]string
+	SlackSummary   string
+}
+
+type aiFailureReasonsOutput struct {
+	FailedTests []aiFailureReason `json:"failed_tests"`
+}
+
+type aiFailureReason struct {
+	Index        int    `json:"index"`
+	LikelyReason string `json:"likely_reason"`
 }
 
 type AIInputOptions struct {
@@ -58,7 +69,7 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 func claudePrompt() string {
 	return fmt.Sprintf(`Analyze these test failures and skips. The GitHub step summary already includes run totals, links, and any previous-result comparison before your output, so do not repeat those basics, do not add separate "Failed Tests" or "Skipped Tests" sections, and do not list every test.
 
-Output exactly two sections separated by a line containing only %q. Do not write this delimiter anywhere else.
+Output exactly three sections separated by a line containing only %q. Do not write this delimiter anywhere else.
 
 Section 1: Markdown for the GitHub step summary.
 - Start with '## Test Failure Analysis'.
@@ -89,7 +100,19 @@ Use this shape:
 - Rerun one representative failing suite after credentials or environment config are refreshed.
 
 %s
-Section 2: Plain text Slack summary.
+Section 2: JSON likely reasons for the compact Slack failed-test list.
+- Output only valid compact JSON, no markdown fences.
+- Use failed test indexes from the "Failed tests" input, where the first failed test is index 0.
+- Include at most 10 entries and only include failed tests shown in the input.
+- Each likely_reason must be one short evidence-based sentence, max 160 characters.
+- If the evidence is weak, say what is most likely and keep uncertainty explicit.
+- Use {"failed_tests":[]} when there are no failed tests.
+
+Use this shape:
+{"failed_tests":[{"index":0,"likely_reason":"API calls returned 401 before product assertions, so the CI token is likely expired or invalid."}]}
+
+%s
+Section 3: Plain text Slack summary.
 - 4-6 high-signal Slack mrkdwn bullet lines.
 - Do not use tables in the Slack summary; Slack should stay short bullet lines.
 - Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, unknown/mixed.
@@ -109,7 +132,7 @@ Use this shape:
 - *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
 - *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.
 - *Validation paths* (test/false failure): 3 negative-path tests are likely side effects of the same 401 auth failure.
-- *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
+- *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter, aiSlackDelimiter)
 }
 
 func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string {
@@ -124,7 +147,8 @@ func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string 
 	if len(analysis.Failures) > 0 {
 		renderAITestListHeader(&sb, "Failed tests", len(analysis.Failures), options.MaxFailures)
 	}
-	for _, failure := range limitAITests(analysis.Failures, options.MaxFailures) {
+	for i, failure := range limitAITests(analysis.Failures, options.MaxFailures) {
+		sb.WriteString(fmt.Sprintf("Index: %d\n", i))
 		sb.WriteString(fmt.Sprintf("Test: %s\n", failure.Name))
 		if failure.Suite != "" {
 			sb.WriteString(fmt.Sprintf("Suite: %s\n", failure.Suite))
@@ -232,28 +256,52 @@ func omittedAITestCount(count int, limit int) int {
 }
 
 func parseAIAnalysis(output string) *AIAnalysis {
-	before, after, found := cutAIAnalysisOnDelimiter(output)
-	if !found {
+	sections := splitAIAnalysisSections(output)
+	if len(sections) == 0 {
 		return &AIAnalysis{StepSummary: strings.TrimSpace(output)}
 	}
-	return &AIAnalysis{
-		StepSummary:  strings.TrimSpace(before),
-		SlackSummary: strings.TrimSpace(after),
+	analysis := &AIAnalysis{StepSummary: strings.TrimSpace(sections[0])}
+	if len(sections) == 2 {
+		analysis.SlackSummary = strings.TrimSpace(sections[1])
+		return analysis
 	}
+	analysis.FailureReasons = parseAIFailureReasons(sections[1])
+	analysis.SlackSummary = strings.TrimSpace(strings.Join(sections[2:], "\n"+aiSlackDelimiter+"\n"))
+	return analysis
 }
 
-func cutAIAnalysisOnDelimiter(output string) (string, string, bool) {
-	lines := strings.SplitAfter(output, "\n")
+func parseAIFailureReasons(output string) map[int]string {
+	var parsed aiFailureReasonsOutput
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &parsed); err != nil {
+		return nil
+	}
+	reasons := make(map[int]string, len(parsed.FailedTests))
+	for _, failedTest := range parsed.FailedTests {
+		reason := strings.TrimSpace(failedTest.LikelyReason)
+		if failedTest.Index < 0 || reason == "" {
+			continue
+		}
+		reasons[failedTest.Index] = reason
+	}
+	return reasons
+}
+
+func splitAIAnalysisSections(output string) []string {
+	var sections []string
+	start := 0
 	offset := 0
+	lines := strings.SplitAfter(output, "\n")
 	for _, line := range lines {
 		lineWithoutNewline := strings.TrimSuffix(line, "\n")
 		lineWithoutNewline = strings.TrimSuffix(lineWithoutNewline, "\r")
 		if strings.TrimSpace(lineWithoutNewline) == aiSlackDelimiter {
-			before := output[:offset]
-			after := output[offset+len(line):]
-			return before, after, true
+			sections = append(sections, output[start:offset])
+			start = offset + len(line)
 		}
 		offset += len(line)
 	}
-	return "", "", false
+	if len(sections) == 0 {
+		return nil
+	}
+	return append(sections, output[start:])
 }

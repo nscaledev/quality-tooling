@@ -250,8 +250,9 @@ var _ = Describe("Test Results Report", func() {
 					Expect(analysis.Failures).To(HaveLen(1))
 					Expect(analysis.Skipped).To(HaveLen(1))
 					return &AIAnalysis{
-						StepSummary:  "## Test Failure Analysis\n\nAI grouped failure summary.",
-						SlackSummary: "- *Compute* (infra/external): AI grouped Slack summary.",
+						StepSummary:    "## Test Failure Analysis\n\nAI grouped failure summary.",
+						FailureReasons: map[int]string{0: "The create button did not become visible before the UI timeout."},
+						SlackSummary:   "- *Compute* (infra/external): AI grouped Slack summary.",
 					}, nil
 				}
 				DeferCleanup(func() {
@@ -278,7 +279,8 @@ var _ = Describe("Test Results Report", func() {
 				slackText := slackPayloadText(slackPayload)
 				Expect(slackText).To(ContainSubstring("*Failed Tests (first 1 of 1):*"))
 				Expect(slackText).To(ContainSubstring("- *compute.instance:* creates instance"))
-				Expect(slackText).To(ContainSubstring("_Reason:_ Expected button to be visible"))
+				Expect(slackText).To(ContainSubstring("_Error:_ Expected button to be visible"))
+				Expect(slackText).To(ContainSubstring("_Likely reason:_ The create button did not become visible before the UI timeout."))
 				Expect(slackText).To(ContainSubstring(":mag: *Failure Analysis*"))
 				Expect(slackText).To(ContainSubstring("- *Compute* (infra/external): AI grouped Slack summary."))
 				Expect(slackText).NotTo(ContainSubstring("*Test:* creates instance"))
@@ -556,6 +558,7 @@ var _ = Describe("Test Results Report", func() {
 				prompt := claudePrompt()
 
 				Expect(prompt).To(ContainSubstring("already includes run totals, links, and any previous-result comparison"))
+				Expect(prompt).To(ContainSubstring("Output exactly three sections"))
 				Expect(prompt).To(ContainSubstring(`do not add separate "Failed Tests" or "Skipped Tests" sections`))
 				Expect(prompt).To(ContainSubstring("Group failures and skips by likely area or pattern"))
 				Expect(prompt).To(ContainSubstring("Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed"))
@@ -580,6 +583,8 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("End with exactly one '- *Action:*' bullet"))
 				Expect(prompt).To(ContainSubstring("the Action bullet must mention that test-level failure reasons are available in the GitHub build summary"))
 				Expect(prompt).To(ContainSubstring("Do not mention test-level failure reasons for skip-only runs"))
+				Expect(prompt).To(ContainSubstring("Section 2: JSON likely reasons for the compact Slack failed-test list"))
+				Expect(prompt).To(ContainSubstring(`Use {"failed_tests":[]} when there are no failed tests`))
 			})
 
 			It("should include a concrete compact example for step summary and Slack output", func() {
@@ -588,6 +593,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("| Category | What failed | Why it failed | Likely reason | Impact | Next check |"))
 				Expect(prompt).To(ContainSubstring("| infra/external | Auth-dependent setup across suites"))
 				Expect(prompt).To(ContainSubstring("### Representative Failed Tests"))
+				Expect(prompt).To(ContainSubstring(`{"failed_tests":[{"index":0,"likely_reason":"API calls returned 401 before product assertions`))
 				Expect(prompt).To(ContainSubstring("| Suite / area | Representative tests | Failure reason | Count |"))
 				Expect(prompt).To(ContainSubstring("| File Storage Management | attach storage, detach storage | HTTP 401 access_denied before product assertions | 8 |"))
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
@@ -790,6 +796,14 @@ var _ = Describe("Test Results Report", func() {
 
 			Expect(analysis.StepSummary).To(Equal("## Test Failure Analysis\nbody"))
 			Expect(analysis.SlackSummary).To(Equal("short slack summary"))
+		})
+
+		It("should parse failed-test likely reasons from the middle JSON section", func() {
+			analysis := parseAIAnalysis("## Test Failure Analysis\nbody\n" + aiSlackDelimiter + "\n{\"failed_tests\":[{\"index\":0,\"likely_reason\":\"Instance health failed after provisioning.\"}]}\n" + aiSlackDelimiter + "\n- *Action:* rerun")
+
+			Expect(analysis.StepSummary).To(Equal("## Test Failure Analysis\nbody"))
+			Expect(analysis.FailureReasons).To(HaveKeyWithValue(0, "Instance health failed after provisioning."))
+			Expect(analysis.SlackSummary).To(Equal("- *Action:* rerun"))
 		})
 
 		It("should ignore old or embedded delimiter text unless the configured delimiter is on its own line", func() {

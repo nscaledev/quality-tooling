@@ -496,9 +496,10 @@ func TestBuildSlackPayloadIncludesCompactFailureDetailsWithAIAnalysis(t *testing
 	}
 
 	payload := buildSlackPayload(analysis, SlackOptions{
-		Title:       "Region API Test Results",
-		Environment: "dev",
-		AIAnalysis:  "Auth/config issue: 23 failures and 37 skips appear blocked by 401 responses.",
+		Title:          "Region API Test Results",
+		Environment:    "dev",
+		AIAnalysis:     "Auth/config issue: 23 failures and 37 skips appear blocked by 401 responses.",
+		FailureReasons: map[int]string{0: "The request was rejected before product logic, so the API token is likely expired or invalid."},
 	})
 
 	rendered := slackPayloadText(payload)
@@ -515,7 +516,8 @@ func TestBuildSlackPayloadIncludesCompactFailureDetailsWithAIAnalysis(t *testing
 		"Failed",
 		"*Failed Tests (first 1 of 1):*",
 		"- *Flavor Discovery:* should return all available flavors (`regions_test.go:139`)",
-		"_Reason:_ status code 401: token is invalid or has expired",
+		"_Error:_ status code 401: token is invalid or has expired",
+		"_Likely reason:_ The request was rejected before product logic, so the API token is likely expired or invalid.",
 		"Failure Analysis",
 		"Auth/config issue",
 	} {
@@ -541,16 +543,18 @@ func TestBuildSlackPayloadCompactFailureDetailsDoNotInlineCapturedOutput(t *test
 	}
 
 	payload := buildSlackPayload(analysis, SlackOptions{
-		Title:       "Compute API Test Results",
-		Environment: "dev",
-		AIAnalysis:  "Instance creation failed after provisioning.",
+		Title:          "Compute API Test Results",
+		Environment:    "dev",
+		AIAnalysis:     "Instance creation failed after provisioning.",
+		FailureReasons: map[int]string{0: "The instance reached network setup but failed health, so the likely issue is provider-side provisioning or boot health."},
 	})
 
 	rendered := slackPayloadText(payload)
 	for _, expected := range []string{
 		"*Failed Tests (first 1 of 1):*",
 		"- *Instance Operations:* from a snapshot image > should launch an instance successfully (`fixtures.go:188`)",
-		"_Reason:_ See GitHub build summary for captured output.",
+		"_Error:_ See GitHub build summary for captured output.",
+		"_Likely reason:_ The instance reached network setup but failed health, so the likely issue is provider-side provisioning or boot health.",
 	} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("payload missing %q:\n%s", expected, rendered)
@@ -629,6 +633,9 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	prompt := claudePrompt()
 	for _, expected := range []string{
 		"4-6 high-signal Slack mrkdwn bullet lines",
+		"Output exactly three sections",
+		"Section 2: JSON likely reasons for the compact Slack failed-test list",
+		`Use {"failed_tests":[]} when there are no failed tests`,
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed",
 		`add a "### Representative Failed Tests" table capped at 10 rows`,
 		"group tests with the same failure reason into one row",

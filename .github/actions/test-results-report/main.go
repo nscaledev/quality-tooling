@@ -66,18 +66,21 @@ func run(ctx context.Context, config Config) error {
 	slackSent := false
 	if config.SendSlack {
 		slackSummary := ""
+		var failureReasons map[int]string
 		if aiAnalysis != nil {
 			slackSummary = aiAnalysis.SlackSummary
+			failureReasons = aiAnalysis.FailureReasons
 		}
 		payload := buildSlackPayload(analysis, SlackOptions{
-			Title:       config.Title,
-			Environment: config.Environment,
-			Branch:      config.Branch,
-			Actor:       config.Actor,
-			WorkflowURL: config.WorkflowURL,
-			ReportURL:   config.ReportURL,
-			AIAnalysis:  slackSummary,
-			MaxFailures: config.MaxFailures,
+			Title:          config.Title,
+			Environment:    config.Environment,
+			Branch:         config.Branch,
+			Actor:          config.Actor,
+			WorkflowURL:    config.WorkflowURL,
+			ReportURL:      config.ReportURL,
+			AIAnalysis:     slackSummary,
+			FailureReasons: failureReasons,
+			MaxFailures:    config.MaxFailures,
 		})
 		if err := sendSlack(ctx, config, payload); err != nil {
 			if config.FailOnSlackError {
