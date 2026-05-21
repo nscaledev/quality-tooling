@@ -514,7 +514,7 @@ func TestBuildSlackPayloadIncludesCompactFailureDetailsWithAIAnalysis(t *testing
 		"Region API Test Results (DEV)",
 		"Failed",
 		"*Failed Tests (first 1 of 1):*",
-		"- *Flavor Discovery:* Flavor Discovery > should return all available flavors (`regions_test.go:139`)",
+		"- *Flavor Discovery:* should return all available flavors (`regions_test.go:139`)",
 		"_Reason:_ status code 401: token is invalid or has expired",
 		"Failure Analysis",
 		"Auth/config issue",
@@ -522,6 +522,42 @@ func TestBuildSlackPayloadIncludesCompactFailureDetailsWithAIAnalysis(t *testing
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("payload missing %q:\n%s", expected, rendered)
 		}
+	}
+}
+
+func TestBuildSlackPayloadCompactFailureDetailsDoNotInlineCapturedOutput(t *testing.T) {
+	t.Parallel()
+
+	analysis := Analysis{
+		Current: TestRun{Name: "Compute API Test Suites"},
+		Stats:   Stats{Total: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:   "Instance Operations > from a snapshot image > should launch an instance successfully",
+			Suite:  "Instance Operations",
+			File:   "/home/runner/work/uni-compute/uni-compute/test/api/suites/fixtures.go",
+			Line:   188,
+			Output: strings.Repeat("Created instance with ID: aab82e11-c388-473e-bfb6-d901ce57d78d ", 20),
+		}},
+	}
+
+	payload := buildSlackPayload(analysis, SlackOptions{
+		Title:       "Compute API Test Results",
+		Environment: "dev",
+		AIAnalysis:  "Instance creation failed after provisioning.",
+	})
+
+	rendered := slackPayloadText(payload)
+	for _, expected := range []string{
+		"*Failed Tests (first 1 of 1):*",
+		"- *Instance Operations:* from a snapshot image > should launch an instance successfully (`fixtures.go:188`)",
+		"_Reason:_ See GitHub build summary for captured output.",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("payload missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Created instance with ID") {
+		t.Fatalf("payload should not inline captured output:\n%s", rendered)
 	}
 }
 

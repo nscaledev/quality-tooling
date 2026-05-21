@@ -216,7 +216,7 @@ func formatSlackFailure(test TestCase) string {
 
 func formatSlackFailureCompact(test TestCase) string {
 	var sb strings.Builder
-	name := firstNonEmpty(test.Name, test.ID, "Unnamed test")
+	name := formatSlackFailureName(test)
 	if test.Suite != "" {
 		sb.WriteString(fmt.Sprintf("- *%s:* %s", test.Suite, name))
 	} else {
@@ -225,10 +225,26 @@ func formatSlackFailureCompact(test TestCase) string {
 	if location := formatSlackLocation(test); location != "" {
 		sb.WriteString(fmt.Sprintf(" (`%s`)", location))
 	}
-	if reason := firstNonEmpty(test.Message, test.Output, test.RawState); reason != "" {
+	if reason := firstNonEmpty(test.Message, test.RawState); reason != "" {
 		sb.WriteString(fmt.Sprintf("\n  _Reason:_ %s", truncate(cleanOneLine(reason), 220)))
+	} else if test.Output != "" {
+		sb.WriteString("\n  _Reason:_ See GitHub build summary for captured output.")
 	}
 	return sb.String()
+}
+
+func formatSlackFailureName(test TestCase) string {
+	name := firstNonEmpty(test.Name, test.ID, "Unnamed test")
+	if test.Suite == "" {
+		return name
+	}
+	for _, separator := range []string{" > ", " / ", ": "} {
+		prefix := test.Suite + separator
+		if strings.HasPrefix(name, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(name, prefix))
+		}
+	}
+	return name
 }
 
 func formatSlackLocation(test TestCase) string {
