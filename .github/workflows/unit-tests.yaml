@@ -1,0 +1,34 @@
+name: Unit Tests
+
+on:
+  pull_request:
+    paths:
+      - '.github/actions/**'
+      - '.github/workflows/unit-tests.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/actions/**'
+      - '.github/workflows/unit-tests.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  slack-test-notifications:
+    name: slack-test-notifications
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .github/actions/slack-test-notifications
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: .github/actions/slack-test-notifications/go.mod
+      - name: Run tests
+        run: go test ./...
+
