@@ -64,7 +64,9 @@ Section 1: Markdown for the GitHub step summary.
 - Start with '## Test Failure Analysis'.
 - Keep it concise: one compact pattern table plus up to 4 bullets.
 - Group failures and skips by likely area or pattern, not by individual test.
-- Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed.
+- Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
+- Use skipped for patterns where all affected tests are skipped, including known-bug, intentional, disabled, pending, or sentinel skips.
+- Use test/false failure only for failed tests caused by test code, invalid assertions, sentinel failures, or false failures; do not use it for skipped tests.
 - Use unknown/mixed when there is not enough evidence to choose a category confidently.
 - Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
 - The pattern table must make clear what failed, why it failed, the likely reason, impact, and the next check.
@@ -92,13 +94,14 @@ Use this shape:
 Section 2: Plain text Slack summary.
 - 4-6 high-signal Slack mrkdwn bullet lines.
 - Do not use tables in the Slack summary; Slack should stay short bullet lines.
-- Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, unknown/mixed.
+- Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
 - Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
 - Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
 - Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
 - Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*' when it makes Slack easier to act on.
-- For intentional or sentinel test failures, use one short phrase that says it is temporary and should be removed or disabled before review; do not mention issue alerting unless it appears in the evidence.
+- For intentional or sentinel skipped tests, use the skipped category and one short phrase that says when the skip should be removed or re-enabled; do not mention issue alerting unless it appears in the evidence.
+- For intentional or sentinel failed tests, use one short phrase that says it is temporary and should be removed or disabled before review; do not mention issue alerting unless it appears in the evidence.
 - Do not list every failed or skipped test.
 - Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
 - End with exactly one '- *Action:*' bullet.
@@ -109,6 +112,7 @@ Use this shape:
 - *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
 - *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.
 - *Validation paths* (test/false failure): 3 negative-path tests are likely side effects of the same 401 auth failure.
+- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
 - *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 

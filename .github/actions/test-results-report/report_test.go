@@ -592,7 +592,9 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	prompt := claudePrompt()
 	for _, expected := range []string{
 		"4-6 high-signal Slack mrkdwn bullet lines",
-		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, unknown/mixed",
+		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed",
+		"Use skipped for patterns where all affected tests are skipped",
+		"Use test/false failure only for failed tests",
 		`add a "### Representative Failed Tests" table capped at 10 rows`,
 		"group tests with the same failure reason into one row",
 		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
@@ -603,7 +605,9 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Include only the evidence needed to justify the category",
 		"avoid selector names, file paths, and retry details",
 		"Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*'",
-		"For intentional or sentinel test failures",
+		"For intentional or sentinel skipped tests",
+		"re-enabled",
+		"For intentional or sentinel failed tests",
 		"removed or disabled before review",
 		"Do not list every failed or skipped test",
 		"End with exactly one '- *Action:*' bullet",
@@ -612,6 +616,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"- *Auth / all suites* (infra/external):",
 		"| Suite / area | Representative tests | Failure reason | Count |",
 		"- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.",
+		"- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457",
 		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
 		aiSlackDelimiter,
 	} {
