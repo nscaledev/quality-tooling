@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -51,6 +52,8 @@ func renderStepSummary(analysis Analysis, options RenderOptions) string {
 		sb.WriteString("\n")
 	}
 
+	renderGrafanaLogSummary(&sb, analysis.GrafanaLogs)
+
 	if !options.OmitTestDetails {
 		renderTestTable(&sb, "Failed Tests", analysis.Failures, options.MaxFailures)
 		if options.IncludeSkips {
@@ -98,6 +101,62 @@ func renderTestTable(sb *strings.Builder, title string, tests []TestCase, limit 
 		))
 	}
 	sb.WriteString("\n")
+}
+
+func renderGrafanaLogSummary(sb *strings.Builder, enrichment *GrafanaLogEnrichment) {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return
+	}
+
+	sb.WriteString("### Grafana Log Context\n\n")
+	if enrichment.DatasourceUID != "" {
+		if enrichment.DatasourceName != "" {
+			sb.WriteString(fmt.Sprintf("Datasource: `%s` (`%s`)\n\n", escapeMarkdown(enrichment.DatasourceName), escapeMarkdown(enrichment.DatasourceUID)))
+		} else {
+			sb.WriteString(fmt.Sprintf("Datasource: `%s`\n\n", escapeMarkdown(enrichment.DatasourceUID)))
+		}
+	}
+	if enrichment.StartRFC3339 != "" || enrichment.EndRFC3339 != "" {
+		sb.WriteString(fmt.Sprintf("Time range: `%s` to `%s`\n\n", escapeMarkdown(enrichment.StartRFC3339), escapeMarkdown(enrichment.EndRFC3339)))
+	}
+
+	for _, context := range enrichment.Contexts {
+		title := context.QueryLabel
+		if title == "" {
+			title = "Query"
+		}
+		if context.Test != nil {
+			title = fmt.Sprintf("%s: %s", title, firstNonEmpty(context.Test.Name, context.Test.ID))
+		}
+		sb.WriteString(fmt.Sprintf("#### %s\n\n", escapeMarkdown(title)))
+		sb.WriteString(fmt.Sprintf("```logql\n%s\n```\n\n", context.Query))
+		if context.Error != "" {
+			sb.WriteString(fmt.Sprintf("> Grafana MCP query failed: `%s`\n\n", escapeMarkdown(truncate(cleanOneLine(context.Error), 300))))
+			continue
+		}
+		if len(context.Entries) == 0 {
+			sb.WriteString("_No matching log lines returned._\n\n")
+			continue
+		}
+
+		sb.WriteString("| Time | Labels | Message |\n")
+		sb.WriteString("| --- | --- | --- |\n")
+		for i, entry := range context.Entries {
+			if i >= 5 {
+				sb.WriteString(fmt.Sprintf("| _...and %d more_ | | |\n", len(context.Entries)-i))
+				break
+			}
+			sb.WriteString(fmt.Sprintf("| %s | %s | %s |\n",
+				tableCell(formatLogTimestamp(entry.Timestamp)),
+				tableCell(formatLogLabels(entry.Labels)),
+				tableCell(truncate(cleanOneLine(entry.Line), 300)),
+			))
+		}
+		if context.Truncated {
+			sb.WriteString("| _Results truncated by MCP limit_ | | |\n")
+		}
+		sb.WriteString("\n")
+	}
 }
 
 func normalizeRenderOptions(options RenderOptions) RenderOptions {
@@ -173,4 +232,40 @@ func truncate(value string, limit int) string {
 
 func escapeMarkdown(value string) string {
 	return strings.ReplaceAll(value, "`", "\\`")
+}
+
+func formatLogTimestamp(value string) string {
+	if value == "" {
+		return "-"
+	}
+	if nanos, err := time.ParseDuration(value + "ns"); err == nil {
+		return time.Unix(0, nanos.Nanoseconds()).UTC().Format(time.RFC3339)
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.UTC().Format(time.RFC3339)
+	}
+	return value
+}
+
+func formatLogLabels(labels map[string]string) string {
+	if len(labels) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var parts []string
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", key, labels[key]))
+		if len(parts) >= 4 {
+			break
+		}
+	}
+	if len(keys) > len(parts) {
+		parts = append(parts, fmt.Sprintf("+%d", len(keys)-len(parts)))
+	}
+	return strings.Join(parts, " ")
 }

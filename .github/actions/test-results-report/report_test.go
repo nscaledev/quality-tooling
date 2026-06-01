@@ -584,6 +584,12 @@ func TestConfigDefaults(t *testing.T) {
 	if config.SendSlack {
 		t.Fatal("send slack should default false when no credentials are configured")
 	}
+	if config.EnableGrafanaLogs {
+		t.Fatal("grafana log enrichment should default false")
+	}
+	if config.GrafanaLogLookback != "1h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 3 {
+		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures)
+	}
 }
 
 func TestClaudePromptRequestsPatternSummary(t *testing.T) {
@@ -595,6 +601,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed",
 		"Use skipped for patterns where all affected tests are skipped",
 		"Use test/false failure only for failed tests",
+		"If Grafana log context is present, use it as supporting evidence",
 		`add a "### Representative Failed Tests" table capped at 10 rows`,
 		"group tests with the same failure reason into one row",
 		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
@@ -626,6 +633,50 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	}
 	if strings.Contains(prompt, "- *Details:* Test-level failure reasons are available in the GitHub build summary.") {
 		t.Fatalf("prompt should not include a separate Details bullet:\n%s", prompt)
+	}
+}
+
+func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
+	t.Parallel()
+
+	input := renderAIInputWithOptions(Analysis{
+		Current: TestRun{Name: "API Tests"},
+		Stats:   Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:    "creates instance",
+			Message: "timeout",
+		}},
+		GrafanaLogs: &GrafanaLogEnrichment{
+			DatasourceUID:  "loki",
+			DatasourceName: "Loki",
+			StartRFC3339:   "2026-06-01T13:00:00Z",
+			EndRFC3339:     "2026-06-01T14:00:00Z",
+			Contexts: []GrafanaLogContext{{
+				Query:     `{namespace="unikorn-region"} |= "instance"`,
+				LineCount: 1,
+				Entries: []GrafanaLogEntry{{
+					Timestamp: "1780322400000000000",
+					Line:      "controller failed to create instance",
+					Labels: map[string]string{
+						"namespace": "unikorn-region",
+						"pod":       "region-api-123",
+					},
+				}},
+			}},
+		},
+	}, AIInputOptions{})
+
+	for _, expected := range []string{
+		"Grafana log context queried via mcp-grafana:",
+		"Datasource UID: loki",
+		`Query: {namespace="unikorn-region"} |= "instance"`,
+		"controller failed to create instance",
+		"namespace=unikorn-region",
+		"Failed tests:",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("AI input missing %q:\n%s", expected, input)
+		}
 	}
 }
 

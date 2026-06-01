@@ -69,6 +69,7 @@ Section 1: Markdown for the GitHub step summary.
 - Use test/false failure only for failed tests caused by test code, invalid assertions, sentinel failures, or false failures; do not use it for skipped tests.
 - Use unknown/mixed when there is not enough evidence to choose a category confidently.
 - Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
+- If Grafana log context is present, use it as supporting evidence for likely reasons and next checks, but do not overstate certainty when logs are empty or only loosely related.
 - The pattern table must make clear what failed, why it failed, the likely reason, impact, and the next check.
 - When test-level detail is useful, add a "### Representative Failed Tests" table capped at 10 rows.
 - In the representative tests table, group tests with the same failure reason into one row instead of listing duplicate failures separately.
@@ -124,6 +125,8 @@ func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string 
 	if analysis.Compare != nil {
 		renderAIComparison(&sb, analysis.Compare, options)
 	}
+
+	renderAIGrafanaLogs(&sb, analysis.GrafanaLogs)
 
 	if len(analysis.Failures) > 0 {
 		renderAITestListHeader(&sb, "Failed tests", len(analysis.Failures), options.MaxFailures)
@@ -191,6 +194,53 @@ func renderAIComparison(sb *strings.Builder, comparison *Comparison, options AII
 	renderAIComparisonGroup(sb, "Recurring skipped tests", comparison.RecurringSkips, options.MaxSkips)
 	renderAIComparisonGroup(sb, "Resolved skipped tests", comparison.ResolvedSkips, options.MaxSkips)
 	sb.WriteString("\n")
+}
+
+func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return
+	}
+
+	sb.WriteString("Grafana log context queried via mcp-grafana:\n")
+	if enrichment.DatasourceUID != "" {
+		sb.WriteString(fmt.Sprintf("Datasource UID: %s\n", enrichment.DatasourceUID))
+	}
+	if enrichment.DatasourceName != "" {
+		sb.WriteString(fmt.Sprintf("Datasource name: %s\n", enrichment.DatasourceName))
+	}
+	if enrichment.StartRFC3339 != "" || enrichment.EndRFC3339 != "" {
+		sb.WriteString(fmt.Sprintf("Time range: %s to %s\n", enrichment.StartRFC3339, enrichment.EndRFC3339))
+	}
+	for _, context := range enrichment.Contexts {
+		sb.WriteString(fmt.Sprintf("Query: %s\n", context.Query))
+		if context.Test != nil {
+			sb.WriteString(fmt.Sprintf("Related test: %s", firstNonEmpty(context.Test.Name, context.Test.ID)))
+			if context.Test.Suite != "" {
+				sb.WriteString(fmt.Sprintf(" [%s]", context.Test.Suite))
+			}
+			sb.WriteString("\n")
+		}
+		if context.Error != "" {
+			sb.WriteString(fmt.Sprintf("Query error: %s\n\n", truncate(cleanOneLine(context.Error), 1000)))
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("Lines returned: %d\n", context.LineCount))
+		for i, entry := range context.Entries {
+			if i >= 5 {
+				sb.WriteString(fmt.Sprintf("- %d additional log lines omitted from AI input.\n", len(context.Entries)-i))
+				break
+			}
+			sb.WriteString(fmt.Sprintf("- [%s] %s %s\n",
+				formatLogTimestamp(entry.Timestamp),
+				formatLogLabels(entry.Labels),
+				truncate(cleanOneLine(entry.Line), 800),
+			))
+		}
+		if context.Truncated {
+			sb.WriteString("- Results were truncated by the MCP limit.\n")
+		}
+		sb.WriteString("\n")
+	}
 }
 
 func renderAIComparisonGroup(sb *strings.Builder, title string, tests []TestCase, limit int) {

@@ -39,12 +39,13 @@ type Stats struct {
 }
 
 type Analysis struct {
-	Current  TestRun
-	Previous *TestRun
-	Stats    Stats
-	Failures []TestCase
-	Skipped  []TestCase
-	Compare  *Comparison
+	Current     TestRun
+	Previous    *TestRun
+	Stats       Stats
+	Failures    []TestCase
+	Skipped     []TestCase
+	Compare     *Comparison
+	GrafanaLogs *GrafanaLogEnrichment
 }
 
 type Comparison struct {
@@ -58,4 +59,30 @@ type Comparison struct {
 	FailedDelta       int
 	SkippedDelta      int
 	DurationDelta     time.Duration
+}
+
+type GrafanaLogEnrichment struct {
+	DatasourceUID  string
+	DatasourceName string
+	StartRFC3339   string
+	EndRFC3339     string
+	Contexts       []GrafanaLogContext
+}
+
+type GrafanaLogContext struct {
+	Test       *TestCase
+	Query      string
+	Entries    []GrafanaLogEntry
+	LineCount  int
+	Truncated  bool
+	Error      string
+	QueryLabel string
+}
+
+type GrafanaLogEntry struct {
+	Timestamp          string
+	Line               string
+	Labels             map[string]string
+	StructuredMetadata map[string]string
+	Parsed             map[string]string
 }

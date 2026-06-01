@@ -481,6 +481,14 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring(`echo "::add-mask::${INPUT_CLAUDE_TOKEN}"`))
 			})
 
+			It("should use the Teleport application tunnel for optional Grafana MCP enrichment", func() {
+				Expect(action).To(ContainSubstring("enable-grafana-log-enrichment"))
+				Expect(action).To(ContainSubstring("teleport-actions/application-tunnel@v1"))
+				Expect(action).To(ContainSubstring("token: ${{ inputs.grafana-teleport-token }}"))
+				Expect(action).To(ContainSubstring("mcp-grafana"))
+				Expect(action).To(ContainSubstring("GRAFANA_MCP_ENDPOINT=http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp"))
+			})
+
 			It("should cache Go modules for the action dependencies", func() {
 				Expect(action).To(ContainSubstring("cache: true"))
 				Expect(action).To(ContainSubstring("cache-dependency-path: ${{ github.action_path }}/go.sum"))

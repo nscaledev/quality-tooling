@@ -39,6 +39,13 @@ func run(ctx context.Context, config Config) error {
 
 	analysis := analyze(current, previous)
 
+	grafanaLogs, err := runGrafanaLogEnrichment(ctx, config, analysis)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Grafana log enrichment skipped: %v\n", err)
+	} else if grafanaLogs != nil {
+		analysis.GrafanaLogs = grafanaLogs
+	}
+
 	aiAnalysis, err := runAIAnalysis(ctx, config, analysis)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: AI failure analysis skipped: %v\n", err)
