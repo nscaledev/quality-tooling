@@ -453,6 +453,19 @@ func TestGrafanaExploreURL(t *testing.T) {
 	}
 }
 
+func TestSafeURLForLogRedactsSensitiveURLParts(t *testing.T) {
+	t.Parallel()
+
+	redacted := safeURLForLog("https://user:secret@grafana.example.com/mcp?token=abc#fragment")
+
+	if strings.Contains(redacted, "secret") || strings.Contains(redacted, "token=abc") || strings.Contains(redacted, "fragment") {
+		t.Fatalf("URL was not redacted for logs: %s", redacted)
+	}
+	if !strings.Contains(redacted, "grafana.example.com/mcp") || !strings.Contains(redacted, "%3Credacted%3E") {
+		t.Fatalf("URL lost useful endpoint context: %s", redacted)
+	}
+}
+
 func TestRunGrafanaLogEnrichmentSkipsMCPWhenAIPlansNoQueries(t *testing.T) {
 	previousPlanner := runGrafanaLogQueryPlanning
 	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {

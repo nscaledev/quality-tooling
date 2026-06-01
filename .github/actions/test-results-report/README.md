@@ -125,6 +125,11 @@ Grafana decision logic:
 | Loki returns matching lines | Add query, reason, lookup metadata, labels, and log lines to the GitHub summary and final Claude input |
 | Loki returns no matching lines | Show the query and note that no matching log lines were returned |
 
+When Grafana enrichment is enabled, the action writes two debug groups to the GitHub job log:
+
+- `Grafana MCP enrichment preflight`: shows whether the token, app, direct URL, existing MCP endpoint, datasource selector, manual queries, lookback, limit, max failures, and concurrency were configured. It also states the selected setup path, such as using an existing endpoint, opening the Teleport app tunnel, or skipping MCP startup because required inputs are missing.
+- `Grafana MCP log enrichment`: shows whether Claude query planning ran, how many backend-related queries were planned, the exact failure error and search terms used for each planned query, the selected Loki datasource, the query time range, the number of parallel query jobs, and each query's line count, truncation flag, first returned log line, or MCP/Loki error.
+
 Callers that let this action open the Teleport tunnel must grant `id-token: write`:
 
 ```yaml

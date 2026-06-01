@@ -18,6 +18,10 @@ import (
 
 const mcpProtocolVersion = "2024-11-05"
 
+func logGrafana(format string, args ...any) {
+	fmt.Printf("Grafana MCP: "+format+"\n", args...)
+}
+
 type mcpHTTPClient struct {
 	endpoint   string
 	httpClient *http.Client
@@ -93,7 +97,23 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 	if !config.EnableGrafanaLogs {
 		return nil, nil
 	}
+
+	fmt.Println("::group::Grafana MCP log enrichment")
+	defer fmt.Println("::endgroup::")
+
+	logGrafana("enabled; failures=%d ai_analysis=%t claude_token_configured=%t endpoint_configured=%t manual_logql=%t manual_template=%t max_failures=%d concurrency=%d lookback=%s",
+		len(analysis.Failures),
+		config.EnableAIAnalysis,
+		config.ClaudeToken != "",
+		config.GrafanaMCPEndpoint != "",
+		strings.TrimSpace(config.GrafanaLogQL) != "",
+		strings.TrimSpace(config.GrafanaLogQLTemplate) != "",
+		normalizedGrafanaFailureLimit(config.GrafanaLogMaxFailures),
+		config.GrafanaLogConcurrency,
+		firstNonEmpty(config.GrafanaLogLookback, "1h"),
+	)
 	if len(analysis.Failures) == 0 {
+		logGrafana("skipping lookup because there are no failed tests")
 		return nil, nil
 	}
 
@@ -101,6 +121,7 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 	var plannedQueries []GrafanaLogPlannedQuery
 	planningAttempted := config.EnableAIAnalysis && config.ClaudeToken != ""
 	if planningAttempted {
+		logGrafana("asking Claude to plan backend Loki queries for %d candidate failure(s)", len(selectGrafanaFailureCandidates(analysis, config.GrafanaLogMaxFailures)))
 		var err error
 		plannedQueries, err = runGrafanaLogQueryPlanning(ctx, config, analysis)
 		if err != nil {
@@ -109,35 +130,48 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 			}
 			fmt.Fprintf(os.Stderr, "Warning: AI Grafana log query planning failed; using configured LogQL fallback: %v\n", err)
 		}
+		originalPlannedCount := len(plannedQueries)
 		plannedQueries = limitGrafanaPlannedQueries(plannedQueries, config.GrafanaLogMaxFailures)
+		logGrafana("Claude planned %d backend query/queries; using %d after limit", originalPlannedCount, len(plannedQueries))
+		logGrafanaPlannedQueries(plannedQueries)
+	} else if config.EnableAIAnalysis {
+		logGrafana("AI query planning skipped because claude-token/CLAUDE_CODE_OAUTH_TOKEN is not configured")
+	} else {
+		logGrafana("AI query planning skipped because enable-ai-analysis is false")
 	}
 	if len(plannedQueries) == 0 && !hasConfiguredQueries {
 		if planningAttempted {
+			logGrafana("Claude did not select any backend-related failures; skipping MCP lookup")
 			return nil, nil
 		}
 		return nil, fmt.Errorf("grafana log enrichment is enabled but neither AI query planning nor grafana-logql/grafana-logql-template is available")
 	}
 	if config.GrafanaMCPEndpoint == "" {
+		logGrafana("cannot run MCP lookup because no grafana-mcp-endpoint/GRAFANA_MCP_ENDPOINT is available")
 		return nil, fmt.Errorf("grafana log enrichment has backend log queries but no grafana-mcp-endpoint/GRAFANA_MCP_ENDPOINT is available")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
+	logGrafana("connecting to mcp-grafana endpoint %s", safeURLForLog(config.GrafanaMCPEndpoint))
 	client := newMCPHTTPClient(config.GrafanaMCPEndpoint)
 	if err := client.initialize(ctx); err != nil {
 		return nil, err
 	}
+	logGrafana("MCP initialize completed")
 
 	uid, name, err := resolveLokiDatasource(ctx, client, config)
 	if err != nil {
 		return nil, err
 	}
+	logGrafana("using Loki datasource uid=%s name=%s", firstNonEmpty(uid, "<empty>"), firstNonEmpty(name, "<empty>"))
 
 	start, end, err := grafanaLogTimeRange(config, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
+	logGrafana("query time range %s to %s", start, end)
 
 	enrichment := &GrafanaLogEnrichment{
 		DatasourceUID:  uid,
@@ -191,7 +225,9 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 		}
 	}
 
+	logGrafana("prepared %d Loki query job(s)", len(jobs))
 	enrichment.Contexts = runGrafanaLogQueryJobs(ctx, client, uid, start, end, config, jobs)
+	logGrafana("completed Grafana MCP enrichment with %d context result(s)", len(enrichment.Contexts))
 	return enrichment, nil
 }
 
@@ -202,6 +238,42 @@ func newMCPHTTPClient(endpoint string) *mcpHTTPClient {
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+func logGrafanaPlannedQueries(queries []GrafanaLogPlannedQuery) {
+	for index, query := range queries {
+		logGrafana("planned query %d/%d: ref=%s test=%s backend=%s confidence=%s reason=%s logql=%s",
+			index+1,
+			len(queries),
+			firstNonEmpty(query.FailureRef, "<empty>"),
+			truncate(cleanOneLine(firstNonEmpty(query.TestName, "<empty>")), 120),
+			firstNonEmpty(query.BackendArea, "unknown"),
+			firstNonEmpty(query.Confidence, "unknown"),
+			truncate(cleanOneLine(query.Reason), 240),
+			truncate(cleanOneLine(query.LogQL), 500),
+		)
+		if query.ExpectedError != "" {
+			logGrafana("planned query %d exact failure error: %s", index+1, truncate(cleanOneLine(query.ExpectedError), 300))
+		}
+		if len(query.SearchTerms) > 0 {
+			logGrafana("planned query %d search terms: %s", index+1, strings.Join(query.SearchTerms, ", "))
+		}
+	}
+}
+
+func safeURLForLog(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "<invalid-url>"
+	}
+	if parsed.User != nil {
+		parsed.User = url.User("<redacted>")
+	}
+	if parsed.RawQuery != "" {
+		parsed.RawQuery = "<redacted>"
+	}
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func (client *mcpHTTPClient) initialize(ctx context.Context) error {
@@ -420,9 +492,11 @@ func extractJSONText(text string) string {
 
 func resolveLokiDatasource(ctx context.Context, client *mcpHTTPClient, config Config) (string, string, error) {
 	if config.GrafanaLokiUID != "" {
+		logGrafana("using caller-provided Loki datasource uid=%s name=%s", config.GrafanaLokiUID, firstNonEmpty(config.GrafanaLokiName, "<empty>"))
 		return config.GrafanaLokiUID, config.GrafanaLokiName, nil
 	}
 
+	logGrafana("discovering Loki datasource via MCP list_datasources name_filter=%s", firstNonEmpty(config.GrafanaLokiName, "<none>"))
 	raw, err := client.callTool(ctx, "list_datasources", map[string]any{
 		"type":  "loki",
 		"limit": 100,
@@ -435,6 +509,7 @@ func resolveLokiDatasource(ctx context.Context, client *mcpHTTPClient, config Co
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return "", "", fmt.Errorf("decode list_datasources result: %w: %s", err, string(raw))
 	}
+	logGrafana("MCP list_datasources returned %d Loki datasource(s)", len(result.Datasources))
 
 	var fallbackUID, fallbackName string
 	for _, datasource := range result.Datasources {
@@ -460,6 +535,7 @@ func runGrafanaLogQueryJobs(ctx context.Context, client *mcpHTTPClient, datasour
 
 	contexts := make([]GrafanaLogContext, len(jobs))
 	concurrency := normalizedGrafanaLogConcurrency(config.GrafanaLogConcurrency, len(jobs))
+	logGrafana("executing %d Loki query job(s) with concurrency=%d", len(jobs), concurrency)
 	semaphore := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
@@ -474,14 +550,47 @@ func runGrafanaLogQueryJobs(ctx context.Context, client *mcpHTTPClient, datasour
 				<-semaphore
 			}()
 
+			logGrafanaQueryStart(index, len(jobs), job)
 			context := queryGrafanaLogs(ctx, client, datasourceUID, job.LogQL, start, end, config.GrafanaLogLimit, job.Test, job.Label, job.Reason)
 			attachGrafanaLogQueryMetadata(&context, job, grafanaExploreURL(config.GrafanaURL, datasourceUID, job.LogQL, start, end))
+			logGrafanaQueryFinish(index, len(jobs), context)
 			contexts[index] = context
 		}()
 	}
 
 	wg.Wait()
 	return contexts
+}
+
+func logGrafanaQueryStart(index, total int, job grafanaLogQueryJob) {
+	logGrafana("query job %d/%d started: label=%s ref=%s test=%s backend=%s reason=%s logql=%s",
+		index+1,
+		total,
+		firstNonEmpty(job.Label, "<empty>"),
+		firstNonEmpty(job.FailureRef, "<none>"),
+		truncate(cleanOneLine(firstNonEmpty(job.TestName, "<empty>")), 120),
+		firstNonEmpty(job.BackendArea, "unknown"),
+		truncate(cleanOneLine(job.Reason), 240),
+		truncate(cleanOneLine(job.LogQL), 500),
+	)
+	if job.ExpectedError != "" {
+		logGrafana("query job %d exact failure error: %s", index+1, truncate(cleanOneLine(job.ExpectedError), 300))
+	}
+}
+
+func logGrafanaQueryFinish(index, total int, context GrafanaLogContext) {
+	if context.Error != "" {
+		logGrafana("query job %d/%d finished with error: %s", index+1, total, truncate(cleanOneLine(context.Error), 500))
+		return
+	}
+	logGrafana("query job %d/%d finished: lines=%d truncated=%t grafana_url=%t", index+1, total, context.LineCount, context.Truncated, context.GrafanaExploreURL != "")
+	if len(context.Entries) > 0 {
+		logGrafana("query job %d first log line: [%s] %s",
+			index+1,
+			formatLogTimestamp(context.Entries[0].Timestamp),
+			truncate(cleanOneLine(context.Entries[0].Line), 300),
+		)
+	}
 }
 
 func attachGrafanaLogQueryMetadata(context *GrafanaLogContext, job grafanaLogQueryJob, exploreURL string) {
