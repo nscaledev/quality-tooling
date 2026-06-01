@@ -36,6 +36,28 @@ func TestRenderGrafanaLogQLTemplate(t *testing.T) {
 	}
 }
 
+func TestLogKeywordRegexPrioritizesFailureIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	keywords := logKeywordRegex(TestCase{
+		Name:    "Instance Operations > When creating an instance > from a snapshot image > should launch an instance successfully",
+		Suite:   "Instance Operations",
+		File:    "test/api/suites/instance_operations_test.go",
+		Message: "Instance dd8a7359-33e4-4613-93fd-c8816e28bdbb entered error health status with imageID=374b2103-a183-4cb4-b740-126a873ab8a5",
+		Output:  "Taking snapshot of instance fbb6b2c4-6c44-4837-8b9f-3a43283e94b8",
+	})
+
+	for _, expected := range []string{
+		`dd8a7359-33e4-4613-93fd-c8816e28bdbb`,
+		`374b2103-a183-4cb4-b740-126a873ab8a5`,
+		`fbb6b2c4-6c44-4837-8b9f-3a43283e94b8`,
+	} {
+		if !strings.Contains(keywords, expected) {
+			t.Fatalf("keywords missing %q: %s", expected, keywords)
+		}
+	}
+}
+
 func TestRunGrafanaLogEnrichmentThroughMCP(t *testing.T) {
 	t.Parallel()
 

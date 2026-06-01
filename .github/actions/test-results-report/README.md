@@ -92,6 +92,8 @@ The `grafana-logql-template` runs once per representative failed test. It suppor
 - `{{environment}}`
 - `{{log_keywords_regex}}`
 
+`{{log_keywords_regex}}` prioritizes UUID and trace-like identifiers from the failure message and captured test output before adding lower-signal words from the test name, suite, and file path.
+
 You can also pass `grafana-logql` for one general query that runs once per report. If `grafana-loki-datasource-uid` is omitted, the reporter uses Grafana MCP to discover the default or first Loki datasource, optionally filtered by `grafana-loki-datasource-name`.
 
 ## Previous Result Comparison
