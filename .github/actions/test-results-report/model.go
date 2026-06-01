@@ -77,6 +77,7 @@ type GrafanaLogContext struct {
 	Truncated  bool
 	Error      string
 	QueryLabel string
+	Reason     string
 }
 
 type GrafanaLogEntry struct {

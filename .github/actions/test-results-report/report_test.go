@@ -636,6 +636,76 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	}
 }
 
+func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
+	t.Parallel()
+
+	prompt := grafanaLogQueryPlanningPrompt()
+	for _, expected := range []string{
+		"Return strict JSON only",
+		"Only create queries for failures that appear backend-related",
+		"Do not query for purely client-side assertion failures",
+		"Use the exact failure_ref values",
+		"do not assume a single backend component",
+		`return {"queries":[]}`,
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("planning prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
+func TestRenderGrafanaLogQueryPlanningInputIncludesFailureRefs(t *testing.T) {
+	t.Parallel()
+
+	input := renderGrafanaLogQueryPlanningInput(Analysis{
+		Current: TestRun{Name: "Console E2E"},
+		Stats:   Stats{Passed: 1, Failed: 2},
+		Failures: []TestCase{{
+			ID:      "file-upload",
+			Name:    "uploads file",
+			Suite:   "File Storage Management",
+			File:    "packages/e2e-console/src/spec/file-storage.spec.ts",
+			Message: "POST /api/storage returned 500 for claim-123",
+		}, {
+			ID:      "visual-only",
+			Name:    "button color",
+			Suite:   "Visual checks",
+			Message: "expected CSS color to match",
+		}},
+	}, Config{
+		Environment:           "dev",
+		GrafanaLogMaxFailures: 2,
+	})
+
+	for _, expected := range []string{
+		"Failure ref: f1",
+		"Test ID: file-upload",
+		"POST /api/storage returned 500 for claim-123",
+		"Failure ref: f2",
+		"Visual checks",
+		"Maximum queries allowed: 2",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("planning input missing %q:\n%s", expected, input)
+		}
+	}
+}
+
+func TestParseGrafanaLogQueryPlan(t *testing.T) {
+	t.Parallel()
+
+	queries, err := parseGrafanaLogQueryPlan("```json\n{\"queries\":[{\"failure_ref\":\" f1 \",\"logql\":\" {namespace=~\\\".+\\\"} |= \\\"claim-123\\\" \",\"reason\":\" storage backend error \"},{\"failure_ref\":\"f2\"}]}\n```")
+	if err != nil {
+		t.Fatalf("parseGrafanaLogQueryPlan returned error: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("queries = %+v", queries)
+	}
+	if queries[0].FailureRef != "f1" || !strings.Contains(queries[0].LogQL, "claim-123") || queries[0].Reason != "storage backend error" {
+		t.Fatalf("unexpected query: %+v", queries[0])
+	}
+}
+
 func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 	t.Parallel()
 
@@ -653,6 +723,7 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 			EndRFC3339:     "2026-06-01T14:00:00Z",
 			Contexts: []GrafanaLogContext{{
 				Query:     `{namespace="unikorn-region"} |= "instance"`,
+				Reason:    "Instance API returned a backend reconcile timeout.",
 				LineCount: 1,
 				Entries: []GrafanaLogEntry{{
 					Timestamp: "1780322400000000000",
@@ -670,6 +741,7 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 		"Grafana log context queried via mcp-grafana:",
 		"Datasource UID: loki",
 		`Query: {namespace="unikorn-region"} |= "instance"`,
+		"Query reason: Instance API returned a backend reconcile timeout.",
 		"controller failed to create instance",
 		"namespace=unikorn-region",
 		"Failed tests:",

@@ -153,6 +153,161 @@ func TestRunGrafanaLogEnrichmentThroughMCP(t *testing.T) {
 	}
 }
 
+func TestRunGrafanaLogEnrichmentUsesAIPlannedQueries(t *testing.T) {
+	previousPlanner := runGrafanaLogQueryPlanning
+	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
+		return []GrafanaLogPlannedQuery{
+			{
+				FailureRef: "unknown-failure",
+				LogQL:      `{namespace=~".+"} |~ "(?i)(unrelated|broad)"`,
+				Reason:     "This hallucinated failure ref should be ignored.",
+			},
+			{
+				FailureRef: "f1",
+				LogQL:      `{namespace=~".+"} |~ "(?i)(file-storage|claim-123)"`,
+				Reason:     "The UI upload flow failed after the backend returned a storage claim error.",
+			},
+		}, nil
+	}
+	defer func() {
+		runGrafanaLogQueryPlanning = previousPlanner
+	}()
+
+	var queryCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var rpc struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
+			t.Fatalf("decode rpc request: %v", err)
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Mcp-Session-Id", "test-session")
+
+		switch rpc.Method {
+		case "initialize":
+			writeMCPResponse(t, writer, rpc.ID, map[string]any{
+				"protocolVersion": mcpProtocolVersion,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "fake-grafana-mcp"},
+			})
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			var params struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			}
+			if err := json.Unmarshal(rpc.Params, &params); err != nil {
+				t.Fatalf("decode tool params: %v", err)
+			}
+			switch params.Name {
+			case "list_datasources":
+				writeMCPToolResponse(t, writer, rpc.ID, `{"datasources":[{"uid":"loki-dev","name":"Loki","type":"loki","isDefault":true}]}`)
+			case "query_loki_logs":
+				queryCount.Add(1)
+				var args map[string]any
+				if err := json.Unmarshal(params.Arguments, &args); err != nil {
+					t.Fatalf("decode query args: %v", err)
+				}
+				query := args["logql"].(string)
+				if !strings.Contains(query, "file-storage") || !strings.Contains(query, "claim-123") {
+					t.Fatalf("planned logql was not used: %s", query)
+				}
+				if strings.Contains(query, "unrelated") || strings.Contains(query, "broad") {
+					t.Fatalf("unknown failure ref query should not be executed: %s", query)
+				}
+				writeMCPToolResponse(t, writer, rpc.ID, `{"data":[{"timestamp":"1780322400000000000","line":"file storage claim claim-123 reconcile failed","labels":{"namespace":"file-storage"}}],"metadata":{"linesReturned":1,"resultsTruncated":false}}`)
+			default:
+				t.Fatalf("unexpected tool %s", params.Name)
+			}
+		default:
+			t.Fatalf("unexpected method %s", rpc.Method)
+		}
+	}))
+	defer server.Close()
+
+	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
+		EnableGrafanaLogs:     true,
+		EnableAIAnalysis:      true,
+		ClaudeToken:           "test-token",
+		GrafanaMCPEndpoint:    server.URL + "/mcp",
+		GrafanaLogStart:       "2026-06-01T13:00:00Z",
+		GrafanaLogEnd:         "2026-06-01T14:00:00Z",
+		GrafanaLogLimit:       5,
+		GrafanaLogMaxFailures: 2,
+	}, Analysis{
+		Failures: []TestCase{{
+			ID:      "file-upload",
+			Name:    "uploads file",
+			Suite:   "File Storage Management",
+			Message: "POST /api/storage returned 500 for claim-123",
+		}, {
+			ID:      "button-style",
+			Name:    "button uses the primary color",
+			Suite:   "Visual checks",
+			Message: "expected CSS color to match",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("runGrafanaLogEnrichment returned error: %v", err)
+	}
+	if queryCount.Load() != 1 {
+		t.Fatalf("expected one valid planned query_loki_logs call, got %d", queryCount.Load())
+	}
+	if enrichment == nil || len(enrichment.Contexts) != 1 {
+		t.Fatalf("unexpected enrichment: %+v", enrichment)
+	}
+	context := enrichment.Contexts[0]
+	if context.Test == nil || context.Test.Name != "uploads file" {
+		t.Fatalf("planned query was not attached to the related test: %+v", context.Test)
+	}
+	if context.QueryLabel != "AI-planned backend query" || !strings.Contains(context.Reason, "storage claim") {
+		t.Fatalf("unexpected planned query metadata: %+v", context)
+	}
+	if len(context.Entries) != 1 || !strings.Contains(context.Entries[0].Line, "claim-123") {
+		t.Fatalf("unexpected log entries: %+v", context.Entries)
+	}
+}
+
+func TestRunGrafanaLogEnrichmentSkipsMCPWhenAIPlansNoQueries(t *testing.T) {
+	previousPlanner := runGrafanaLogQueryPlanning
+	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
+		return nil, nil
+	}
+	defer func() {
+		runGrafanaLogQueryPlanning = previousPlanner
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		t.Fatalf("MCP should not be called when AI planning returns no queries; got %s", request.URL.Path)
+	}))
+	defer server.Close()
+
+	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
+		EnableGrafanaLogs:  true,
+		EnableAIAnalysis:   true,
+		ClaudeToken:        "test-token",
+		GrafanaMCPEndpoint: server.URL + "/mcp",
+	}, Analysis{
+		Failures: []TestCase{{
+			ID:      "visual-only",
+			Name:    "button uses the primary color",
+			Suite:   "Visual checks",
+			Message: "expected CSS color to match",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("runGrafanaLogEnrichment returned error: %v", err)
+	}
+	if enrichment != nil {
+		t.Fatalf("expected nil enrichment when no backend log queries are planned, got %+v", enrichment)
+	}
+}
+
 func writeMCPResponse(t *testing.T, writer http.ResponseWriter, id json.RawMessage, result any) {
 	t.Helper()
 	if err := json.NewEncoder(writer).Encode(map[string]any{

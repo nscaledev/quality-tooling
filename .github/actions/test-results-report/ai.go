@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,12 +16,24 @@ type AIAnalysis struct {
 	SlackSummary string
 }
 
+type GrafanaLogPlannedQuery struct {
+	FailureRef string `json:"failure_ref"`
+	LogQL      string `json:"logql"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+type grafanaLogQueryPlanResponse struct {
+	Queries []GrafanaLogPlannedQuery `json:"queries"`
+}
+
 type AIInputOptions struct {
 	MaxFailures int
 	MaxSkips    int
 }
 
 const aiSlackDelimiter = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
+
+var runGrafanaLogQueryPlanning = runClaudeGrafanaLogQueryPlanning
 
 func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*AIAnalysis, error) {
 	if !config.EnableAIAnalysis {
@@ -115,6 +128,137 @@ Use this shape:
 - *Validation paths* (test/false failure): 3 negative-path tests are likely side effects of the same 401 auth failure.
 - *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
 - *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
+}
+
+func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analysis Analysis) ([]GrafanaLogPlannedQuery, error) {
+	if !config.EnableAIAnalysis || config.ClaudeToken == "" {
+		return nil, nil
+	}
+	if len(analysis.Failures) == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", grafanaLogQueryPlanningPrompt())
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
+	cmd.Stdin = strings.NewReader(renderGrafanaLogQueryPlanningInput(analysis, config))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("run claude grafana log query planning: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	return parseGrafanaLogQueryPlan(stdout.String())
+}
+
+func grafanaLogQueryPlanningPrompt() string {
+	return `You are planning read-only Loki log queries for Grafana MCP based on parsed test failures.
+
+Return strict JSON only. Do not include markdown, prose, or code fences.
+
+Expected output:
+{"queries":[{"failure_ref":"f1","logql":"{namespace=~\".+\"} |~ \"(?i)(resource-id|api-error)\"","reason":"Backend API returned an error during the UI flow"}]}
+
+Rules:
+- Inspect the failed test names, suites, locations, error messages, captured output, environment, and previous-result comparison.
+- Only create queries for failures that appear backend-related or need backend evidence to confirm the likely cause.
+- Do not query for purely client-side assertion failures when there is no backend signal.
+- Use the exact failure_ref values from the input.
+- Prefer precise IDs, request IDs, UUIDs, resource names, status codes, API error strings, and backend component names found in the failure evidence.
+- For cross-component UI suites, do not assume a single backend component. Use a broad Kubernetes label selector such as {namespace=~".+"} unless the failure evidence clearly points to a narrower namespace or service.
+- Keep each LogQL query readable and bounded for the supplied time window. Do not request writes or mutations.
+- If no backend-related log lookup is justified, return {"queries":[]}.`
+}
+
+func renderGrafanaLogQueryPlanningInput(analysis Analysis, config Config) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Test run: %s\n", analysis.Current.Name))
+	sb.WriteString(fmt.Sprintf("Environment: %s\n", config.Environment))
+	sb.WriteString(fmt.Sprintf("Totals: %d passed, %d failed, %d skipped\n", analysis.Stats.Passed, analysis.Stats.Failed, analysis.Stats.Skipped))
+	sb.WriteString(fmt.Sprintf("Maximum queries allowed: %d\n\n", normalizedGrafanaFailureLimit(config.GrafanaLogMaxFailures)))
+
+	if analysis.Compare != nil {
+		sb.WriteString("Previous result comparison:\n")
+		sb.WriteString(fmt.Sprintf("New failures: %d\n", len(analysis.Compare.NewFailures)))
+		sb.WriteString(fmt.Sprintf("Recurring failures: %d\n", len(analysis.Compare.RecurringFailures)))
+		sb.WriteString(fmt.Sprintf("Resolved failures: %d\n", len(analysis.Compare.ResolvedFailures)))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Candidate failed tests for backend log lookup:\n")
+	for _, candidate := range selectGrafanaFailureCandidates(analysis, config.GrafanaLogMaxFailures) {
+		test := candidate.Test
+		sb.WriteString(fmt.Sprintf("Failure ref: %s\n", candidate.Ref))
+		if test.ID != "" {
+			sb.WriteString(fmt.Sprintf("Test ID: %s\n", test.ID))
+		}
+		sb.WriteString(fmt.Sprintf("Test: %s\n", test.Name))
+		if test.Suite != "" {
+			sb.WriteString(fmt.Sprintf("Suite: %s\n", test.Suite))
+		}
+		if location := formatLocation(test); location != "" {
+			sb.WriteString(fmt.Sprintf("Location: %s\n", location))
+		}
+		if test.Message != "" {
+			sb.WriteString(fmt.Sprintf("Error: %s\n", truncate(test.Message, 2000)))
+		}
+		if test.Output != "" {
+			sb.WriteString(fmt.Sprintf("Output: %s\n", truncate(test.Output, 2000)))
+		}
+		sb.WriteString(fmt.Sprintf("Failure keyword regex: %s\n", logKeywordRegex(test)))
+		sb.WriteString("\n")
+	}
+
+	if query := strings.TrimSpace(config.GrafanaLogQL); query != "" {
+		sb.WriteString("Caller-provided general LogQL fallback:\n")
+		sb.WriteString(query)
+		sb.WriteString("\n\n")
+	}
+	if template := strings.TrimSpace(config.GrafanaLogQLTemplate); template != "" {
+		sb.WriteString("Caller-provided per-failure LogQL template fallback:\n")
+		sb.WriteString(template)
+		sb.WriteString("\n\n")
+	}
+
+	return sb.String()
+}
+
+func parseGrafanaLogQueryPlan(output string) ([]GrafanaLogPlannedQuery, error) {
+	var response grafanaLogQueryPlanResponse
+	if err := json.Unmarshal([]byte(extractJSONObject(output)), &response); err != nil {
+		return nil, fmt.Errorf("decode grafana log query plan: %w", err)
+	}
+
+	var queries []GrafanaLogPlannedQuery
+	for _, query := range response.Queries {
+		query.FailureRef = strings.TrimSpace(query.FailureRef)
+		query.LogQL = strings.TrimSpace(query.LogQL)
+		query.Reason = strings.TrimSpace(query.Reason)
+		if query.FailureRef == "" || query.LogQL == "" {
+			continue
+		}
+		queries = append(queries, query)
+	}
+	return queries, nil
+}
+
+func extractJSONObject(output string) string {
+	trimmed := strings.TrimSpace(extractJSONText(output))
+	if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+		return trimmed
+	}
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start >= 0 && end > start {
+		return strings.TrimSpace(trimmed[start : end+1])
+	}
+	return trimmed
 }
 
 func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string {
@@ -213,6 +357,9 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 	}
 	for _, context := range enrichment.Contexts {
 		sb.WriteString(fmt.Sprintf("Query: %s\n", context.Query))
+		if context.Reason != "" {
+			sb.WriteString(fmt.Sprintf("Query reason: %s\n", truncate(cleanOneLine(context.Reason), 500)))
+		}
 		if context.Test != nil {
 			sb.WriteString(fmt.Sprintf("Related test: %s", firstNonEmpty(context.Test.Name, context.Test.ID)))
 			if context.Test.Suite != "" {

@@ -91,7 +91,7 @@ inputs:
     required: false
     default: ''
   enable-grafana-log-enrichment:
-    description: 'Fetch related Loki logs through Grafana MCP and include them in the report/AI analysis.'
+    description: 'Fetch related Loki logs through Grafana MCP. With AI analysis enabled, Claude first plans backend-related LogQL queries from parsed failures, then the fetched logs are included in the final report.'
     required: false
     default: 'false'
   grafana-service-account-token:
@@ -139,11 +139,11 @@ inputs:
     required: false
     default: ''
   grafana-logql:
-    description: 'Optional static LogQL query to run once for general failure context.'
+    description: 'Optional static LogQL query to run once for general failure context or manual fallback.'
     required: false
     default: ''
   grafana-logql-template:
-    description: 'Optional per-failed-test LogQL template. Supports {{test_name}}, {{test_suite}}, {{test_file}}, {{failure_message}}, {{environment}}, and {{log_keywords_regex}}.'
+    description: 'Optional manual per-failed-test LogQL template. For cross-component suites, prefer AI-assisted planning or keep the selector broad and let {{log_keywords_regex}} narrow each failure. Supports {{test_name}}, {{test_suite}}, {{test_file}}, {{failure_message}}, {{environment}}, and {{log_keywords_regex}}.'
     required: false
     default: ''
   grafana-log-start:

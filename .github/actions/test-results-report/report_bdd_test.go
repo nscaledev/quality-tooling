@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -283,6 +284,156 @@ var _ = Describe("Test Results Report", func() {
 
 				outputs := readOutputFile(outputPath)
 				Expect(outputs).To(HaveKeyWithValue("slack-sent", "true"))
+			})
+
+			It("should plan backend Grafana queries, fetch MCP logs, and pass them into the final AI report", func() {
+				writeTestFile(currentPath, `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="Console E2E" tests="2" failures="2" skipped="0" time="18">
+  <testsuite name="chromium" tests="2" failures="2" skipped="0" time="18">
+    <testcase classname="storage.file" name="uploads file" time="11">
+      <failure message="POST /api/storage returned 500 for claim-123">Timeout waiting for file storage upload to finish</failure>
+    </testcase>
+    <testcase classname="visual.button" name="button color" time="7">
+      <failure message="expected CSS color to match">client-side visual assertion failed</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`)
+
+				var queryCount atomic.Int32
+				var executedLogQL string
+				mcpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+					Expect(request.URL.Path).To(Equal("/mcp"))
+
+					var rpc struct {
+						ID     json.RawMessage `json:"id"`
+						Method string          `json:"method"`
+						Params json.RawMessage `json:"params"`
+					}
+					Expect(json.NewDecoder(request.Body).Decode(&rpc)).To(Succeed())
+
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Mcp-Session-Id", "test-session")
+
+					writeRPCResponse := func(result any) {
+						Expect(json.NewEncoder(w).Encode(map[string]any{
+							"jsonrpc": "2.0",
+							"id":      json.RawMessage(rpc.ID),
+							"result":  result,
+						})).To(Succeed())
+					}
+					writeToolResponse := func(text string) {
+						writeRPCResponse(map[string]any{
+							"content": []map[string]string{{
+								"type": "text",
+								"text": text,
+							}},
+						})
+					}
+
+					switch rpc.Method {
+					case "initialize":
+						writeRPCResponse(map[string]any{
+							"protocolVersion": mcpProtocolVersion,
+							"capabilities":    map[string]any{},
+							"serverInfo":      map[string]string{"name": "fake-grafana-mcp"},
+						})
+					case "notifications/initialized":
+						w.WriteHeader(http.StatusAccepted)
+					case "tools/call":
+						var params struct {
+							Name      string          `json:"name"`
+							Arguments json.RawMessage `json:"arguments"`
+						}
+						Expect(json.Unmarshal(rpc.Params, &params)).To(Succeed())
+
+						switch params.Name {
+						case "list_datasources":
+							writeToolResponse(`{"datasources":[{"uid":"loki-dev","name":"Loki","type":"loki","isDefault":true}]}`)
+						case "query_loki_logs":
+							queryCount.Add(1)
+							var args map[string]any
+							Expect(json.Unmarshal(params.Arguments, &args)).To(Succeed())
+							Expect(args).To(HaveKeyWithValue("datasourceUid", "loki-dev"))
+							Expect(args).To(HaveKeyWithValue("startRfc3339", "2026-06-01T13:00:00Z"))
+							Expect(args).To(HaveKeyWithValue("endRfc3339", "2026-06-01T14:00:00Z"))
+							executedLogQL = args["logql"].(string)
+							Expect(executedLogQL).To(ContainSubstring("claim-123"))
+							Expect(executedLogQL).To(ContainSubstring("file-storage"))
+							Expect(executedLogQL).NotTo(ContainSubstring("visual.button"))
+							writeToolResponse(`{"data":[{"timestamp":"1780322400000000000","line":"file-storage controller failed claim-123 with backend 500","labels":{"namespace":"file-storage","pod":"file-storage-api-123"}}],"metadata":{"linesReturned":1,"resultsTruncated":false}}`)
+						default:
+							Fail("unexpected MCP tool call: " + params.Name)
+						}
+					default:
+						Fail("unexpected MCP method: " + rpc.Method)
+					}
+				}))
+				defer mcpServer.Close()
+
+				previousPlanner := runGrafanaLogQueryPlanning
+				previousRunner := runAIAnalysis
+				runGrafanaLogQueryPlanning = func(_ context.Context, receivedConfig Config, analysis Analysis) ([]GrafanaLogPlannedQuery, error) {
+					Expect(receivedConfig.EnableAIAnalysis).To(BeTrue())
+					Expect(receivedConfig.EnableGrafanaLogs).To(BeTrue())
+					Expect(analysis.Failures).To(HaveLen(2))
+					Expect(analysis.Failures[0].Name).To(Equal("uploads file"))
+					Expect(analysis.Failures[1].Name).To(Equal("button color"))
+					return []GrafanaLogPlannedQuery{{
+						FailureRef: "f1",
+						LogQL:      `{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`,
+						Reason:     "The UI file upload failed after a backend storage API 500.",
+					}}, nil
+				}
+				runAIAnalysis = func(_ context.Context, receivedConfig Config, analysis Analysis) (*AIAnalysis, error) {
+					Expect(receivedConfig.EnableAIAnalysis).To(BeTrue())
+					Expect(analysis.GrafanaLogs).NotTo(BeNil())
+					Expect(analysis.GrafanaLogs.Contexts).To(HaveLen(1))
+					logContext := analysis.GrafanaLogs.Contexts[0]
+					Expect(logContext.QueryLabel).To(Equal("AI-planned backend query"))
+					Expect(logContext.Reason).To(ContainSubstring("storage API 500"))
+					Expect(logContext.Test).NotTo(BeNil())
+					Expect(logContext.Test.Name).To(Equal("uploads file"))
+					Expect(logContext.Entries).To(HaveLen(1))
+					Expect(logContext.Entries[0].Line).To(ContainSubstring("claim-123"))
+					Expect(logContext.Entries[0].Labels).To(HaveKeyWithValue("namespace", "file-storage"))
+					return &AIAnalysis{
+						StepSummary:  "## Test Failure Analysis\n\nAI report used Grafana backend evidence for file storage.",
+						SlackSummary: "- *File storage* (infra/external): backend 500 evidence found in Grafana logs.\n- *Action:* Use the GitHub build summary for test-level failure reasons; inspect file-storage API logs.",
+					}, nil
+				}
+				DeferCleanup(func() {
+					runGrafanaLogQueryPlanning = previousPlanner
+					runAIAnalysis = previousRunner
+				})
+
+				config.PreviousResultsPath = ""
+				config.CompareWithPrevious = false
+				config.EnableAIAnalysis = true
+				config.ClaudeToken = "test-claude-token"
+				config.EnableGrafanaLogs = true
+				config.GrafanaMCPEndpoint = mcpServer.URL + "/mcp"
+				config.GrafanaLogStart = "2026-06-01T13:00:00Z"
+				config.GrafanaLogEnd = "2026-06-01T14:00:00Z"
+				config.GrafanaLogLimit = 5
+				config.GrafanaLogMaxFailures = 2
+
+				err := run(context.Background(), config)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(queryCount.Load()).To(Equal(int32(1)))
+				Expect(executedLogQL).To(Equal(`{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`))
+
+				summary := readTestFile(summaryPath)
+				Expect(summary).To(ContainSubstring("### Grafana Log Context"))
+				Expect(summary).To(ContainSubstring("AI-planned backend query: uploads file"))
+				Expect(summary).To(ContainSubstring("The UI file upload failed after a backend storage API 500."))
+				Expect(summary).To(ContainSubstring("file-storage controller failed claim-123 with backend 500"))
+				Expect(summary).To(ContainSubstring("AI report used Grafana backend evidence for file storage."))
+				Expect(summary).NotTo(ContainSubstring("### Failed Tests"))
+
+				outputs := readOutputFile(outputPath)
+				Expect(outputs).To(HaveKeyWithValue("failed", "2"))
+				Expect(outputs).To(HaveKeyWithValue("slack-sent", "false"))
 			})
 
 			It("should continue when previous results cannot be parsed", func() {

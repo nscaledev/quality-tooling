@@ -129,6 +129,9 @@ func renderGrafanaLogSummary(sb *strings.Builder, enrichment *GrafanaLogEnrichme
 			title = fmt.Sprintf("%s: %s", title, firstNonEmpty(context.Test.Name, context.Test.ID))
 		}
 		sb.WriteString(fmt.Sprintf("#### %s\n\n", escapeMarkdown(title)))
+		if context.Reason != "" {
+			sb.WriteString(fmt.Sprintf("_Reason: %s_\n\n", escapeMarkdown(truncate(cleanOneLine(context.Reason), 300))))
+		}
 		sb.WriteString(fmt.Sprintf("```logql\n%s\n```\n\n", context.Query))
 		if context.Error != "" {
 			sb.WriteString(fmt.Sprintf("> Grafana MCP query failed: `%s`\n\n", escapeMarkdown(truncate(cleanOneLine(context.Error), 300))))

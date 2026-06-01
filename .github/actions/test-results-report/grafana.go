@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -66,6 +67,11 @@ type queryLokiLogsResult struct {
 	} `json:"metadata,omitempty"`
 }
 
+type grafanaFailureCandidate struct {
+	Ref  string
+	Test TestCase
+}
+
 func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analysis) (*GrafanaLogEnrichment, error) {
 	if !config.EnableGrafanaLogs {
 		return nil, nil
@@ -76,8 +82,26 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 	if config.GrafanaMCPEndpoint == "" {
 		return nil, fmt.Errorf("grafana log enrichment is enabled but no grafana-mcp-endpoint/GRAFANA_MCP_ENDPOINT is available")
 	}
-	if strings.TrimSpace(config.GrafanaLogQL) == "" && strings.TrimSpace(config.GrafanaLogQLTemplate) == "" {
-		return nil, fmt.Errorf("grafana log enrichment is enabled but neither grafana-logql nor grafana-logql-template was provided")
+
+	hasConfiguredQueries := strings.TrimSpace(config.GrafanaLogQL) != "" || strings.TrimSpace(config.GrafanaLogQLTemplate) != ""
+	var plannedQueries []GrafanaLogPlannedQuery
+	planningAttempted := config.EnableAIAnalysis && config.ClaudeToken != ""
+	if planningAttempted {
+		var err error
+		plannedQueries, err = runGrafanaLogQueryPlanning(ctx, config, analysis)
+		if err != nil {
+			if !hasConfiguredQueries {
+				return nil, err
+			}
+			fmt.Fprintf(os.Stderr, "Warning: AI Grafana log query planning failed; using configured LogQL fallback: %v\n", err)
+		}
+		plannedQueries = limitGrafanaPlannedQueries(plannedQueries, config.GrafanaLogMaxFailures)
+	}
+	if len(plannedQueries) == 0 && !hasConfiguredQueries {
+		if planningAttempted {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("grafana log enrichment is enabled but neither AI query planning nor grafana-logql/grafana-logql-template is available")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -105,15 +129,27 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 		EndRFC3339:     end,
 	}
 
+	if len(plannedQueries) > 0 {
+		candidatesByRef := grafanaFailureCandidatesByRef(analysis, config.GrafanaLogMaxFailures)
+		for _, planned := range plannedQueries {
+			candidate, ok := candidatesByRef[planned.FailureRef]
+			if !ok {
+				continue
+			}
+			test := candidate
+			enrichment.Contexts = append(enrichment.Contexts, queryGrafanaLogs(ctx, client, uid, planned.LogQL, start, end, config.GrafanaLogLimit, &test, "AI-planned backend query", planned.Reason))
+		}
+	}
+
 	if query := strings.TrimSpace(config.GrafanaLogQL); query != "" {
-		enrichment.Contexts = append(enrichment.Contexts, queryGrafanaLogs(ctx, client, uid, query, start, end, config.GrafanaLogLimit, nil, "General query"))
+		enrichment.Contexts = append(enrichment.Contexts, queryGrafanaLogs(ctx, client, uid, query, start, end, config.GrafanaLogLimit, nil, "General query", "Caller-provided LogQL query"))
 	}
 
 	if template := strings.TrimSpace(config.GrafanaLogQLTemplate); template != "" {
 		for _, failure := range selectFailuresForGrafanaLogs(analysis, config.GrafanaLogMaxFailures) {
 			test := failure
 			query := renderGrafanaLogQLTemplate(template, failure, config)
-			enrichment.Contexts = append(enrichment.Contexts, queryGrafanaLogs(ctx, client, uid, query, start, end, config.GrafanaLogLimit, &test, "Failure query"))
+			enrichment.Contexts = append(enrichment.Contexts, queryGrafanaLogs(ctx, client, uid, query, start, end, config.GrafanaLogLimit, &test, "Failure query", "Caller-provided per-failure LogQL template"))
 		}
 	}
 
@@ -361,11 +397,12 @@ func resolveLokiDatasource(ctx context.Context, client *mcpHTTPClient, config Co
 	return fallbackUID, fallbackName, nil
 }
 
-func queryGrafanaLogs(ctx context.Context, client *mcpHTTPClient, datasourceUID, logql, start, end string, limit int, test *TestCase, label string) GrafanaLogContext {
+func queryGrafanaLogs(ctx context.Context, client *mcpHTTPClient, datasourceUID, logql, start, end string, limit int, test *TestCase, label, reason string) GrafanaLogContext {
 	context := GrafanaLogContext{
 		Test:       test,
 		Query:      logql,
 		QueryLabel: label,
+		Reason:     reason,
 	}
 
 	raw, err := client.callTool(ctx, "query_loki_logs", map[string]any{
@@ -433,9 +470,7 @@ func grafanaLogTimeRange(config Config, now time.Time) (string, string, error) {
 }
 
 func selectFailuresForGrafanaLogs(analysis Analysis, limit int) []TestCase {
-	if limit <= 0 {
-		limit = 3
-	}
+	limit = normalizedGrafanaFailureLimit(limit)
 
 	candidates := analysis.Failures
 	if analysis.Compare != nil && len(analysis.Compare.NewFailures) > 0 {
@@ -460,6 +495,41 @@ func selectFailuresForGrafanaLogs(analysis Analysis, limit int) []TestCase {
 		return candidates[:limit]
 	}
 	return candidates
+}
+
+func normalizedGrafanaFailureLimit(limit int) int {
+	if limit <= 0 {
+		return 3
+	}
+	return limit
+}
+
+func selectGrafanaFailureCandidates(analysis Analysis, limit int) []grafanaFailureCandidate {
+	failures := selectFailuresForGrafanaLogs(analysis, limit)
+	candidates := make([]grafanaFailureCandidate, 0, len(failures))
+	for index, failure := range failures {
+		candidates = append(candidates, grafanaFailureCandidate{
+			Ref:  fmt.Sprintf("f%d", index+1),
+			Test: failure,
+		})
+	}
+	return candidates
+}
+
+func grafanaFailureCandidatesByRef(analysis Analysis, limit int) map[string]TestCase {
+	result := map[string]TestCase{}
+	for _, candidate := range selectGrafanaFailureCandidates(analysis, limit) {
+		result[candidate.Ref] = candidate.Test
+	}
+	return result
+}
+
+func limitGrafanaPlannedQueries(queries []GrafanaLogPlannedQuery, limit int) []GrafanaLogPlannedQuery {
+	limit = normalizedGrafanaFailureLimit(limit)
+	if len(queries) > limit {
+		return queries[:limit]
+	}
+	return queries
 }
 
 func renderGrafanaLogQLTemplate(template string, test TestCase, config Config) string {
