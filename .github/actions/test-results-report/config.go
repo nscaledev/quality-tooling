@@ -101,14 +101,14 @@ func configFromEnv(env map[string]string) Config {
 		GrafanaOrgID:          firstNonEmpty(env["INPUT_GRAFANA_ORG_ID"], env["GRAFANA_ORG_ID"], "1"),
 		GrafanaMCPEndpoint:    firstNonEmpty(env["INPUT_GRAFANA_MCP_ENDPOINT"], env["GRAFANA_MCP_ENDPOINT"]),
 		GrafanaLokiUID:        env["INPUT_GRAFANA_LOKI_DATASOURCE_UID"],
-		GrafanaLokiName:       env["INPUT_GRAFANA_LOKI_DATASOURCE_NAME"],
+		GrafanaLokiName:       firstNonEmpty(env["INPUT_GRAFANA_LOKI_DATASOURCE_NAME"], "Loki"),
 		GrafanaLogQL:          env["INPUT_GRAFANA_LOGQL"],
 		GrafanaLogQLTemplate:  env["INPUT_GRAFANA_LOGQL_TEMPLATE"],
 		GrafanaLogStart:       env["INPUT_GRAFANA_LOG_START"],
 		GrafanaLogEnd:         env["INPUT_GRAFANA_LOG_END"],
-		GrafanaLogLookback:    firstNonEmpty(env["INPUT_GRAFANA_LOG_LOOKBACK"], "1h"),
+		GrafanaLogLookback:    firstNonEmpty(env["INPUT_GRAFANA_LOG_LOOKBACK"], "2h"),
 		GrafanaLogLimit:       parseIntDefault(env["INPUT_GRAFANA_LOG_LIMIT"], 20),
-		GrafanaLogMaxFailures: parseIntDefault(env["INPUT_GRAFANA_LOG_MAX_FAILURES"], 3),
+		GrafanaLogMaxFailures: parseIntDefault(env["INPUT_GRAFANA_LOG_MAX_FAILURES"], 6),
 		GrafanaLogConcurrency: parseIntDefault(env["INPUT_GRAFANA_LOG_CONCURRENCY"], 4),
 	}
 }

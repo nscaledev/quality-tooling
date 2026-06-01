@@ -637,7 +637,10 @@ func TestConfigDefaults(t *testing.T) {
 	if config.GrafanaOrgID != "1" {
 		t.Fatalf("grafana org ID default = %q", config.GrafanaOrgID)
 	}
-	if config.GrafanaLogLookback != "1h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 3 || config.GrafanaLogConcurrency != 4 {
+	if config.GrafanaLokiName != "Loki" {
+		t.Fatalf("grafana Loki datasource name default = %q", config.GrafanaLokiName)
+	}
+	if config.GrafanaLogLookback != "2h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 6 || config.GrafanaLogConcurrency != 4 {
 		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d concurrency %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures, config.GrafanaLogConcurrency)
 	}
 }

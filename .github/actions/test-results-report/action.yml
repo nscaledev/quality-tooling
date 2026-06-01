@@ -99,7 +99,7 @@ inputs:
     required: false
     default: ''
   grafana-app:
-    description: 'Teleport app name for Grafana. When set with grafana-service-account-token, the action opens a bot-compatible Teleport application tunnel.'
+    description: 'Teleport app name for Grafana. When omitted, the action infers a default from environment: dev -> nks-dev-glo1-grafana, uat/stage/staging -> nks-stg-europe-west2-grafana.'
     required: false
     default: ''
   grafana-url:
@@ -141,7 +141,7 @@ inputs:
   grafana-loki-datasource-name:
     description: 'Optional Loki datasource name to select during datasource discovery.'
     required: false
-    default: ''
+    default: 'Loki'
   grafana-logql:
     description: 'Optional static LogQL query to run once for general failure context or manual fallback.'
     required: false
@@ -161,7 +161,7 @@ inputs:
   grafana-log-lookback:
     description: 'Lookback duration used when grafana-log-start is omitted.'
     required: false
-    default: '1h'
+    default: '2h'
   grafana-log-limit:
     description: 'Maximum log lines per Grafana MCP query.'
     required: false
@@ -173,7 +173,7 @@ inputs:
   grafana-log-max-failures:
     description: 'Maximum failed tests to query with AI-planned queries or grafana-logql-template.'
     required: false
-    default: '3'
+    default: '6'
 
 outputs:
   total:
@@ -229,6 +229,45 @@ runs:
         cache: true
         cache-dependency-path: ${{ github.action_path }}/go.sum
 
+    - name: Resolve Grafana MCP inputs
+      id: grafana-resolve
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' }}
+      shell: bash
+      env:
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_GRAFANA_APP: ${{ inputs.grafana-app }}
+        INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ inputs.grafana-service-account-token }}
+      run: |
+        set -euo pipefail
+
+        grafana_app="${INPUT_GRAFANA_APP:-}"
+        if [[ -z "$grafana_app" ]]; then
+          case "${INPUT_ENVIRONMENT,,}" in
+            dev|development)
+              grafana_app="nks-dev-glo1-grafana"
+              ;;
+            uat|stage|staging)
+              grafana_app="nks-stg-europe-west2-grafana"
+              ;;
+          esac
+        fi
+        echo "GRAFANA_APP_RESOLVED=${grafana_app}" >> "$GITHUB_ENV"
+        echo "grafana-app=${grafana_app}" >> "$GITHUB_OUTPUT"
+
+        grafana_token="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}"
+        if [[ -z "$grafana_token" && -n "${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+          grafana_token="${GRAFANA_SERVICE_ACCOUNT_TOKEN}"
+        fi
+        if [[ -n "$grafana_token" ]]; then
+          echo "::add-mask::${grafana_token}"
+          echo "GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED=${grafana_token}" >> "$GITHUB_ENV"
+        fi
+        if [[ -n "$grafana_token" ]]; then
+          echo "token-configured=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "token-configured=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Grafana MCP enrichment preflight
       if: ${{ inputs.enable-grafana-log-enrichment == 'true' }}
       shell: bash
@@ -252,8 +291,10 @@ runs:
         set -euo pipefail
 
         echo "::group::Grafana MCP enrichment preflight"
-        if [[ -n "${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
-          echo "::add-mask::${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN}"
+        grafana_app="${GRAFANA_APP_RESOLVED:-${INPUT_GRAFANA_APP:-}}"
+        grafana_token="${GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED:-${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
+        if [[ -n "${grafana_token}" ]]; then
+          echo "::add-mask::${grafana_token}"
         fi
 
         bool() {
@@ -266,8 +307,8 @@ runs:
 
         echo "enabled: true"
         echo "existing MCP endpoint configured: $(bool "${INPUT_GRAFANA_MCP_ENDPOINT:-}")"
-        echo "Grafana service account token configured: $(bool "${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}")"
-        echo "Grafana app: ${INPUT_GRAFANA_APP:-<empty>}"
+        echo "Grafana service account token configured: $(bool "${grafana_token:-}")"
+        echo "Grafana app: ${grafana_app:-<empty>}"
         echo "direct Grafana URL configured: $(bool "${INPUT_GRAFANA_URL:-}")"
         echo "Grafana org ID: ${INPUT_GRAFANA_ORG_ID:-<empty>}"
         echo "Loki datasource UID configured: $(bool "${INPUT_GRAFANA_LOKI_DATASOURCE_UID:-}")"
@@ -278,12 +319,12 @@ runs:
 
         if [[ -n "${INPUT_GRAFANA_MCP_ENDPOINT:-}" ]]; then
           echo "selected setup path: use caller-provided mcp-grafana endpoint"
-        elif [[ -z "${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+        elif [[ -z "${grafana_token:-}" ]]; then
           echo "selected setup path: cannot start mcp-grafana; grafana-service-account-token is empty"
           echo "::warning::Grafana log enrichment is enabled, but mcp-grafana cannot start because grafana-service-account-token is empty"
         elif [[ -n "${INPUT_GRAFANA_URL:-}" ]]; then
           echo "selected setup path: start mcp-grafana against direct Grafana URL on port ${INPUT_GRAFANA_MCP_PORT}"
-        elif [[ -n "${INPUT_GRAFANA_APP:-}" ]]; then
+        elif [[ -n "${grafana_app:-}" ]]; then
           echo "selected setup path: open Teleport app tunnel on port ${INPUT_GRAFANA_TUNNEL_PORT}, then start mcp-grafana on port ${INPUT_GRAFANA_MCP_PORT}"
         else
           echo "selected setup path: cannot start mcp-grafana; neither grafana-url nor grafana-app is configured"
@@ -292,24 +333,24 @@ runs:
         echo "::endgroup::"
 
     - name: Install Teleport clients for Grafana tunnel
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && inputs.grafana-service-account-token != '' && inputs.grafana-url == '' && inputs.grafana-app != '' }}
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.grafana-url == '' && steps.grafana-resolve.outputs.grafana-app != '' }}
       uses: teleport-actions/setup@a820ebbf1bc1a496efca348ad21042d6e8df73a6
       with:
         version: auto
         proxy: ${{ inputs.grafana-teleport-proxy }}
 
     - name: Open Grafana app tunnel
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && inputs.grafana-service-account-token != '' && inputs.grafana-url == '' && inputs.grafana-app != '' }}
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.grafana-url == '' && steps.grafana-resolve.outputs.grafana-app != '' }}
       uses: teleport-actions/application-tunnel@v1
       with:
         proxy: ${{ inputs.grafana-teleport-proxy }}
         token: ${{ inputs.grafana-teleport-token }}
-        app: ${{ inputs.grafana-app }}
+        app: ${{ steps.grafana-resolve.outputs.grafana-app }}
         listen: tcp://127.0.0.1:${{ inputs.grafana-tunnel-port }}
         timeout-ms: '60000'
 
     - name: Verify Grafana tunnel
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && inputs.grafana-service-account-token != '' && inputs.grafana-url == '' && inputs.grafana-app != '' }}
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.grafana-url == '' && steps.grafana-resolve.outputs.grafana-app != '' }}
       shell: bash
       env:
         INPUT_GRAFANA_TUNNEL_PORT: ${{ inputs.grafana-tunnel-port }}
@@ -335,7 +376,7 @@ runs:
         echo "::warning::Grafana tunnel did not become reachable; log enrichment will likely be skipped by the reporter"
 
     - name: Install Grafana MCP server
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && inputs.grafana-service-account-token != '' && (inputs.grafana-url != '' || inputs.grafana-app != '') }}
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.grafana-url != '' || steps.grafana-resolve.outputs.grafana-app != '') }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -364,11 +405,11 @@ runs:
         echo "mcp-grafana installed at $(command -v mcp-grafana)"
 
     - name: Start Grafana MCP server
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && inputs.grafana-service-account-token != '' && (inputs.grafana-url != '' || inputs.grafana-app != '') }}
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.grafana-url != '' || steps.grafana-resolve.outputs.grafana-app != '') }}
       shell: bash
       env:
         INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ inputs.grafana-service-account-token }}
-        INPUT_GRAFANA_APP: ${{ inputs.grafana-app }}
+        INPUT_GRAFANA_APP: ${{ steps.grafana-resolve.outputs.grafana-app }}
         INPUT_GRAFANA_TELEPORT_PROXY: ${{ inputs.grafana-teleport-proxy }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
         INPUT_GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
@@ -377,7 +418,8 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "::add-mask::${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN}"
+        grafana_token="${GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED:-${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
+        echo "::add-mask::${grafana_token}"
         if ! command -v mcp-grafana >/dev/null 2>&1; then
           echo "::warning::mcp-grafana is not installed; log enrichment will be skipped by the reporter"
           exit 0
@@ -395,7 +437,7 @@ runs:
 
         echo "Starting mcp-grafana with GRAFANA_URL=${grafana_url}"
         GRAFANA_URL="$grafana_url" \
-        GRAFANA_SERVICE_ACCOUNT_TOKEN="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN}" \
+        GRAFANA_SERVICE_ACCOUNT_TOKEN="${grafana_token}" \
         GRAFANA_ORG_ID="${INPUT_GRAFANA_ORG_ID}" \
         nohup mcp-grafana \
           -t streamable-http \
@@ -508,7 +550,7 @@ runs:
         go run .
 
     - name: Dump Grafana MCP logs
-      if: ${{ always() && inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && inputs.grafana-service-account-token != '' && (inputs.grafana-url != '' || inputs.grafana-app != '') }}
+      if: ${{ always() && inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.grafana-url != '' || steps.grafana-resolve.outputs.grafana-app != '') }}
       shell: bash
       run: |
         set -euo pipefail

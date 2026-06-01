@@ -152,12 +152,9 @@ steps:
     claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     enable-grafana-log-enrichment: 'true'
     grafana-service-account-token: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN }}
-    grafana-app: nks-dev-glo1-grafana
-    grafana-loki-datasource-name: Loki
-    grafana-log-lookback: 2h
-    grafana-log-max-failures: 6
-    grafana-log-concurrency: 4
 ```
+
+By default, the action uses datasource name `Loki`, a `2h` lookback, `20` log lines per query, `4` parallel Loki queries, and up to `6` failed tests for Grafana lookup. For Nscale Teleport-backed runs, it also infers `grafana-app` from `environment`: `dev` maps to `nks-dev-glo1-grafana`; `uat`, `stage`, and `staging` map to `nks-stg-europe-west2-grafana`.
 
 In the AI-assisted flow, `grafana-logql` and `grafana-logql-template` are optional. Claude receives the failed test name, suite, location, error, captured output, environment, comparison context, and generated failure keyword regex. It returns JSON query plans like:
 
@@ -196,8 +193,6 @@ For `nscale-ui` and other cross-component suites, prefer the AI-assisted flow ab
 ```yaml
 with:
   enable-grafana-log-enrichment: 'true'
-  grafana-log-lookback: 2h
-  grafana-log-max-failures: 6
   # Replace the namespace list with the backend namespaces used by the target environment.
   grafana-logql-template: '{namespace=~"unikorn-region|identity|file-storage|console-api"} |~ "(?i){{log_keywords_regex}}"'
 ```
@@ -253,7 +248,7 @@ When enabled, the report includes:
 | `claude-token` | No | empty | Claude Code OAuth token |
 | `enable-grafana-log-enrichment` | No | `false` | Fetch related logs through Grafana MCP |
 | `grafana-service-account-token` | No | empty | Grafana service account token used when this action starts `mcp-grafana` |
-| `grafana-app` | No | empty | Teleport Grafana app name used for the local tunnel |
+| `grafana-app` | No | inferred from `environment` | Teleport Grafana app name used for the local tunnel |
 | `grafana-url` | No | empty | Direct Grafana URL when no Teleport tunnel is needed; also used to generate Grafana Explore lookup links |
 | `grafana-org-id` | No | `1` | Grafana organization ID used by `mcp-grafana` and generated Explore links |
 | `grafana-teleport-proxy` | No | `nscale.teleport.sh:443` | Teleport proxy for the Grafana app tunnel |
@@ -263,15 +258,15 @@ When enabled, the report includes:
 | `grafana-mcp-port` | No | `8000` | Local `mcp-grafana` streamable HTTP port |
 | `grafana-mcp-endpoint` | No | empty | Existing `mcp-grafana` streamable HTTP endpoint |
 | `grafana-loki-datasource-uid` | No | empty | Loki datasource UID |
-| `grafana-loki-datasource-name` | No | empty | Loki datasource name used during discovery |
+| `grafana-loki-datasource-name` | No | `Loki` | Loki datasource name used during discovery |
 | `grafana-logql` | No | empty | Static LogQL query run once for the report, useful as a manual fallback or extra context |
 | `grafana-logql-template` | No | empty | Manual per-failed-test LogQL template. For cross-component suites, prefer AI-assisted planning or keep the selector broad and let `{{log_keywords_regex}}` narrow each failure |
 | `grafana-log-start` | No | empty | RFC3339 log query start time |
 | `grafana-log-end` | No | empty | RFC3339 log query end time |
-| `grafana-log-lookback` | No | `1h` | Lookback used when start time is omitted |
+| `grafana-log-lookback` | No | `2h` | Lookback used when start time is omitted |
 | `grafana-log-limit` | No | `20` | Maximum log lines per MCP query |
 | `grafana-log-concurrency` | No | `4` | Maximum parallel Grafana MCP `query_loki_logs` calls |
-| `grafana-log-max-failures` | No | `3` | Maximum failed tests queried with AI-planned queries or the template |
+| `grafana-log-max-failures` | No | `6` | Maximum failed tests queried with AI-planned queries or the template |
 
 ## Outputs
 
