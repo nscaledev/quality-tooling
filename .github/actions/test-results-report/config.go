@@ -96,7 +96,7 @@ func configFromEnv(env map[string]string) Config {
 		EnableAIAnalysis:      parseBoolDefault(env["INPUT_ENABLE_AI_ANALYSIS"], false),
 		ClaudeToken:           firstNonEmpty(env["INPUT_CLAUDE_TOKEN"], env["CLAUDE_CODE_OAUTH_TOKEN"]),
 		EnableGrafanaLogs:     parseBoolDefault(env["INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT"], false),
-		GrafanaURL:            env["INPUT_GRAFANA_URL"],
+		GrafanaURL:            firstNonEmpty(env["INPUT_GRAFANA_URL"], env["GRAFANA_REPORT_URL"], env["GRAFANA_URL"]),
 		GrafanaMCPEndpoint:    firstNonEmpty(env["INPUT_GRAFANA_MCP_ENDPOINT"], env["GRAFANA_MCP_ENDPOINT"]),
 		GrafanaLokiUID:        env["INPUT_GRAFANA_LOKI_DATASOURCE_UID"],
 		GrafanaLokiName:       env["INPUT_GRAFANA_LOKI_DATASOURCE_NAME"],

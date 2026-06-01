@@ -362,6 +362,8 @@ runs:
       shell: bash
       env:
         INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ inputs.grafana-service-account-token }}
+        INPUT_GRAFANA_APP: ${{ inputs.grafana-app }}
+        INPUT_GRAFANA_TELEPORT_PROXY: ${{ inputs.grafana-teleport-proxy }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
         INPUT_GRAFANA_TUNNEL_PORT: ${{ inputs.grafana-tunnel-port }}
         INPUT_GRAFANA_MCP_PORT: ${{ inputs.grafana-mcp-port }}
@@ -377,6 +379,11 @@ runs:
         grafana_url="${INPUT_GRAFANA_URL}"
         if [[ -z "$grafana_url" ]]; then
           grafana_url="http://127.0.0.1:${INPUT_GRAFANA_TUNNEL_PORT}"
+        fi
+        report_grafana_url="$grafana_url"
+        if [[ -z "${INPUT_GRAFANA_URL:-}" && -n "${INPUT_GRAFANA_APP:-}" ]]; then
+          proxy_host="${INPUT_GRAFANA_TELEPORT_PROXY%%:*}"
+          report_grafana_url="https://${INPUT_GRAFANA_APP}.${proxy_host}"
         fi
 
         echo "Starting mcp-grafana with GRAFANA_URL=${grafana_url}"
@@ -399,7 +406,9 @@ runs:
           fi
           if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/healthz" >/dev/null; then
             echo "GRAFANA_MCP_ENDPOINT=http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp" >> "$GITHUB_ENV"
+            echo "GRAFANA_REPORT_URL=${report_grafana_url}" >> "$GITHUB_ENV"
             echo "mcp-grafana /healthz is reachable on attempt ${attempt}"
+            echo "Grafana Explore base URL for report links: ${report_grafana_url}"
             exit 0
           fi
           echo "Waiting for mcp-grafana on 127.0.0.1:${INPUT_GRAFANA_MCP_PORT}, attempt ${attempt}/20"
@@ -465,6 +474,9 @@ runs:
         fi
         if [[ -z "${INPUT_GRAFANA_MCP_ENDPOINT:-}" && -n "${GRAFANA_MCP_ENDPOINT:-}" ]]; then
           export INPUT_GRAFANA_MCP_ENDPOINT="${GRAFANA_MCP_ENDPOINT}"
+        fi
+        if [[ -z "${INPUT_GRAFANA_URL:-}" && -n "${GRAFANA_REPORT_URL:-}" ]]; then
+          export INPUT_GRAFANA_URL="${GRAFANA_REPORT_URL}"
         fi
 
         WORKSPACE_DIR="${GITHUB_WORKSPACE:-$(pwd)}"

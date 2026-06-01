@@ -176,7 +176,7 @@ In the AI-assisted flow, `grafana-logql` and `grafana-logql-template` are option
 }
 ```
 
-The reporter executes each planned query through Grafana MCP's `query_loki_logs` tool and includes the test name, backend area, exact failure error, search terms, query reason, matching lines, and labels in the final report context. When `grafana-url` is provided, the reporter also generates a Grafana Explore link for the exact datasource, LogQL, and time range; Claude is instructed not to invent Grafana URLs. If Claude decides no backend lookup is justified, it returns an empty query list and the report continues without Grafana logs.
+The reporter executes each planned query through Grafana MCP's `query_loki_logs` tool and includes the test name, backend area, exact failure error, search terms, query reason, matching lines, and labels in the final report context. When `grafana-url` is provided, or when `grafana-app` lets the wrapper infer the Teleport public Grafana URL, the reporter also generates a Grafana Explore link for the exact datasource, LogQL, and time range; Claude is instructed not to invent Grafana URLs. If Claude decides no backend lookup is justified, it returns an empty query list and the report continues without Grafana logs.
 
 For manual fallback queries, `grafana-logql-template` runs once per representative failed test, up to `grafana-log-max-failures`. Use the selector part of the template to define the logs that are relevant to the test suite, and use `{{log_keywords_regex}}` to narrow each query to the individual failure. It supports these placeholders:
 

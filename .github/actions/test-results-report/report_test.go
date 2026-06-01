@@ -637,6 +637,29 @@ func TestConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestConfigUsesGrafanaReportURLFallback(t *testing.T) {
+	t.Parallel()
+
+	config := configFromEnv(map[string]string{
+		"INPUT_TEST_RESULTS_PATH": "results.xml",
+		"GRAFANA_REPORT_URL":      "https://nks-dev-glo1-grafana.nscale.teleport.sh",
+		"GRAFANA_URL":             "http://127.0.0.1:3000",
+	})
+
+	if config.GrafanaURL != "https://nks-dev-glo1-grafana.nscale.teleport.sh" {
+		t.Fatalf("grafana URL fallback = %q", config.GrafanaURL)
+	}
+
+	config = configFromEnv(map[string]string{
+		"INPUT_TEST_RESULTS_PATH": "results.xml",
+		"INPUT_GRAFANA_URL":       "https://grafana.example.com",
+		"GRAFANA_REPORT_URL":      "https://nks-dev-glo1-grafana.nscale.teleport.sh",
+	})
+	if config.GrafanaURL != "https://grafana.example.com" {
+		t.Fatalf("explicit grafana URL should win, got %q", config.GrafanaURL)
+	}
+}
+
 func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	t.Parallel()
 

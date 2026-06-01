@@ -653,6 +653,8 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("token: ${{ inputs.grafana-teleport-token }}"))
 				Expect(action).To(ContainSubstring("mcp-grafana"))
 				Expect(action).To(ContainSubstring("GRAFANA_MCP_ENDPOINT=http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp"))
+				Expect(action).To(ContainSubstring("GRAFANA_REPORT_URL=${report_grafana_url}"))
+				Expect(action).To(ContainSubstring("Grafana Explore base URL for report links"))
 			})
 
 			It("should log Grafana MCP preflight decisions without exposing the service account token", func() {
