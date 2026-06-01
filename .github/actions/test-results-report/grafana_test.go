@@ -436,7 +436,7 @@ func TestRunGrafanaLogEnrichmentQueriesPlannedFailuresInParallel(t *testing.T) {
 func TestGrafanaExploreURL(t *testing.T) {
 	t.Parallel()
 
-	lookup := grafanaExploreURL("https://grafana.example.com/grafana?orgId=7", "loki-dev", `{namespace="file-storage"} |= "claim-123"`, "2026-06-01T13:00:00Z", "2026-06-01T14:00:00Z")
+	lookup := grafanaExploreURL("https://grafana.example.com/grafana?orgId=7", "99", "loki-dev", `{namespace="file-storage"} |= "claim-123"`, "2026-06-01T13:00:00Z", "2026-06-01T14:00:00Z")
 	parsed, err := url.Parse(lookup)
 	if err != nil {
 		t.Fatalf("parse lookup URL: %v", err)
@@ -463,6 +463,23 @@ func TestSafeURLForLogRedactsSensitiveURLParts(t *testing.T) {
 	}
 	if !strings.Contains(redacted, "grafana.example.com/mcp") || !strings.Contains(redacted, "%3Credacted%3E") {
 		t.Fatalf("URL lost useful endpoint context: %s", redacted)
+	}
+}
+
+func TestGrafanaSelfObservabilityLogFilter(t *testing.T) {
+	t.Parallel()
+
+	if !isGrafanaSelfObservabilityLog(GrafanaLogEntry{
+		Line:   `Round trip completed url:http://grafana/api/datasources/proxy/uid/loki/loki/api/v1/query_range?query=%7Bnamespace%3D~%22.%2B%22%7D`,
+		Labels: map[string]string{"namespace": "grafana"},
+	}) {
+		t.Fatal("expected Grafana query echo log to be filtered")
+	}
+	if isGrafanaSelfObservabilityLog(GrafanaLogEntry{
+		Line:   "file-storage controller failed request_id=mcp-verification-request-26761890035 with internal_error",
+		Labels: map[string]string{"namespace": "file-storage", "pod": "file-storage-api-123"},
+	}) {
+		t.Fatal("backend log evidence should not be filtered")
 	}
 }
 

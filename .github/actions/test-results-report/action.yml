@@ -106,6 +106,10 @@ inputs:
     description: 'Direct Grafana URL for mcp-grafana. If omitted and grafana-app is set, defaults to the local Teleport tunnel URL. When set, the reporter also uses it to generate Grafana Explore lookup links.'
     required: false
     default: ''
+  grafana-org-id:
+    description: 'Grafana organization ID used by mcp-grafana and generated Explore links.'
+    required: false
+    default: '1'
   grafana-teleport-proxy:
     description: 'Teleport proxy used for the Grafana app tunnel.'
     required: false
@@ -232,6 +236,7 @@ runs:
         INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ inputs.grafana-service-account-token }}
         INPUT_GRAFANA_APP: ${{ inputs.grafana-app }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
+        INPUT_GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
         INPUT_GRAFANA_MCP_ENDPOINT: ${{ inputs.grafana-mcp-endpoint }}
         INPUT_GRAFANA_LOKI_DATASOURCE_UID: ${{ inputs.grafana-loki-datasource-uid }}
         INPUT_GRAFANA_LOKI_DATASOURCE_NAME: ${{ inputs.grafana-loki-datasource-name }}
@@ -264,6 +269,7 @@ runs:
         echo "Grafana service account token configured: $(bool "${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}")"
         echo "Grafana app: ${INPUT_GRAFANA_APP:-<empty>}"
         echo "direct Grafana URL configured: $(bool "${INPUT_GRAFANA_URL:-}")"
+        echo "Grafana org ID: ${INPUT_GRAFANA_ORG_ID:-<empty>}"
         echo "Loki datasource UID configured: $(bool "${INPUT_GRAFANA_LOKI_DATASOURCE_UID:-}")"
         echo "Loki datasource name: ${INPUT_GRAFANA_LOKI_DATASOURCE_NAME:-<empty>}"
         echo "manual general LogQL configured: $(bool "${INPUT_GRAFANA_LOGQL:-}")"
@@ -365,6 +371,7 @@ runs:
         INPUT_GRAFANA_APP: ${{ inputs.grafana-app }}
         INPUT_GRAFANA_TELEPORT_PROXY: ${{ inputs.grafana-teleport-proxy }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
+        INPUT_GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
         INPUT_GRAFANA_TUNNEL_PORT: ${{ inputs.grafana-tunnel-port }}
         INPUT_GRAFANA_MCP_PORT: ${{ inputs.grafana-mcp-port }}
       run: |
@@ -389,6 +396,7 @@ runs:
         echo "Starting mcp-grafana with GRAFANA_URL=${grafana_url}"
         GRAFANA_URL="$grafana_url" \
         GRAFANA_SERVICE_ACCOUNT_TOKEN="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN}" \
+        GRAFANA_ORG_ID="${INPUT_GRAFANA_ORG_ID}" \
         nohup mcp-grafana \
           -t streamable-http \
           --address "127.0.0.1:${INPUT_GRAFANA_MCP_PORT}" \
@@ -407,6 +415,7 @@ runs:
           if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/healthz" >/dev/null; then
             echo "GRAFANA_MCP_ENDPOINT=http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp" >> "$GITHUB_ENV"
             echo "GRAFANA_REPORT_URL=${report_grafana_url}" >> "$GITHUB_ENV"
+            echo "GRAFANA_ORG_ID=${INPUT_GRAFANA_ORG_ID}" >> "$GITHUB_ENV"
             echo "mcp-grafana /healthz is reachable on attempt ${attempt}"
             echo "Grafana Explore base URL for report links: ${report_grafana_url}"
             exit 0
@@ -453,6 +462,7 @@ runs:
         INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT: ${{ inputs.enable-grafana-log-enrichment }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
         INPUT_GRAFANA_MCP_ENDPOINT: ${{ inputs.grafana-mcp-endpoint }}
+        INPUT_GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
         INPUT_GRAFANA_LOKI_DATASOURCE_UID: ${{ inputs.grafana-loki-datasource-uid }}
         INPUT_GRAFANA_LOKI_DATASOURCE_NAME: ${{ inputs.grafana-loki-datasource-name }}
         INPUT_GRAFANA_LOGQL: ${{ inputs.grafana-logql }}

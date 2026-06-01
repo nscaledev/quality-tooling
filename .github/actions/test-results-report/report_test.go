@@ -369,6 +369,7 @@ func TestMarkdownSummaryIncludesGrafanaLookupMetadata(t *testing.T) {
 				Query:             `{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`,
 				GrafanaExploreURL: "https://grafana.example.com/explore?panes=encoded",
 				Reason:            "The UI file upload failed after a backend storage API 500.",
+				FilteredLineCount: 2,
 			}},
 		},
 	}, RenderOptions{
@@ -385,6 +386,7 @@ func TestMarkdownSummaryIncludesGrafanaLookupMetadata(t *testing.T) {
 		"Exact failure error: `POST /api/storage returned 500 for claim-123`",
 		"Search terms: `claim-123`, `file-storage`, `500`",
 		"[Open query in Grafana](https://grafana.example.com/explore?panes=encoded)",
+		"Filtered 2 Grafana/MCP self-observability log line(s) before analysis.",
 	} {
 		if !strings.Contains(markdown, expected) {
 			t.Fatalf("summary missing %q:\n%s", expected, markdown)
@@ -632,6 +634,9 @@ func TestConfigDefaults(t *testing.T) {
 	if config.EnableGrafanaLogs {
 		t.Fatal("grafana log enrichment should default false")
 	}
+	if config.GrafanaOrgID != "1" {
+		t.Fatalf("grafana org ID default = %q", config.GrafanaOrgID)
+	}
 	if config.GrafanaLogLookback != "1h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 3 || config.GrafanaLogConcurrency != 4 {
 		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d concurrency %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures, config.GrafanaLogConcurrency)
 	}
@@ -644,10 +649,14 @@ func TestConfigUsesGrafanaReportURLFallback(t *testing.T) {
 		"INPUT_TEST_RESULTS_PATH": "results.xml",
 		"GRAFANA_REPORT_URL":      "https://nks-dev-glo1-grafana.nscale.teleport.sh",
 		"GRAFANA_URL":             "http://127.0.0.1:3000",
+		"GRAFANA_ORG_ID":          "7",
 	})
 
 	if config.GrafanaURL != "https://nks-dev-glo1-grafana.nscale.teleport.sh" {
 		t.Fatalf("grafana URL fallback = %q", config.GrafanaURL)
+	}
+	if config.GrafanaOrgID != "7" {
+		t.Fatalf("grafana org ID fallback = %q", config.GrafanaOrgID)
 	}
 
 	config = configFromEnv(map[string]string{
@@ -813,6 +822,7 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 				Reason:            "Instance API returned a backend reconcile timeout.",
 				Confidence:        "high",
 				LineCount:         1,
+				FilteredLineCount: 2,
 				Entries: []GrafanaLogEntry{{
 					Timestamp: "1780322400000000000",
 					Line:      "controller failed to create instance",
@@ -837,6 +847,7 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 		"Search terms: instance, timeout",
 		"Lookup confidence: high",
 		"Grafana lookup URL: https://grafana.example.com/explore?panes=test",
+		"Filtered Grafana/MCP self-observability lines: 2",
 		"controller failed to create instance",
 		"namespace=unikorn-region",
 		"Failed tests:",

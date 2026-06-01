@@ -81,6 +81,7 @@ type GrafanaLogContext struct {
 	GrafanaExploreURL string
 	Entries           []GrafanaLogEntry
 	LineCount         int
+	FilteredLineCount int
 	Truncated         bool
 	Error             string
 	QueryLabel        string

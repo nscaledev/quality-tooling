@@ -435,6 +435,9 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 			sb.WriteString(fmt.Sprintf("Query error: %s\n\n", truncate(cleanOneLine(context.Error), 1000)))
 			continue
 		}
+		if context.FilteredLineCount > 0 {
+			sb.WriteString(fmt.Sprintf("Filtered Grafana/MCP self-observability lines: %d\n", context.FilteredLineCount))
+		}
 		sb.WriteString(fmt.Sprintf("Lines returned: %d\n", context.LineCount))
 		for i, entry := range context.Entries {
 			if i >= 5 {

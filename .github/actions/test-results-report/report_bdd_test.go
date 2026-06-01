@@ -654,6 +654,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("mcp-grafana"))
 				Expect(action).To(ContainSubstring("GRAFANA_MCP_ENDPOINT=http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp"))
 				Expect(action).To(ContainSubstring("GRAFANA_REPORT_URL=${report_grafana_url}"))
+				Expect(action).To(ContainSubstring("GRAFANA_ORG_ID=${INPUT_GRAFANA_ORG_ID}"))
 				Expect(action).To(ContainSubstring("Grafana Explore base URL for report links"))
 			})
 
@@ -661,6 +662,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("Grafana MCP enrichment preflight"))
 				Expect(action).To(ContainSubstring(`echo "::add-mask::${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN}"`))
 				Expect(action).To(ContainSubstring("Grafana service account token configured:"))
+				Expect(action).To(ContainSubstring("Grafana org ID:"))
 				Expect(action).To(ContainSubstring("selected setup path: cannot start mcp-grafana; grafana-service-account-token is empty"))
 				Expect(action).To(ContainSubstring("selected setup path: open Teleport app tunnel"))
 			})

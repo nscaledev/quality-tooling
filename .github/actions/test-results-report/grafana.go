@@ -552,7 +552,7 @@ func runGrafanaLogQueryJobs(ctx context.Context, client *mcpHTTPClient, datasour
 
 			logGrafanaQueryStart(index, len(jobs), job)
 			context := queryGrafanaLogs(ctx, client, datasourceUID, job.LogQL, start, end, config.GrafanaLogLimit, job.Test, job.Label, job.Reason)
-			attachGrafanaLogQueryMetadata(&context, job, grafanaExploreURL(config.GrafanaURL, datasourceUID, job.LogQL, start, end))
+			attachGrafanaLogQueryMetadata(&context, job, grafanaExploreURL(config.GrafanaURL, config.GrafanaOrgID, datasourceUID, job.LogQL, start, end))
 			logGrafanaQueryFinish(index, len(jobs), context)
 			contexts[index] = context
 		}()
@@ -583,7 +583,7 @@ func logGrafanaQueryFinish(index, total int, context GrafanaLogContext) {
 		logGrafana("query job %d/%d finished with error: %s", index+1, total, truncate(cleanOneLine(context.Error), 500))
 		return
 	}
-	logGrafana("query job %d/%d finished: lines=%d truncated=%t grafana_url=%t", index+1, total, context.LineCount, context.Truncated, context.GrafanaExploreURL != "")
+	logGrafana("query job %d/%d finished: lines=%d filtered=%d truncated=%t grafana_url=%t", index+1, total, context.LineCount, context.FilteredLineCount, context.Truncated, context.GrafanaExploreURL != "")
 	if len(context.Entries) > 0 {
 		logGrafana("query job %d first log line: [%s] %s",
 			index+1,
@@ -624,8 +624,9 @@ func testCasePointer(test TestCase) *TestCase {
 	return &copy
 }
 
-func grafanaExploreURL(baseURL, datasourceUID, logql, start, end string) string {
+func grafanaExploreURL(baseURL, orgID, datasourceUID, logql, start, end string) string {
 	baseURL = strings.TrimSpace(baseURL)
+	orgID = firstNonEmpty(strings.TrimSpace(orgID), "1")
 	datasourceUID = strings.TrimSpace(datasourceUID)
 	logql = strings.TrimSpace(logql)
 	if baseURL == "" || datasourceUID == "" || logql == "" {
@@ -641,7 +642,7 @@ func grafanaExploreURL(baseURL, datasourceUID, logql, start, end string) string 
 
 	query := parsed.Query()
 	if query.Get("orgId") == "" {
-		query.Set("orgId", "1")
+		query.Set("orgId", orgID)
 	}
 	query.Set("schemaVersion", "1")
 
@@ -706,15 +707,44 @@ func queryGrafanaLogs(ctx context.Context, client *mcpHTTPClient, datasourceUID,
 		context.Truncated = result.Metadata.ResultsTruncated
 	}
 	for _, entry := range result.Data {
-		context.Entries = append(context.Entries, GrafanaLogEntry{
+		logEntry := GrafanaLogEntry{
 			Timestamp:          entry.Timestamp,
 			Line:               truncate(cleanOneLine(entry.Line), 800),
 			Labels:             entry.Labels,
 			StructuredMetadata: entry.StructuredMetadata,
 			Parsed:             entry.Parsed,
-		})
+		}
+		if isGrafanaSelfObservabilityLog(logEntry) {
+			context.FilteredLineCount++
+			continue
+		}
+		context.Entries = append(context.Entries, logEntry)
+	}
+	if context.FilteredLineCount > 0 {
+		context.LineCount = len(context.Entries)
 	}
 	return context
+}
+
+func isGrafanaSelfObservabilityLog(entry GrafanaLogEntry) bool {
+	line := strings.ToLower(entry.Line)
+	if strings.Contains(line, "/loki/api/v1/query_range") ||
+		strings.Contains(line, "/api/datasources/proxy/") ||
+		strings.Contains(line, "query_range?") {
+		return true
+	}
+
+	namespace := strings.ToLower(entry.Labels["namespace"])
+	pod := strings.ToLower(entry.Labels["pod"])
+	container := strings.ToLower(entry.Labels["container"])
+	isGrafanaComponent := strings.Contains(namespace, "grafana") ||
+		strings.Contains(pod, "grafana") ||
+		strings.Contains(container, "grafana") ||
+		strings.Contains(line, "mcp-grafana")
+	return isGrafanaComponent &&
+		(strings.Contains(line, "query=") ||
+			strings.Contains(line, "logql") ||
+			strings.Contains(line, "query_loki_logs"))
 }
 
 func grafanaLogTimeRange(config Config, now time.Time) (string, string, error) {

@@ -137,6 +137,9 @@ func renderGrafanaLogSummary(sb *strings.Builder, enrichment *GrafanaLogEnrichme
 		if context.GrafanaExploreURL != "" {
 			sb.WriteString(fmt.Sprintf("[Open query in Grafana](%s)\n\n", context.GrafanaExploreURL))
 		}
+		if context.FilteredLineCount > 0 {
+			sb.WriteString(fmt.Sprintf("_Filtered %d Grafana/MCP self-observability log line(s) before analysis._\n\n", context.FilteredLineCount))
+		}
 		if context.Error != "" {
 			sb.WriteString(fmt.Sprintf("> Grafana MCP query failed: `%s`\n\n", escapeMarkdown(truncate(cleanOneLine(context.Error), 300))))
 			continue

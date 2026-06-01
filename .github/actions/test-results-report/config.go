@@ -32,6 +32,7 @@ type Config struct {
 	ClaudeToken           string
 	EnableGrafanaLogs     bool
 	GrafanaURL            string
+	GrafanaOrgID          string
 	GrafanaMCPEndpoint    string
 	GrafanaLokiUID        string
 	GrafanaLokiName       string
@@ -97,6 +98,7 @@ func configFromEnv(env map[string]string) Config {
 		ClaudeToken:           firstNonEmpty(env["INPUT_CLAUDE_TOKEN"], env["CLAUDE_CODE_OAUTH_TOKEN"]),
 		EnableGrafanaLogs:     parseBoolDefault(env["INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT"], false),
 		GrafanaURL:            firstNonEmpty(env["INPUT_GRAFANA_URL"], env["GRAFANA_REPORT_URL"], env["GRAFANA_URL"]),
+		GrafanaOrgID:          firstNonEmpty(env["INPUT_GRAFANA_ORG_ID"], env["GRAFANA_ORG_ID"], "1"),
 		GrafanaMCPEndpoint:    firstNonEmpty(env["INPUT_GRAFANA_MCP_ENDPOINT"], env["GRAFANA_MCP_ENDPOINT"]),
 		GrafanaLokiUID:        env["INPUT_GRAFANA_LOKI_DATASOURCE_UID"],
 		GrafanaLokiName:       env["INPUT_GRAFANA_LOKI_DATASOURCE_NAME"],
