@@ -282,16 +282,10 @@ func TestRunGrafanaLogEnrichmentSkipsMCPWhenAIPlansNoQueries(t *testing.T) {
 		runGrafanaLogQueryPlanning = previousPlanner
 	}()
 
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		t.Fatalf("MCP should not be called when AI planning returns no queries; got %s", request.URL.Path)
-	}))
-	defer server.Close()
-
 	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
-		EnableGrafanaLogs:  true,
-		EnableAIAnalysis:   true,
-		ClaudeToken:        "test-token",
-		GrafanaMCPEndpoint: server.URL + "/mcp",
+		EnableGrafanaLogs: true,
+		EnableAIAnalysis:  true,
+		ClaudeToken:       "test-token",
 	}, Analysis{
 		Failures: []TestCase{{
 			ID:      "visual-only",

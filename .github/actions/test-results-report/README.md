@@ -60,11 +60,12 @@ At a high level, the action keeps orchestration inside the GitHub workflow runne
 1. Read the current test report from `test-results-path`.
 2. Optionally read the previous report when `compare-with-previous` is enabled or auto-detected.
 3. Analyze current failures, skips, deltas, and representative failures.
-4. Optionally enrich failures with Grafana MCP logs.
-5. Optionally run Claude to consolidate the final failure analysis.
-6. Write the GitHub step summary.
-7. Optionally send Slack.
-8. Emit GitHub action outputs.
+4. Optionally ask Claude which failures, if any, need backend log lookup.
+5. Query Grafana MCP only when Claude planned backend queries or manual LogQL was configured.
+6. Optionally run Claude to consolidate the final failure analysis.
+7. Write the GitHub step summary.
+8. Optionally send Slack.
+9. Emit GitHub action outputs.
 
 ```mermaid
 flowchart TD
@@ -75,14 +76,15 @@ flowchart TD
   D --> E
   E --> F{Grafana enrichment enabled and failures exist?}
   F -- no --> K{AI analysis enabled?}
-  F -- yes --> G[Resolve or start Grafana MCP endpoint]
-  G --> H{AI analysis and Claude token available?}
-  H -- yes --> I[Claude plans backend-related LogQL queries]
-  H -- no --> J[Use manual grafana-logql or template queries]
-  I --> L{Planned or manual queries available?}
-  J --> L
-  L -- yes --> M[Query Loki through Grafana MCP]
+  F -- yes --> H{AI analysis and Claude token available?}
+  H -- yes --> I[Claude inspects failures and plans backend LogQL only when needed]
+  H -- no --> J{Manual grafana-logql or template configured?}
+  I --> L{Backend lookup required or manual queries configured?}
+  J -- yes --> G[Resolve or start Grafana MCP endpoint]
+  J -- no --> K
   L -- no --> K
+  L -- yes --> G
+  G --> M[Query Loki through Grafana MCP]
   M --> N[Attach log context to analysis]
   N --> K
   K -- yes --> O[Claude generates final report from tests and logs]
@@ -96,7 +98,7 @@ flowchart TD
   T --> U[End action]
 ```
 
-Grafana enrichment is fail-open from the report perspective: if the MCP endpoint, datasource discovery, query planning, or Loki query fails, the action logs a warning and continues with the normal test report unless a lower-level workflow step fails before the reporter runs.
+Grafana enrichment is fail-open from the report perspective. If Claude decides none of the failures need backend logs, the reporter skips Grafana entirely. If the MCP endpoint, datasource discovery, query planning, or Loki query fails, the action logs a warning and continues with the normal test report unless a lower-level workflow step fails before the reporter runs.
 
 ## Grafana MCP Log Enrichment
 
@@ -112,11 +114,11 @@ Grafana decision logic:
 | --- | --- |
 | `enable-grafana-log-enrichment` is not `true` | Skip Grafana entirely |
 | No failed tests are present | Skip Grafana entirely |
-| No `grafana-mcp-endpoint` is provided and the action cannot start `mcp-grafana` | Log a warning and continue without logs |
-| AI analysis is enabled and `claude-token` is available | Ask Claude for backend-related LogQL query plans first |
+| AI analysis is enabled and `claude-token` is available | Ask Claude to decide which failures, if any, need backend-related LogQL lookups |
 | Claude returns no planned queries and no manual queries are configured | Continue without Grafana log context |
 | Claude query planning fails and manual queries are configured | Log a warning and run the manual queries |
 | Claude query planning fails and no manual queries are configured | Log a warning and continue without logs |
+| Backend or manual queries exist but no `grafana-mcp-endpoint` is available | Log a warning and continue without logs |
 | `grafana-logql` is provided | Run it once for the whole report |
 | `grafana-logql-template` is provided | Render and run it once per representative failed test, capped by `grafana-log-max-failures` |
 | Loki returns matching lines | Add query, reason, labels, and log lines to the GitHub summary and final Claude input |

@@ -79,9 +79,6 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 	if len(analysis.Failures) == 0 {
 		return nil, nil
 	}
-	if config.GrafanaMCPEndpoint == "" {
-		return nil, fmt.Errorf("grafana log enrichment is enabled but no grafana-mcp-endpoint/GRAFANA_MCP_ENDPOINT is available")
-	}
 
 	hasConfiguredQueries := strings.TrimSpace(config.GrafanaLogQL) != "" || strings.TrimSpace(config.GrafanaLogQLTemplate) != ""
 	var plannedQueries []GrafanaLogPlannedQuery
@@ -102,6 +99,9 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 			return nil, nil
 		}
 		return nil, fmt.Errorf("grafana log enrichment is enabled but neither AI query planning nor grafana-logql/grafana-logql-template is available")
+	}
+	if config.GrafanaMCPEndpoint == "" {
+		return nil, fmt.Errorf("grafana log enrichment has backend log queries but no grafana-mcp-endpoint/GRAFANA_MCP_ENDPOINT is available")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
