@@ -475,6 +475,12 @@ func TestGrafanaSelfObservabilityLogFilter(t *testing.T) {
 	}) {
 		t.Fatal("expected Grafana query echo log to be filtered")
 	}
+	if !isGrafanaSelfObservabilityLog(GrafanaLogEntry{
+		Line:   `level=info ts=2026-06-01T20:59:22.189185149Z caller=metrics.go:237 component=querier org_id=fake latency=fast query="{namespace=~\".+\"} |~ \"mcp-verification-request-26761890035\"" query_hash=1493516980 query_type=filter`,
+		Labels: map[string]string{"namespace": "loki"},
+	}) {
+		t.Fatal("expected Loki querier query metrics log to be filtered")
+	}
 	if isGrafanaSelfObservabilityLog(GrafanaLogEntry{
 		Line:   "file-storage controller failed request_id=mcp-verification-request-26761890035 with internal_error",
 		Labels: map[string]string{"namespace": "file-storage", "pod": "file-storage-api-123"},

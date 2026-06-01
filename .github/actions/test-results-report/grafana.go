@@ -733,18 +733,30 @@ func isGrafanaSelfObservabilityLog(entry GrafanaLogEntry) bool {
 		strings.Contains(line, "query_range?") {
 		return true
 	}
+	if (strings.Contains(line, "component=querier") ||
+		strings.Contains(line, "component=query-frontend") ||
+		strings.Contains(line, "caller=metrics.go")) &&
+		(strings.Contains(line, " query=") ||
+			strings.Contains(line, " query_hash=") ||
+			strings.Contains(line, " query_type=")) {
+		return true
+	}
 
 	namespace := strings.ToLower(entry.Labels["namespace"])
 	pod := strings.ToLower(entry.Labels["pod"])
 	container := strings.ToLower(entry.Labels["container"])
-	isGrafanaComponent := strings.Contains(namespace, "grafana") ||
+	isObservabilityComponent := strings.Contains(namespace, "grafana") ||
+		strings.Contains(namespace, "loki") ||
 		strings.Contains(pod, "grafana") ||
+		strings.Contains(pod, "loki") ||
 		strings.Contains(container, "grafana") ||
+		strings.Contains(container, "loki") ||
 		strings.Contains(line, "mcp-grafana")
-	return isGrafanaComponent &&
+	return isObservabilityComponent &&
 		(strings.Contains(line, "query=") ||
 			strings.Contains(line, "logql") ||
-			strings.Contains(line, "query_loki_logs"))
+			strings.Contains(line, "query_loki_logs") ||
+			strings.Contains(line, "query_hash="))
 }
 
 func grafanaLogTimeRange(config Config, now time.Time) (string, string, error) {
