@@ -379,9 +379,14 @@ var _ = Describe("Test Results Report", func() {
 					Expect(analysis.Failures[0].Name).To(Equal("uploads file"))
 					Expect(analysis.Failures[1].Name).To(Equal("button color"))
 					return []GrafanaLogPlannedQuery{{
-						FailureRef: "f1",
-						LogQL:      `{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`,
-						Reason:     "The UI file upload failed after a backend storage API 500.",
+						FailureRef:    "f1",
+						TestName:      "uploads file",
+						BackendArea:   "file-storage",
+						ExpectedError: "POST /api/storage returned 500 for claim-123",
+						SearchTerms:   []string{"claim-123", "file-storage", "500"},
+						LogQL:         `{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`,
+						Reason:        "The UI file upload failed after a backend storage API 500.",
+						Confidence:    "medium",
 					}}, nil
 				}
 				runAIAnalysis = func(_ context.Context, receivedConfig Config, analysis Analysis) (*AIAnalysis, error) {
@@ -391,6 +396,13 @@ var _ = Describe("Test Results Report", func() {
 					logContext := analysis.GrafanaLogs.Contexts[0]
 					Expect(logContext.QueryLabel).To(Equal("AI-planned backend query"))
 					Expect(logContext.Reason).To(ContainSubstring("storage API 500"))
+					Expect(logContext.FailureRef).To(Equal("f1"))
+					Expect(logContext.TestName).To(Equal("uploads file"))
+					Expect(logContext.BackendArea).To(Equal("file-storage"))
+					Expect(logContext.ExpectedError).To(Equal("POST /api/storage returned 500 for claim-123"))
+					Expect(logContext.SearchTerms).To(ConsistOf("claim-123", "file-storage", "500"))
+					Expect(logContext.Confidence).To(Equal("medium"))
+					Expect(logContext.GrafanaExploreURL).To(ContainSubstring("/explore?"))
 					Expect(logContext.Test).NotTo(BeNil())
 					Expect(logContext.Test.Name).To(Equal("uploads file"))
 					Expect(logContext.Entries).To(HaveLen(1))
@@ -411,6 +423,7 @@ var _ = Describe("Test Results Report", func() {
 				config.EnableAIAnalysis = true
 				config.ClaudeToken = "test-claude-token"
 				config.EnableGrafanaLogs = true
+				config.GrafanaURL = "https://grafana.example.com"
 				config.GrafanaMCPEndpoint = mcpServer.URL + "/mcp"
 				config.GrafanaLogStart = "2026-06-01T13:00:00Z"
 				config.GrafanaLogEnd = "2026-06-01T14:00:00Z"
@@ -427,6 +440,8 @@ var _ = Describe("Test Results Report", func() {
 				Expect(summary).To(ContainSubstring("### Grafana Log Context"))
 				Expect(summary).To(ContainSubstring("AI-planned backend query: uploads file"))
 				Expect(summary).To(ContainSubstring("The UI file upload failed after a backend storage API 500."))
+				Expect(summary).To(ContainSubstring("Exact failure error: `POST /api/storage returned 500 for claim-123`"))
+				Expect(summary).To(ContainSubstring("[Open query in Grafana]"))
 				Expect(summary).To(ContainSubstring("file-storage controller failed claim-123 with backend 500"))
 				Expect(summary).To(ContainSubstring("AI report used Grafana backend evidence for file storage."))
 				Expect(summary).NotTo(ContainSubstring("### Failed Tests"))

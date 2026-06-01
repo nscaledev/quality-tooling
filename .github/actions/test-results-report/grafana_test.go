@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRenderGrafanaLogQLTemplate(t *testing.T) {
@@ -163,9 +165,14 @@ func TestRunGrafanaLogEnrichmentUsesAIPlannedQueries(t *testing.T) {
 				Reason:     "This hallucinated failure ref should be ignored.",
 			},
 			{
-				FailureRef: "f1",
-				LogQL:      `{namespace=~".+"} |~ "(?i)(file-storage|claim-123)"`,
-				Reason:     "The UI upload flow failed after the backend returned a storage claim error.",
+				FailureRef:    "f1",
+				TestName:      "uploads file",
+				BackendArea:   "file-storage",
+				ExpectedError: "POST /api/storage returned 500 for claim-123",
+				SearchTerms:   []string{"claim-123", "file-storage", "500"},
+				LogQL:         `{namespace=~".+"} |~ "(?i)(file-storage|claim-123)"`,
+				Reason:        "The UI upload flow failed after the backend returned a storage claim error.",
+				Confidence:    "high",
 			},
 		}, nil
 	}
@@ -234,6 +241,7 @@ func TestRunGrafanaLogEnrichmentUsesAIPlannedQueries(t *testing.T) {
 		EnableGrafanaLogs:     true,
 		EnableAIAnalysis:      true,
 		ClaudeToken:           "test-token",
+		GrafanaURL:            "https://grafana.example.com",
 		GrafanaMCPEndpoint:    server.URL + "/mcp",
 		GrafanaLogStart:       "2026-06-01T13:00:00Z",
 		GrafanaLogEnd:         "2026-06-01T14:00:00Z",
@@ -268,8 +276,180 @@ func TestRunGrafanaLogEnrichmentUsesAIPlannedQueries(t *testing.T) {
 	if context.QueryLabel != "AI-planned backend query" || !strings.Contains(context.Reason, "storage claim") {
 		t.Fatalf("unexpected planned query metadata: %+v", context)
 	}
+	if context.FailureRef != "f1" ||
+		context.TestName != "uploads file" ||
+		context.BackendArea != "file-storage" ||
+		context.ExpectedError != "POST /api/storage returned 500 for claim-123" ||
+		context.Confidence != "high" ||
+		!strings.Contains(context.GrafanaExploreURL, "/explore?") {
+		t.Fatalf("planned query metadata was not attached: %+v", context)
+	}
+	if len(context.SearchTerms) != 3 {
+		t.Fatalf("search terms were not attached: %+v", context.SearchTerms)
+	}
 	if len(context.Entries) != 1 || !strings.Contains(context.Entries[0].Line, "claim-123") {
 		t.Fatalf("unexpected log entries: %+v", context.Entries)
+	}
+}
+
+func TestRunGrafanaLogEnrichmentQueriesPlannedFailuresInParallel(t *testing.T) {
+	previousPlanner := runGrafanaLogQueryPlanning
+	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
+		return []GrafanaLogPlannedQuery{
+			{
+				FailureRef: "f1",
+				TestName:   "uploads file",
+				LogQL:      `{namespace=~".+"} |= "claim-123"`,
+				Reason:     "File upload needs backend log evidence.",
+			},
+			{
+				FailureRef: "f2",
+				TestName:   "creates instance",
+				LogQL:      `{namespace=~".+"} |= "instance-456"`,
+				Reason:     "Instance creation needs backend log evidence.",
+			},
+		}, nil
+	}
+	defer func() {
+		runGrafanaLogQueryPlanning = previousPlanner
+	}()
+
+	queryStarted := make(chan string, 2)
+	releaseQueries := make(chan struct{})
+	var activeQueries atomic.Int32
+	var maxActiveQueries atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var rpc struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
+			t.Fatalf("decode rpc request: %v", err)
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Mcp-Session-Id", "test-session")
+
+		switch rpc.Method {
+		case "initialize":
+			writeMCPResponse(t, writer, rpc.ID, map[string]any{
+				"protocolVersion": mcpProtocolVersion,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "fake-grafana-mcp"},
+			})
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			var params struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			}
+			if err := json.Unmarshal(rpc.Params, &params); err != nil {
+				t.Fatalf("decode tool params: %v", err)
+			}
+			switch params.Name {
+			case "list_datasources":
+				writeMCPToolResponse(t, writer, rpc.ID, `{"datasources":[{"uid":"loki-dev","name":"Loki","type":"loki","isDefault":true}]}`)
+			case "query_loki_logs":
+				var args map[string]any
+				if err := json.Unmarshal(params.Arguments, &args); err != nil {
+					t.Fatalf("decode query args: %v", err)
+				}
+				current := activeQueries.Add(1)
+				for {
+					maximum := maxActiveQueries.Load()
+					if current <= maximum || maxActiveQueries.CompareAndSwap(maximum, current) {
+						break
+					}
+				}
+				queryStarted <- args["logql"].(string)
+				<-releaseQueries
+				activeQueries.Add(-1)
+				writeMCPToolResponse(t, writer, rpc.ID, `{"data":[{"timestamp":"1780322400000000000","line":"parallel query result","labels":{"namespace":"test"}}],"metadata":{"linesReturned":1,"resultsTruncated":false}}`)
+			default:
+				t.Fatalf("unexpected tool %s", params.Name)
+			}
+		default:
+			t.Fatalf("unexpected method %s", rpc.Method)
+		}
+	}))
+	defer server.Close()
+
+	type result struct {
+		enrichment *GrafanaLogEnrichment
+		err        error
+	}
+	done := make(chan result, 1)
+	go func() {
+		enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
+			EnableGrafanaLogs:     true,
+			EnableAIAnalysis:      true,
+			ClaudeToken:           "test-token",
+			GrafanaMCPEndpoint:    server.URL + "/mcp",
+			GrafanaLogStart:       "2026-06-01T13:00:00Z",
+			GrafanaLogEnd:         "2026-06-01T14:00:00Z",
+			GrafanaLogLimit:       5,
+			GrafanaLogMaxFailures: 2,
+			GrafanaLogConcurrency: 2,
+		}, Analysis{
+			Failures: []TestCase{{
+				ID:   "file-upload",
+				Name: "uploads file",
+			}, {
+				ID:   "instance-create",
+				Name: "creates instance",
+			}},
+		})
+		done <- result{enrichment: enrichment, err: err}
+	}()
+
+	startedCount := 0
+	for startedCount < 2 {
+		select {
+		case <-queryStarted:
+			startedCount++
+		case <-time.After(500 * time.Millisecond):
+			close(releaseQueries)
+			received := <-done
+			if received.err != nil {
+				t.Fatalf("runGrafanaLogEnrichment returned error after timeout: %v", received.err)
+			}
+			t.Fatalf("expected two parallel query_loki_logs calls before releasing responses, saw %d with enrichment %+v", startedCount, received.enrichment)
+		}
+	}
+	close(releaseQueries)
+
+	received := <-done
+	if received.err != nil {
+		t.Fatalf("runGrafanaLogEnrichment returned error: %v", received.err)
+	}
+	if received.enrichment == nil || len(received.enrichment.Contexts) != 2 {
+		t.Fatalf("unexpected enrichment: %+v", received.enrichment)
+	}
+	if maxActiveQueries.Load() < 2 {
+		t.Fatalf("queries did not overlap, max active = %d", maxActiveQueries.Load())
+	}
+}
+
+func TestGrafanaExploreURL(t *testing.T) {
+	t.Parallel()
+
+	lookup := grafanaExploreURL("https://grafana.example.com/grafana?orgId=7", "loki-dev", `{namespace="file-storage"} |= "claim-123"`, "2026-06-01T13:00:00Z", "2026-06-01T14:00:00Z")
+	parsed, err := url.Parse(lookup)
+	if err != nil {
+		t.Fatalf("parse lookup URL: %v", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "grafana.example.com" || parsed.Path != "/grafana/explore" {
+		t.Fatalf("unexpected lookup URL: %s", lookup)
+	}
+	if parsed.Query().Get("orgId") != "7" || parsed.Query().Get("schemaVersion") != "1" {
+		t.Fatalf("unexpected lookup query params: %s", lookup)
+	}
+	panes := parsed.Query().Get("panes")
+	if !strings.Contains(panes, "loki-dev") || !strings.Contains(panes, "claim-123") || !strings.Contains(panes, "2026-06-01T13:00:00Z") {
+		t.Fatalf("lookup panes missing expected query state: %s", panes)
 	}
 }
 

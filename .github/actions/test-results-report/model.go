@@ -70,14 +70,21 @@ type GrafanaLogEnrichment struct {
 }
 
 type GrafanaLogContext struct {
-	Test       *TestCase
-	Query      string
-	Entries    []GrafanaLogEntry
-	LineCount  int
-	Truncated  bool
-	Error      string
-	QueryLabel string
-	Reason     string
+	Test              *TestCase
+	FailureRef        string
+	TestName          string
+	BackendArea       string
+	ExpectedError     string
+	SearchTerms       []string
+	Confidence        string
+	Query             string
+	GrafanaExploreURL string
+	Entries           []GrafanaLogEntry
+	LineCount         int
+	Truncated         bool
+	Error             string
+	QueryLabel        string
+	Reason            string
 }
 
 type GrafanaLogEntry struct {

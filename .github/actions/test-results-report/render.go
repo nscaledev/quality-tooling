@@ -132,7 +132,11 @@ func renderGrafanaLogSummary(sb *strings.Builder, enrichment *GrafanaLogEnrichme
 		if context.Reason != "" {
 			sb.WriteString(fmt.Sprintf("_Reason: %s_\n\n", escapeMarkdown(truncate(cleanOneLine(context.Reason), 300))))
 		}
+		renderGrafanaLogMetadata(sb, context)
 		sb.WriteString(fmt.Sprintf("```logql\n%s\n```\n\n", context.Query))
+		if context.GrafanaExploreURL != "" {
+			sb.WriteString(fmt.Sprintf("[Open query in Grafana](%s)\n\n", context.GrafanaExploreURL))
+		}
 		if context.Error != "" {
 			sb.WriteString(fmt.Sprintf("> Grafana MCP query failed: `%s`\n\n", escapeMarkdown(truncate(cleanOneLine(context.Error), 300))))
 			continue
@@ -159,6 +163,35 @@ func renderGrafanaLogSummary(sb *strings.Builder, enrichment *GrafanaLogEnrichme
 			sb.WriteString("| _Results truncated by MCP limit_ | | |\n")
 		}
 		sb.WriteString("\n")
+	}
+}
+
+func renderGrafanaLogMetadata(sb *strings.Builder, context GrafanaLogContext) {
+	var metadata []string
+	if context.FailureRef != "" {
+		metadata = append(metadata, fmt.Sprintf("failure ref `%s`", escapeMarkdown(context.FailureRef)))
+	}
+	if context.TestName != "" {
+		metadata = append(metadata, fmt.Sprintf("test `%s`", escapeMarkdown(truncate(cleanOneLine(context.TestName), 120))))
+	}
+	if context.BackendArea != "" {
+		metadata = append(metadata, fmt.Sprintf("backend `%s`", escapeMarkdown(truncate(cleanOneLine(context.BackendArea), 80))))
+	}
+	if context.Confidence != "" {
+		metadata = append(metadata, fmt.Sprintf("confidence `%s`", escapeMarkdown(context.Confidence)))
+	}
+	if len(metadata) > 0 {
+		sb.WriteString(fmt.Sprintf("_Lookup: %s._\n\n", strings.Join(metadata, ", ")))
+	}
+	if context.ExpectedError != "" {
+		sb.WriteString(fmt.Sprintf("_Exact failure error: `%s`_\n\n", escapeMarkdown(truncate(cleanOneLine(context.ExpectedError), 240))))
+	}
+	if len(context.SearchTerms) > 0 {
+		terms := make([]string, 0, len(context.SearchTerms))
+		for _, term := range context.SearchTerms {
+			terms = append(terms, escapeMarkdown(term))
+		}
+		sb.WriteString(fmt.Sprintf("_Search terms: `%s`_\n\n", strings.Join(terms, "`, `")))
 	}
 }
 

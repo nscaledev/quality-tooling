@@ -17,9 +17,14 @@ type AIAnalysis struct {
 }
 
 type GrafanaLogPlannedQuery struct {
-	FailureRef string `json:"failure_ref"`
-	LogQL      string `json:"logql"`
-	Reason     string `json:"reason,omitempty"`
+	FailureRef    string   `json:"failure_ref"`
+	TestName      string   `json:"test_name,omitempty"`
+	BackendArea   string   `json:"backend_area,omitempty"`
+	ExpectedError string   `json:"expected_error,omitempty"`
+	SearchTerms   []string `json:"search_terms,omitempty"`
+	LogQL         string   `json:"logql"`
+	Reason        string   `json:"reason,omitempty"`
+	Confidence    string   `json:"confidence,omitempty"`
 }
 
 type grafanaLogQueryPlanResponse struct {
@@ -163,16 +168,23 @@ func grafanaLogQueryPlanningPrompt() string {
 Return strict JSON only. Do not include markdown, prose, or code fences.
 
 Expected output:
-{"queries":[{"failure_ref":"f1","logql":"{namespace=~\".+\"} |~ \"(?i)(resource-id|api-error)\"","reason":"Backend API returned an error during the UI flow"}]}
+{"queries":[{"failure_ref":"f1","test_name":"uploads file","backend_area":"file-storage","expected_error":"POST /api/storage returned 500 for claim-123","search_terms":["claim-123","file-storage","500"],"logql":"{namespace=~\".+\"} |~ \"(?i)(claim-123|file-storage|500)\"","reason":"The failed UI upload crossed the file storage API and includes a backend 500 signature, so Loki evidence can confirm whether file storage emitted the same error.","confidence":"medium"}]}
 
 Rules:
 - Inspect the failed test names, suites, locations, error messages, captured output, environment, and previous-result comparison.
 - Only create queries for failures that appear backend-related or need backend evidence to confirm the likely cause.
 - Do not query for purely client-side assertion failures when there is no backend signal.
 - Use the exact failure_ref values from the input.
+- test_name must match the input Test value for that failure_ref.
+- expected_error must be the exact error message or shortest exact error signature from the failure evidence; leave it empty when there is no exact backend-looking error.
+- search_terms must contain only identifiers, status codes, API error strings, resource names, or component names copied from the failure evidence.
+- backend_area should name the likely backend component or area when the evidence supports one; otherwise use "unknown".
+- reason must be one consolidated sentence explaining why this specific failure needs or does not need backend log evidence.
+- confidence must be one of "high", "medium", or "low".
 - Prefer precise IDs, request IDs, UUIDs, resource names, status codes, API error strings, and backend component names found in the failure evidence.
 - For cross-component UI suites, do not assume a single backend component. Use a broad Kubernetes label selector such as {namespace=~".+"} unless the failure evidence clearly points to a narrower namespace or service.
 - Keep each LogQL query readable and bounded for the supplied time window. Do not request writes or mutations.
+- Do not include Grafana URLs in this JSON. The reporter generates grafana_explore_url deterministically after it knows the datasource, query, and time range.
 - If no backend-related log lookup is justified, return {"queries":[]}.`
 }
 
@@ -238,14 +250,45 @@ func parseGrafanaLogQueryPlan(output string) ([]GrafanaLogPlannedQuery, error) {
 	var queries []GrafanaLogPlannedQuery
 	for _, query := range response.Queries {
 		query.FailureRef = strings.TrimSpace(query.FailureRef)
+		query.TestName = strings.TrimSpace(query.TestName)
+		query.BackendArea = strings.TrimSpace(query.BackendArea)
+		query.ExpectedError = strings.TrimSpace(query.ExpectedError)
+		query.SearchTerms = cleanStringSlice(query.SearchTerms, 8)
 		query.LogQL = strings.TrimSpace(query.LogQL)
 		query.Reason = strings.TrimSpace(query.Reason)
+		query.Confidence = normalizeGrafanaConfidence(query.Confidence)
 		if query.FailureRef == "" || query.LogQL == "" {
 			continue
 		}
 		queries = append(queries, query)
 	}
 	return queries, nil
+}
+
+func cleanStringSlice(values []string, limit int) []string {
+	seen := map[string]bool{}
+	var cleaned []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		cleaned = append(cleaned, value)
+		if limit > 0 && len(cleaned) >= limit {
+			break
+		}
+	}
+	return cleaned
+}
+
+func normalizeGrafanaConfidence(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "high", "medium", "low":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
 }
 
 func extractJSONObject(output string) string {
@@ -359,6 +402,27 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 		sb.WriteString(fmt.Sprintf("Query: %s\n", context.Query))
 		if context.Reason != "" {
 			sb.WriteString(fmt.Sprintf("Query reason: %s\n", truncate(cleanOneLine(context.Reason), 500)))
+		}
+		if context.FailureRef != "" {
+			sb.WriteString(fmt.Sprintf("Failure ref: %s\n", context.FailureRef))
+		}
+		if context.TestName != "" {
+			sb.WriteString(fmt.Sprintf("Planned test: %s\n", truncate(cleanOneLine(context.TestName), 500)))
+		}
+		if context.BackendArea != "" {
+			sb.WriteString(fmt.Sprintf("Backend area: %s\n", truncate(cleanOneLine(context.BackendArea), 200)))
+		}
+		if context.ExpectedError != "" {
+			sb.WriteString(fmt.Sprintf("Exact failure error: %s\n", truncate(cleanOneLine(context.ExpectedError), 500)))
+		}
+		if len(context.SearchTerms) > 0 {
+			sb.WriteString(fmt.Sprintf("Search terms: %s\n", strings.Join(context.SearchTerms, ", ")))
+		}
+		if context.Confidence != "" {
+			sb.WriteString(fmt.Sprintf("Lookup confidence: %s\n", context.Confidence))
+		}
+		if context.GrafanaExploreURL != "" {
+			sb.WriteString(fmt.Sprintf("Grafana lookup URL: %s\n", context.GrafanaExploreURL))
 		}
 		if context.Test != nil {
 			sb.WriteString(fmt.Sprintf("Related test: %s", firstNonEmpty(context.Test.Name, context.Test.ID)))

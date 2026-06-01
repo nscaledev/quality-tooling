@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,6 +21,8 @@ const mcpProtocolVersion = "2024-11-05"
 type mcpHTTPClient struct {
 	endpoint   string
 	httpClient *http.Client
+	mu         sync.Mutex
+	initMu     sync.Mutex
 	nextID     int
 	sessionID  string
 	ready      bool
@@ -70,6 +74,19 @@ type queryLokiLogsResult struct {
 type grafanaFailureCandidate struct {
 	Ref  string
 	Test TestCase
+}
+
+type grafanaLogQueryJob struct {
+	Test          *TestCase
+	FailureRef    string
+	TestName      string
+	BackendArea   string
+	ExpectedError string
+	SearchTerms   []string
+	LogQL         string
+	Label         string
+	Reason        string
+	Confidence    string
 }
 
 func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analysis) (*GrafanaLogEnrichment, error) {
@@ -129,6 +146,7 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 		EndRFC3339:     end,
 	}
 
+	var jobs []grafanaLogQueryJob
 	if len(plannedQueries) > 0 {
 		candidatesByRef := grafanaFailureCandidatesByRef(analysis, config.GrafanaLogMaxFailures)
 		for _, planned := range plannedQueries {
@@ -136,23 +154,44 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 			if !ok {
 				continue
 			}
-			test := candidate
-			enrichment.Contexts = append(enrichment.Contexts, queryGrafanaLogs(ctx, client, uid, planned.LogQL, start, end, config.GrafanaLogLimit, &test, "AI-planned backend query", planned.Reason))
+			jobs = append(jobs, grafanaLogQueryJob{
+				Test:          testCasePointer(candidate),
+				FailureRef:    planned.FailureRef,
+				TestName:      firstNonEmpty(planned.TestName, candidate.Name, candidate.ID),
+				BackendArea:   planned.BackendArea,
+				ExpectedError: planned.ExpectedError,
+				SearchTerms:   planned.SearchTerms,
+				LogQL:         planned.LogQL,
+				Label:         "AI-planned backend query",
+				Reason:        planned.Reason,
+				Confidence:    planned.Confidence,
+			})
 		}
 	}
 
 	if query := strings.TrimSpace(config.GrafanaLogQL); query != "" {
-		enrichment.Contexts = append(enrichment.Contexts, queryGrafanaLogs(ctx, client, uid, query, start, end, config.GrafanaLogLimit, nil, "General query", "Caller-provided LogQL query"))
+		jobs = append(jobs, grafanaLogQueryJob{
+			LogQL:  query,
+			Label:  "General query",
+			Reason: "Caller-provided LogQL query",
+		})
 	}
 
 	if template := strings.TrimSpace(config.GrafanaLogQLTemplate); template != "" {
 		for _, failure := range selectFailuresForGrafanaLogs(analysis, config.GrafanaLogMaxFailures) {
-			test := failure
 			query := renderGrafanaLogQLTemplate(template, failure, config)
-			enrichment.Contexts = append(enrichment.Contexts, queryGrafanaLogs(ctx, client, uid, query, start, end, config.GrafanaLogLimit, &test, "Failure query", "Caller-provided per-failure LogQL template"))
+			jobs = append(jobs, grafanaLogQueryJob{
+				Test:          testCasePointer(failure),
+				TestName:      firstNonEmpty(failure.Name, failure.ID),
+				ExpectedError: failure.Message,
+				LogQL:         query,
+				Label:         "Failure query",
+				Reason:        "Caller-provided per-failure LogQL template",
+			})
 		}
 	}
 
+	enrichment.Contexts = runGrafanaLogQueryJobs(ctx, client, uid, start, end, config, jobs)
 	return enrichment, nil
 }
 
@@ -166,7 +205,13 @@ func newMCPHTTPClient(endpoint string) *mcpHTTPClient {
 }
 
 func (client *mcpHTTPClient) initialize(ctx context.Context) error {
-	if client.ready {
+	client.initMu.Lock()
+	defer client.initMu.Unlock()
+
+	client.mu.Lock()
+	ready := client.ready
+	client.mu.Unlock()
+	if ready {
 		return nil
 	}
 
@@ -186,7 +231,9 @@ func (client *mcpHTTPClient) initialize(ctx context.Context) error {
 		return fmt.Errorf("send grafana MCP initialized notification: %w", err)
 	}
 
+	client.mu.Lock()
 	client.ready = true
+	client.mu.Unlock()
 	return nil
 }
 
@@ -221,10 +268,14 @@ func (client *mcpHTTPClient) callTool(ctx context.Context, name string, argument
 }
 
 func (client *mcpHTTPClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	client.mu.Lock()
 	client.nextID++
+	id := client.nextID
+	client.mu.Unlock()
+
 	payload := map[string]any{
 		"jsonrpc": "2.0",
-		"id":      client.nextID,
+		"id":      id,
 		"method":  method,
 		"params":  params,
 	}
@@ -264,8 +315,11 @@ func (client *mcpHTTPClient) post(ctx context.Context, payload map[string]any, e
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
 	request.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
-	if client.sessionID != "" {
-		request.Header.Set("Mcp-Session-Id", client.sessionID)
+	client.mu.Lock()
+	sessionID := client.sessionID
+	client.mu.Unlock()
+	if sessionID != "" {
+		request.Header.Set("Mcp-Session-Id", sessionID)
 	}
 
 	response, err := client.httpClient.Do(request)
@@ -275,7 +329,9 @@ func (client *mcpHTTPClient) post(ctx context.Context, payload map[string]any, e
 	defer response.Body.Close()
 
 	if sessionID := response.Header.Get("Mcp-Session-Id"); sessionID != "" {
+		client.mu.Lock()
 		client.sessionID = sessionID
+		client.mu.Unlock()
 	}
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024))
@@ -395,6 +451,116 @@ func resolveLokiDatasource(ctx context.Context, client *mcpHTTPClient, config Co
 		return "", "", fmt.Errorf("no Loki datasource was returned by Grafana MCP list_datasources")
 	}
 	return fallbackUID, fallbackName, nil
+}
+
+func runGrafanaLogQueryJobs(ctx context.Context, client *mcpHTTPClient, datasourceUID, start, end string, config Config, jobs []grafanaLogQueryJob) []GrafanaLogContext {
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	contexts := make([]GrafanaLogContext, len(jobs))
+	concurrency := normalizedGrafanaLogConcurrency(config.GrafanaLogConcurrency, len(jobs))
+	semaphore := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for index, job := range jobs {
+		index := index
+		job := job
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() {
+				<-semaphore
+			}()
+
+			context := queryGrafanaLogs(ctx, client, datasourceUID, job.LogQL, start, end, config.GrafanaLogLimit, job.Test, job.Label, job.Reason)
+			attachGrafanaLogQueryMetadata(&context, job, grafanaExploreURL(config.GrafanaURL, datasourceUID, job.LogQL, start, end))
+			contexts[index] = context
+		}()
+	}
+
+	wg.Wait()
+	return contexts
+}
+
+func attachGrafanaLogQueryMetadata(context *GrafanaLogContext, job grafanaLogQueryJob, exploreURL string) {
+	context.FailureRef = job.FailureRef
+	context.TestName = job.TestName
+	if context.TestName == "" && job.Test != nil {
+		context.TestName = firstNonEmpty(job.Test.Name, job.Test.ID)
+	}
+	context.BackendArea = job.BackendArea
+	context.ExpectedError = job.ExpectedError
+	context.SearchTerms = append([]string{}, job.SearchTerms...)
+	context.Confidence = job.Confidence
+	context.GrafanaExploreURL = exploreURL
+}
+
+func normalizedGrafanaLogConcurrency(configured, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if configured <= 0 {
+		configured = 4
+	}
+	if configured > total {
+		return total
+	}
+	return configured
+}
+
+func testCasePointer(test TestCase) *TestCase {
+	copy := test
+	return &copy
+}
+
+func grafanaExploreURL(baseURL, datasourceUID, logql, start, end string) string {
+	baseURL = strings.TrimSpace(baseURL)
+	datasourceUID = strings.TrimSpace(datasourceUID)
+	logql = strings.TrimSpace(logql)
+	if baseURL == "" || datasourceUID == "" || logql == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/explore"
+	parsed.Fragment = ""
+
+	query := parsed.Query()
+	if query.Get("orgId") == "" {
+		query.Set("orgId", "1")
+	}
+	query.Set("schemaVersion", "1")
+
+	panes := map[string]any{
+		"test-results-report": map[string]any{
+			"datasource": datasourceUID,
+			"queries": []map[string]any{{
+				"refId":     "A",
+				"expr":      logql,
+				"queryType": "range",
+				"datasource": map[string]string{
+					"type": "loki",
+					"uid":  datasourceUID,
+				},
+			}},
+			"range": map[string]string{
+				"from": firstNonEmpty(start, "now-1h"),
+				"to":   firstNonEmpty(end, "now"),
+			},
+		},
+	}
+	data, err := json.Marshal(panes)
+	if err != nil {
+		return ""
+	}
+	query.Set("panes", string(data))
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func queryGrafanaLogs(ctx context.Context, client *mcpHTTPClient, datasourceUID, logql, start, end string, limit int, test *TestCase, label, reason string) GrafanaLogContext {

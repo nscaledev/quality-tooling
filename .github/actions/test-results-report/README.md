@@ -61,7 +61,7 @@ At a high level, the action keeps orchestration inside the GitHub workflow runne
 2. Optionally read the previous report when `compare-with-previous` is enabled or auto-detected.
 3. Analyze current failures, skips, deltas, and representative failures.
 4. Optionally ask Claude which failures, if any, need backend log lookup.
-5. Query Grafana MCP only when Claude planned backend queries or manual LogQL was configured.
+5. Query Grafana MCP in parallel only when Claude planned backend queries or manual LogQL was configured.
 6. Optionally run Claude to consolidate the final failure analysis.
 7. Write the GitHub step summary.
 8. Optionally send Slack.
@@ -84,7 +84,7 @@ flowchart TD
   J -- no --> K
   L -- no --> K
   L -- yes --> G
-  G --> M[Query Loki through Grafana MCP]
+  G --> M[Query Loki through Grafana MCP in parallel]
   M --> N[Attach log context to analysis]
   N --> K
   K -- yes --> O[Claude generates final report from tests and logs]
@@ -102,7 +102,7 @@ Grafana enrichment is fail-open from the report perspective. If Claude decides n
 
 ## Grafana MCP Log Enrichment
 
-Grafana log enrichment is opt-in. When it is enabled together with AI analysis, the action uses a two-pass flow: Claude first inspects the parsed test failures and returns a read-only Loki query plan for failures that look backend-related, the reporter executes those queries through Grafana MCP, then the retrieved log context is passed back into Claude for the final GitHub summary and Slack summary.
+Grafana log enrichment is opt-in. When it is enabled together with AI analysis, the action uses a two-pass flow: Claude first inspects the parsed test failures and returns a read-only Loki query plan for failures that look backend-related, the reporter executes those queries through Grafana MCP in parallel, then the retrieved log context is passed back into Claude for the final GitHub summary and Slack summary.
 
 Without AI analysis, or when callers want additional fixed queries, the action can still run `grafana-logql` once for the report and `grafana-logql-template` once per representative failed test.
 
@@ -121,7 +121,8 @@ Grafana decision logic:
 | Backend or manual queries exist but no `grafana-mcp-endpoint` is available | Log a warning and continue without logs |
 | `grafana-logql` is provided | Run it once for the whole report |
 | `grafana-logql-template` is provided | Render and run it once per representative failed test, capped by `grafana-log-max-failures` |
-| Loki returns matching lines | Add query, reason, labels, and log lines to the GitHub summary and final Claude input |
+| Planned or manual queries are ready | Execute `query_loki_logs` calls in parallel, bounded by `grafana-log-concurrency` |
+| Loki returns matching lines | Add query, reason, lookup metadata, labels, and log lines to the GitHub summary and final Claude input |
 | Loki returns no matching lines | Show the query and note that no matching log lines were returned |
 
 Callers that let this action open the Teleport tunnel must grant `id-token: write`:
@@ -148,6 +149,7 @@ steps:
     grafana-loki-datasource-name: Loki
     grafana-log-lookback: 2h
     grafana-log-max-failures: 6
+    grafana-log-concurrency: 4
 ```
 
 In the AI-assisted flow, `grafana-logql` and `grafana-logql-template` are optional. Claude receives the failed test name, suite, location, error, captured output, environment, comparison context, and generated failure keyword regex. It returns JSON query plans like:
@@ -157,14 +159,19 @@ In the AI-assisted flow, `grafana-logql` and `grafana-logql-template` are option
   "queries": [
     {
       "failure_ref": "f1",
+      "test_name": "uploads file",
+      "backend_area": "file-storage",
+      "expected_error": "POST /api/storage returned 500 for claim-123",
+      "search_terms": ["claim-123", "file-storage", "500"],
       "logql": "{namespace=~\".+\"} |~ \"(?i)(claim-123|file-storage|500)\"",
-      "reason": "The UI file upload failed after the backend returned a storage claim error."
+      "reason": "The failed UI upload crossed the file storage API and includes a backend 500 signature, so Loki evidence can confirm whether file storage emitted the same error.",
+      "confidence": "medium"
     }
   ]
 }
 ```
 
-The reporter executes each planned query through Grafana MCP's `query_loki_logs` tool and includes the query, reason, matching lines, and labels in the final report context. If Claude decides no backend lookup is justified, it returns an empty query list and the report continues without Grafana logs.
+The reporter executes each planned query through Grafana MCP's `query_loki_logs` tool and includes the test name, backend area, exact failure error, search terms, query reason, matching lines, and labels in the final report context. When `grafana-url` is provided, the reporter also generates a Grafana Explore link for the exact datasource, LogQL, and time range; Claude is instructed not to invent Grafana URLs. If Claude decides no backend lookup is justified, it returns an empty query list and the report continues without Grafana logs.
 
 For manual fallback queries, `grafana-logql-template` runs once per representative failed test, up to `grafana-log-max-failures`. Use the selector part of the template to define the logs that are relevant to the test suite, and use `{{log_keywords_regex}}` to narrow each query to the individual failure. It supports these placeholders:
 
@@ -240,7 +247,7 @@ When enabled, the report includes:
 | `enable-grafana-log-enrichment` | No | `false` | Fetch related logs through Grafana MCP |
 | `grafana-service-account-token` | No | empty | Grafana service account token used when this action starts `mcp-grafana` |
 | `grafana-app` | No | empty | Teleport Grafana app name used for the local tunnel |
-| `grafana-url` | No | empty | Direct Grafana URL when no Teleport tunnel is needed |
+| `grafana-url` | No | empty | Direct Grafana URL when no Teleport tunnel is needed; also used to generate Grafana Explore lookup links |
 | `grafana-teleport-proxy` | No | `nscale.teleport.sh:443` | Teleport proxy for the Grafana app tunnel |
 | `grafana-teleport-token` | No | `github-grafana-access` | Teleport GitHub join token for the Grafana app tunnel |
 | `grafana-tunnel-port` | No | `3000` | Local Grafana tunnel port |
@@ -255,7 +262,8 @@ When enabled, the report includes:
 | `grafana-log-end` | No | empty | RFC3339 log query end time |
 | `grafana-log-lookback` | No | `1h` | Lookback used when start time is omitted |
 | `grafana-log-limit` | No | `20` | Maximum log lines per MCP query |
-| `grafana-log-max-failures` | No | `3` | Maximum failed tests queried with the template |
+| `grafana-log-concurrency` | No | `4` | Maximum parallel Grafana MCP `query_loki_logs` calls |
+| `grafana-log-max-failures` | No | `3` | Maximum failed tests queried with AI-planned queries or the template |
 
 ## Outputs
 

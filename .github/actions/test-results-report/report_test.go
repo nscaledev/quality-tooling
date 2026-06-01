@@ -347,6 +347,51 @@ func TestMarkdownSummaryIncludesFailuresSkipsAndComparison(t *testing.T) {
 	}
 }
 
+func TestMarkdownSummaryIncludesGrafanaLookupMetadata(t *testing.T) {
+	t.Parallel()
+
+	markdown := renderStepSummary(Analysis{
+		Current: TestRun{Name: "Console E2E"},
+		Stats:   Stats{Total: 1, Failed: 1},
+		GrafanaLogs: &GrafanaLogEnrichment{
+			DatasourceUID:  "loki-dev",
+			DatasourceName: "Loki",
+			StartRFC3339:   "2026-06-01T13:00:00Z",
+			EndRFC3339:     "2026-06-01T14:00:00Z",
+			Contexts: []GrafanaLogContext{{
+				QueryLabel:        "AI-planned backend query",
+				FailureRef:        "f1",
+				TestName:          "uploads file",
+				BackendArea:       "file-storage",
+				ExpectedError:     "POST /api/storage returned 500 for claim-123",
+				SearchTerms:       []string{"claim-123", "file-storage", "500"},
+				Confidence:        "medium",
+				Query:             `{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`,
+				GrafanaExploreURL: "https://grafana.example.com/explore?panes=encoded",
+				Reason:            "The UI file upload failed after a backend storage API 500.",
+			}},
+		},
+	}, RenderOptions{
+		Title:           "E2E Test Results",
+		OmitTestDetails: true,
+	})
+
+	for _, expected := range []string{
+		"### Grafana Log Context",
+		"failure ref `f1`",
+		"test `uploads file`",
+		"backend `file-storage`",
+		"confidence `medium`",
+		"Exact failure error: `POST /api/storage returned 500 for claim-123`",
+		"Search terms: `claim-123`, `file-storage`, `500`",
+		"[Open query in Grafana](https://grafana.example.com/explore?panes=encoded)",
+	} {
+		if !strings.Contains(markdown, expected) {
+			t.Fatalf("summary missing %q:\n%s", expected, markdown)
+		}
+	}
+}
+
 func TestDetectFormatAndParseAuto(t *testing.T) {
 	t.Parallel()
 
@@ -587,8 +632,8 @@ func TestConfigDefaults(t *testing.T) {
 	if config.EnableGrafanaLogs {
 		t.Fatal("grafana log enrichment should default false")
 	}
-	if config.GrafanaLogLookback != "1h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 3 {
-		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures)
+	if config.GrafanaLogLookback != "1h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 3 || config.GrafanaLogConcurrency != 4 {
+		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d concurrency %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures, config.GrafanaLogConcurrency)
 	}
 }
 
@@ -642,9 +687,15 @@ func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
 	prompt := grafanaLogQueryPlanningPrompt()
 	for _, expected := range []string{
 		"Return strict JSON only",
+		`"test_name"`,
+		`"backend_area"`,
+		`"expected_error"`,
+		`"search_terms"`,
+		`"confidence"`,
 		"Only create queries for failures that appear backend-related",
 		"Do not query for purely client-side assertion failures",
 		"Use the exact failure_ref values",
+		"Do not include Grafana URLs",
 		"do not assume a single backend component",
 		`return {"queries":[]}`,
 	} {
@@ -694,14 +745,21 @@ func TestRenderGrafanaLogQueryPlanningInputIncludesFailureRefs(t *testing.T) {
 func TestParseGrafanaLogQueryPlan(t *testing.T) {
 	t.Parallel()
 
-	queries, err := parseGrafanaLogQueryPlan("```json\n{\"queries\":[{\"failure_ref\":\" f1 \",\"logql\":\" {namespace=~\\\".+\\\"} |= \\\"claim-123\\\" \",\"reason\":\" storage backend error \"},{\"failure_ref\":\"f2\"}]}\n```")
+	queries, err := parseGrafanaLogQueryPlan("```json\n{\"queries\":[{\"failure_ref\":\" f1 \",\"test_name\":\" uploads file \",\"backend_area\":\" file-storage \",\"expected_error\":\" POST /api/storage returned 500 for claim-123 \",\"search_terms\":[\" claim-123 \",\"file-storage\",\"claim-123\"],\"logql\":\" {namespace=~\\\".+\\\"} |= \\\"claim-123\\\" \",\"reason\":\" storage backend error \",\"confidence\":\" Medium \"},{\"failure_ref\":\"f2\"}]}\n```")
 	if err != nil {
 		t.Fatalf("parseGrafanaLogQueryPlan returned error: %v", err)
 	}
 	if len(queries) != 1 {
 		t.Fatalf("queries = %+v", queries)
 	}
-	if queries[0].FailureRef != "f1" || !strings.Contains(queries[0].LogQL, "claim-123") || queries[0].Reason != "storage backend error" {
+	if queries[0].FailureRef != "f1" ||
+		queries[0].TestName != "uploads file" ||
+		queries[0].BackendArea != "file-storage" ||
+		queries[0].ExpectedError != "POST /api/storage returned 500 for claim-123" ||
+		len(queries[0].SearchTerms) != 2 ||
+		queries[0].Confidence != "medium" ||
+		!strings.Contains(queries[0].LogQL, "claim-123") ||
+		queries[0].Reason != "storage backend error" {
 		t.Fatalf("unexpected query: %+v", queries[0])
 	}
 }
@@ -722,9 +780,16 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 			StartRFC3339:   "2026-06-01T13:00:00Z",
 			EndRFC3339:     "2026-06-01T14:00:00Z",
 			Contexts: []GrafanaLogContext{{
-				Query:     `{namespace="unikorn-region"} |= "instance"`,
-				Reason:    "Instance API returned a backend reconcile timeout.",
-				LineCount: 1,
+				FailureRef:        "f1",
+				TestName:          "creates instance",
+				BackendArea:       "unikorn-region",
+				ExpectedError:     "instance reconcile timed out",
+				SearchTerms:       []string{"instance", "timeout"},
+				Query:             `{namespace="unikorn-region"} |= "instance"`,
+				GrafanaExploreURL: "https://grafana.example.com/explore?panes=test",
+				Reason:            "Instance API returned a backend reconcile timeout.",
+				Confidence:        "high",
+				LineCount:         1,
 				Entries: []GrafanaLogEntry{{
 					Timestamp: "1780322400000000000",
 					Line:      "controller failed to create instance",
@@ -742,6 +807,13 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 		"Datasource UID: loki",
 		`Query: {namespace="unikorn-region"} |= "instance"`,
 		"Query reason: Instance API returned a backend reconcile timeout.",
+		"Failure ref: f1",
+		"Planned test: creates instance",
+		"Backend area: unikorn-region",
+		"Exact failure error: instance reconcile timed out",
+		"Search terms: instance, timeout",
+		"Lookup confidence: high",
+		"Grafana lookup URL: https://grafana.example.com/explore?panes=test",
 		"controller failed to create instance",
 		"namespace=unikorn-region",
 		"Failed tests:",

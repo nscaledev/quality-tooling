@@ -31,6 +31,7 @@ type Config struct {
 	EnableAIAnalysis      bool
 	ClaudeToken           string
 	EnableGrafanaLogs     bool
+	GrafanaURL            string
 	GrafanaMCPEndpoint    string
 	GrafanaLokiUID        string
 	GrafanaLokiName       string
@@ -41,6 +42,7 @@ type Config struct {
 	GrafanaLogLookback    string
 	GrafanaLogLimit       int
 	GrafanaLogMaxFailures int
+	GrafanaLogConcurrency int
 }
 
 func loadConfig() Config {
@@ -94,6 +96,7 @@ func configFromEnv(env map[string]string) Config {
 		EnableAIAnalysis:      parseBoolDefault(env["INPUT_ENABLE_AI_ANALYSIS"], false),
 		ClaudeToken:           firstNonEmpty(env["INPUT_CLAUDE_TOKEN"], env["CLAUDE_CODE_OAUTH_TOKEN"]),
 		EnableGrafanaLogs:     parseBoolDefault(env["INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT"], false),
+		GrafanaURL:            env["INPUT_GRAFANA_URL"],
 		GrafanaMCPEndpoint:    firstNonEmpty(env["INPUT_GRAFANA_MCP_ENDPOINT"], env["GRAFANA_MCP_ENDPOINT"]),
 		GrafanaLokiUID:        env["INPUT_GRAFANA_LOKI_DATASOURCE_UID"],
 		GrafanaLokiName:       env["INPUT_GRAFANA_LOKI_DATASOURCE_NAME"],
@@ -104,6 +107,7 @@ func configFromEnv(env map[string]string) Config {
 		GrafanaLogLookback:    firstNonEmpty(env["INPUT_GRAFANA_LOG_LOOKBACK"], "1h"),
 		GrafanaLogLimit:       parseIntDefault(env["INPUT_GRAFANA_LOG_LIMIT"], 20),
 		GrafanaLogMaxFailures: parseIntDefault(env["INPUT_GRAFANA_LOG_MAX_FAILURES"], 3),
+		GrafanaLogConcurrency: parseIntDefault(env["INPUT_GRAFANA_LOG_CONCURRENCY"], 4),
 	}
 }
 

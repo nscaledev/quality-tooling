@@ -103,7 +103,7 @@ inputs:
     required: false
     default: ''
   grafana-url:
-    description: 'Direct Grafana URL for mcp-grafana. If omitted and grafana-app is set, defaults to the local Teleport tunnel URL.'
+    description: 'Direct Grafana URL for mcp-grafana. If omitted and grafana-app is set, defaults to the local Teleport tunnel URL. When set, the reporter also uses it to generate Grafana Explore lookup links.'
     required: false
     default: ''
   grafana-teleport-proxy:
@@ -162,8 +162,12 @@ inputs:
     description: 'Maximum log lines per Grafana MCP query.'
     required: false
     default: '20'
+  grafana-log-concurrency:
+    description: 'Maximum parallel Grafana MCP query_loki_logs calls.'
+    required: false
+    default: '4'
   grafana-log-max-failures:
-    description: 'Maximum failed tests to query with grafana-logql-template.'
+    description: 'Maximum failed tests to query with AI-planned queries or grafana-logql-template.'
     required: false
     default: '3'
 
@@ -376,6 +380,7 @@ runs:
         INPUT_ENABLE_AI_ANALYSIS: ${{ inputs.enable-ai-analysis }}
         INPUT_CLAUDE_TOKEN: ${{ inputs.claude-token }}
         INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT: ${{ inputs.enable-grafana-log-enrichment }}
+        INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
         INPUT_GRAFANA_MCP_ENDPOINT: ${{ inputs.grafana-mcp-endpoint }}
         INPUT_GRAFANA_LOKI_DATASOURCE_UID: ${{ inputs.grafana-loki-datasource-uid }}
         INPUT_GRAFANA_LOKI_DATASOURCE_NAME: ${{ inputs.grafana-loki-datasource-name }}
@@ -385,6 +390,7 @@ runs:
         INPUT_GRAFANA_LOG_END: ${{ inputs.grafana-log-end }}
         INPUT_GRAFANA_LOG_LOOKBACK: ${{ inputs.grafana-log-lookback }}
         INPUT_GRAFANA_LOG_LIMIT: ${{ inputs.grafana-log-limit }}
+        INPUT_GRAFANA_LOG_CONCURRENCY: ${{ inputs.grafana-log-concurrency }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
       run: |
         set -euo pipefail
