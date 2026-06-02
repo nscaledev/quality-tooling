@@ -240,6 +240,16 @@ runs:
       run: |
         set -euo pipefail
 
+        write_output() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::Refusing to write multi-line value for ${name}"
+            exit 1
+          fi
+          printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+        }
+
         grafana_app="${INPUT_GRAFANA_APP:-}"
         if [[ -z "$grafana_app" ]]; then
           case "${INPUT_ENVIRONMENT,,}" in
@@ -251,8 +261,11 @@ runs:
               ;;
           esac
         fi
-        echo "GRAFANA_APP_RESOLVED=${grafana_app}" >> "$GITHUB_ENV"
-        echo "grafana-app=${grafana_app}" >> "$GITHUB_OUTPUT"
+        if [[ -n "$grafana_app" && ! "$grafana_app" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::grafana-app contains unsupported characters"
+          exit 1
+        fi
+        write_output "grafana-app" "$grafana_app"
 
         grafana_token="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}"
         if [[ -z "$grafana_token" && -n "${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
@@ -260,12 +273,11 @@ runs:
         fi
         if [[ -n "$grafana_token" ]]; then
           echo "::add-mask::${grafana_token}"
-          echo "GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED=${grafana_token}" >> "$GITHUB_ENV"
         fi
         if [[ -n "$grafana_token" ]]; then
-          echo "token-configured=true" >> "$GITHUB_OUTPUT"
+          write_output "token-configured" "true"
         else
-          echo "token-configured=false" >> "$GITHUB_OUTPUT"
+          write_output "token-configured" "false"
         fi
 
     - name: Grafana MCP enrichment preflight
@@ -274,6 +286,7 @@ runs:
       env:
         INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ inputs.grafana-service-account-token }}
         INPUT_GRAFANA_APP: ${{ inputs.grafana-app }}
+        INPUT_GRAFANA_APP_RESOLVED: ${{ steps.grafana-resolve.outputs.grafana-app }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
         INPUT_GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
         INPUT_GRAFANA_MCP_ENDPOINT: ${{ inputs.grafana-mcp-endpoint }}
@@ -291,8 +304,8 @@ runs:
         set -euo pipefail
 
         echo "::group::Grafana MCP enrichment preflight"
-        grafana_app="${GRAFANA_APP_RESOLVED:-${INPUT_GRAFANA_APP:-}}"
-        grafana_token="${GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED:-${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
+        grafana_app="${INPUT_GRAFANA_APP_RESOLVED:-${INPUT_GRAFANA_APP:-}}"
+        grafana_token="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
         if [[ -n "${grafana_token}" ]]; then
           echo "::add-mask::${grafana_token}"
         fi
@@ -341,7 +354,7 @@ runs:
 
     - name: Open Grafana app tunnel
       if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.grafana-url == '' && steps.grafana-resolve.outputs.grafana-app != '' }}
-      uses: teleport-actions/application-tunnel@v1
+      uses: teleport-actions/application-tunnel@bb7a8fbfb67b85d26013554f10d71dd032c1c764
       with:
         proxy: ${{ inputs.grafana-teleport-proxy }}
         token: ${{ inputs.grafana-teleport-token }}
@@ -405,6 +418,7 @@ runs:
         echo "mcp-grafana installed at $(command -v mcp-grafana)"
 
     - name: Start Grafana MCP server
+      id: grafana-start
       if: ${{ inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.grafana-url != '' || steps.grafana-resolve.outputs.grafana-app != '') }}
       shell: bash
       env:
@@ -418,7 +432,40 @@ runs:
       run: |
         set -euo pipefail
 
-        grafana_token="${GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED:-${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        require_port() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+            echo "::error::${name} must be a TCP port between 1 and 65535"
+            exit 1
+          fi
+        }
+
+        write_output() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+        }
+
+        require_port "grafana-tunnel-port" "$INPUT_GRAFANA_TUNNEL_PORT"
+        require_port "grafana-mcp-port" "$INPUT_GRAFANA_MCP_PORT"
+        require_single_line "grafana-url" "$INPUT_GRAFANA_URL"
+        require_single_line "grafana-app" "$INPUT_GRAFANA_APP"
+        require_single_line "grafana-teleport-proxy" "$INPUT_GRAFANA_TELEPORT_PROXY"
+        require_single_line "grafana-org-id" "$INPUT_GRAFANA_ORG_ID"
+
+        grafana_token="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
         echo "::add-mask::${grafana_token}"
         if ! command -v mcp-grafana >/dev/null 2>&1; then
           echo "::warning::mcp-grafana is not installed; log enrichment will be skipped by the reporter"
@@ -455,9 +502,8 @@ runs:
             exit 0
           fi
           if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/healthz" >/dev/null; then
-            echo "GRAFANA_MCP_ENDPOINT=http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp" >> "$GITHUB_ENV"
-            echo "GRAFANA_REPORT_URL=${report_grafana_url}" >> "$GITHUB_ENV"
-            echo "GRAFANA_ORG_ID=${INPUT_GRAFANA_ORG_ID}" >> "$GITHUB_ENV"
+            write_output "grafana-mcp-endpoint" "http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp"
+            write_output "grafana-report-url" "${report_grafana_url}"
             echo "mcp-grafana /healthz is reachable on attempt ${attempt}"
             echo "Grafana Explore base URL for report links: ${report_grafana_url}"
             exit 0
@@ -504,6 +550,9 @@ runs:
         INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT: ${{ inputs.enable-grafana-log-enrichment }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
         INPUT_GRAFANA_MCP_ENDPOINT: ${{ inputs.grafana-mcp-endpoint }}
+        GRAFANA_MCP_ENDPOINT: ${{ steps.grafana-start.outputs.grafana-mcp-endpoint }}
+        GRAFANA_REPORT_URL: ${{ steps.grafana-start.outputs.grafana-report-url }}
+        GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
         INPUT_GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
         INPUT_GRAFANA_LOKI_DATASOURCE_UID: ${{ inputs.grafana-loki-datasource-uid }}
         INPUT_GRAFANA_LOKI_DATASOURCE_NAME: ${{ inputs.grafana-loki-datasource-name }}
