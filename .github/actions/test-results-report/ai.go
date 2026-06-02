@@ -486,95 +486,10 @@ func grafanaLogSignalSummary(context GrafanaLogContext) string {
 		return ""
 	}
 
-	var parts []string
-	if messages := grafanaLogMessageSamples(context.Entries, 3); len(messages) > 0 {
-		parts = append(parts, "matched messages: "+strings.Join(messages, ", "))
-	}
 	if signals := grafanaLogErrorSignals(context.Entries); len(signals) > 0 {
-		parts = append(parts, "error signals: "+strings.Join(signals, ", "))
-	} else {
-		parts = append(parts, "no explicit error string in returned rows")
+		return "error signals: " + strings.Join(signals, ", ")
 	}
-	return strings.Join(parts, "; ")
-}
-
-func grafanaLogMessageSamples(entries []GrafanaLogEntry, limit int) []string {
-	if limit <= 0 {
-		return nil
-	}
-
-	seen := map[string]bool{}
-	var samples []string
-	for _, entry := range entries {
-		message := grafanaLogEntryMessage(entry)
-		if message == "" || seen[message] {
-			continue
-		}
-		seen[message] = true
-		samples = append(samples, message)
-		if len(samples) >= limit {
-			break
-		}
-	}
-	return samples
-}
-
-func grafanaLogEntryMessage(entry GrafanaLogEntry) string {
-	if message := firstNonEmpty(entry.Parsed["msg"], entry.Parsed["message"], entry.Parsed["error"], entry.StructuredMetadata["msg"], entry.StructuredMetadata["message"], entry.StructuredMetadata["error"]); message != "" {
-		return truncate(cleanOneLine(message), 120)
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(entry.Line), &payload); err == nil {
-		for _, key := range []string{"msg", "message", "error", "reason"} {
-			value, ok := payload[key]
-			if !ok {
-				continue
-			}
-			message, ok := value.(string)
-			if ok && strings.TrimSpace(message) != "" {
-				return truncate(cleanOneLine(message), 120)
-			}
-		}
-	}
-
-	return grafanaLogLineStringField(entry.Line, []string{"msg", "message", "error", "reason"})
-}
-
-func grafanaLogLineStringField(line string, keys []string) string {
-	for _, key := range keys {
-		marker := `"` + key + `":"`
-		start := strings.Index(line, marker)
-		if start < 0 {
-			continue
-		}
-		start += len(marker)
-
-		var value strings.Builder
-		escaped := false
-		for _, char := range line[start:] {
-			if escaped {
-				value.WriteRune(char)
-				escaped = false
-				continue
-			}
-			if char == '\\' {
-				escaped = true
-				continue
-			}
-			if char == '"' {
-				break
-			}
-			value.WriteRune(char)
-			if value.Len() >= 160 {
-				break
-			}
-		}
-		if message := cleanOneLine(value.String()); message != "" {
-			return truncate(message, 120)
-		}
-	}
-	return ""
+	return "no explicit error string in returned rows"
 }
 
 func grafanaLogErrorSignals(entries []GrafanaLogEntry) []string {

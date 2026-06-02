@@ -938,12 +938,16 @@ func TestGrafanaLogSignalSummaryIncludesCleanupOnlyObservation(t *testing.T) {
 		}},
 	})
 
-	for _, expected := range []string{
-		"matched messages: audit, deletion complete",
-		"no explicit error string in returned rows",
+	if summary != "no explicit error string in returned rows" {
+		t.Fatalf("signal summary should not include raw Loki messages: %s", summary)
+	}
+	for _, unexpected := range []string{
+		"audit",
+		"deletion complete",
+		"matched messages",
 	} {
-		if !strings.Contains(summary, expected) {
-			t.Fatalf("signal summary missing %q: %s", expected, summary)
+		if strings.Contains(summary, unexpected) {
+			t.Fatalf("signal summary should not include raw message %q: %s", unexpected, summary)
 		}
 	}
 }
