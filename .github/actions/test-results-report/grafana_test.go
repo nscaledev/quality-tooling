@@ -12,32 +12,6 @@ import (
 	"time"
 )
 
-func TestRenderGrafanaLogQLTemplate(t *testing.T) {
-	t.Parallel()
-
-	query := renderGrafanaLogQLTemplate(
-		`{namespace="unikorn-region"} |~ "(?i){{log_keywords_regex}}" |= "{{test_name}}"`,
-		TestCase{
-			Name:    `creates "quoted" instance`,
-			Suite:   "Instance Management",
-			File:    "test/api/suites/instance_test.go",
-			Message: "Timeout waiting for instance reconcile",
-		},
-		Config{Environment: "dev"},
-	)
-
-	for _, expected := range []string{
-		`{namespace="unikorn-region"}`,
-		`creates \"quoted\" instance`,
-		`instance`,
-		`suites/instance_test\.go`,
-	} {
-		if !strings.Contains(query, expected) {
-			t.Fatalf("query missing %q: %s", expected, query)
-		}
-	}
-}
-
 func TestLogKeywordRegexPrioritizesFailureIdentifiers(t *testing.T) {
 	t.Parallel()
 
@@ -61,7 +35,20 @@ func TestLogKeywordRegexPrioritizesFailureIdentifiers(t *testing.T) {
 }
 
 func TestRunGrafanaLogEnrichmentThroughMCP(t *testing.T) {
-	t.Parallel()
+	previousPlanner := runGrafanaLogQueryPlanning
+	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
+		return []GrafanaLogPlannedQuery{{
+			FailureRef:  "f1",
+			TestName:    "creates instance",
+			BackendArea: "network",
+			LogQL:       `{namespace="unikorn-region"} |~ "(?i)(instance|reconcile)"`,
+			Reason:      "Instance reconcile timeout needs backend controller evidence.",
+			Confidence:  "medium",
+		}}, nil
+	}
+	defer func() {
+		runGrafanaLogQueryPlanning = previousPlanner
+	}()
 
 	var sawListDatasources atomic.Bool
 	var sawQueryLoki atomic.Bool
@@ -127,8 +114,9 @@ func TestRunGrafanaLogEnrichmentThroughMCP(t *testing.T) {
 
 	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
 		EnableGrafanaLogs:     true,
+		EnableAIAnalysis:      true,
+		ClaudeToken:           "test-token",
 		GrafanaMCPEndpoint:    server.URL + "/mcp",
-		GrafanaLogQLTemplate:  `{namespace="unikorn-region"} |~ "(?i){{log_keywords_regex}}"`,
 		GrafanaLogStart:       "2026-06-01T13:00:00Z",
 		GrafanaLogEnd:         "2026-06-01T14:00:00Z",
 		GrafanaLogLimit:       5,

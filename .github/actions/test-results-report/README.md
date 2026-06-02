@@ -61,7 +61,7 @@ At a high level, the action keeps orchestration inside the GitHub workflow runne
 2. Optionally read the previous report when `compare-with-previous` is enabled or auto-detected.
 3. Analyze current failures, skips, deltas, and representative failures.
 4. Optionally ask Claude which failures, if any, need backend log lookup.
-5. Query Grafana MCP in parallel only when Claude planned backend queries or manual LogQL was configured.
+5. Query Grafana MCP in parallel only when Claude planned backend queries.
 6. Optionally run Claude to consolidate the final failure analysis.
 7. Write the GitHub step summary.
 8. Optionally send Slack.
@@ -78,12 +78,11 @@ flowchart TD
   F -- no --> K{AI analysis enabled?}
   F -- yes --> H{AI analysis and Claude token available?}
   H -- yes --> I[Claude inspects failures and plans backend LogQL only when needed]
-  H -- no --> J{Manual grafana-logql or template configured?}
-  I --> L{Backend lookup required or manual queries configured?}
-  J -- yes --> G[Resolve or start Grafana MCP endpoint]
-  J -- no --> K
+  H -- no --> K
+  I --> L{Backend lookup required?}
   L -- no --> K
   L -- yes --> G
+  G[Resolve or start Grafana MCP endpoint]
   G --> M[Query Loki through Grafana MCP in parallel]
   M --> N[Attach log context to analysis]
   N --> K
@@ -104,8 +103,6 @@ Grafana enrichment is fail-open from the report perspective. If Claude decides n
 
 Grafana log enrichment is opt-in. When it is enabled together with AI analysis, the action uses a two-pass flow: Claude first inspects the parsed test failures and returns a read-only Loki query plan for failures that look backend-related, the reporter executes those queries through Grafana MCP in parallel, then the retrieved log context is passed back into Claude for the final GitHub summary and Slack summary.
 
-Without AI analysis, or when callers want additional fixed queries, the action can still run `grafana-logql` once for the report and `grafana-logql-template` once per representative failed test.
-
 The action can either connect to an existing `mcp-grafana` streamable HTTP endpoint or start one itself. For Teleport-protected Grafana apps, the action uses a pinned `teleport-actions/application-tunnel` revision, which is compatible with GitHub bot identities. Do not use `tsh app login` in CI for this flow because bot identities cannot reissue app certificates.
 
 Grafana decision logic:
@@ -115,19 +112,17 @@ Grafana decision logic:
 | `enable-grafana-log-enrichment` is not `true` | Skip Grafana entirely |
 | No failed tests are present | Skip Grafana entirely |
 | AI analysis is enabled and `claude-token` is available | Ask Claude to decide which failures, if any, need backend-related LogQL lookups |
-| Claude returns no planned queries and no manual queries are configured | Continue without Grafana log context |
-| Claude query planning fails and manual queries are configured | Log a warning and run the manual queries |
-| Claude query planning fails and no manual queries are configured | Log a warning and continue without logs |
-| Backend or manual queries exist but no `grafana-mcp-endpoint` is available | Log a warning and continue without logs |
-| `grafana-logql` is provided | Run it once for the whole report |
-| `grafana-logql-template` is provided | Render and run it once per representative failed test, capped by `grafana-log-max-failures` |
-| Planned or manual queries are ready | Execute `query_loki_logs` calls in parallel, bounded by `grafana-log-concurrency` |
+| AI analysis or `claude-token` is unavailable | Log a warning and continue without Grafana log context |
+| Claude returns no planned queries | Continue without Grafana log context |
+| Claude query planning fails | Log a warning and continue without logs |
+| Planned backend queries exist but no `grafana-mcp-endpoint` is available | Log a warning and continue without logs |
+| Planned backend queries are ready | Execute `query_loki_logs` calls in parallel, bounded by `grafana-log-concurrency` |
 | Loki returns matching lines | Add a compact Grafana observation to the GitHub summary and pass summarized Loki evidence into final Claude analysis |
 | Loki returns no matching lines | Add a compact observation that no matching log lines were returned |
 
 When Grafana enrichment is enabled, the action writes two debug groups to the GitHub job log:
 
-- `Grafana MCP enrichment preflight`: shows whether the token, app, direct URL, existing MCP endpoint, Grafana org ID, datasource selector, manual queries, lookback, limit, max failures, and concurrency were configured. It also states the selected setup path, such as using an existing endpoint, opening the Teleport app tunnel, or skipping MCP startup because required inputs are missing.
+- `Grafana MCP enrichment preflight`: shows whether the token, app, direct URL, existing MCP endpoint, Grafana org ID, datasource selector, lookback, limit, max failures, and concurrency were configured. It also states the selected setup path, such as using an existing endpoint, opening the Teleport app tunnel, or skipping MCP startup because required inputs are missing.
 - `Grafana MCP log enrichment`: shows whether Claude query planning ran, how many backend-related queries were planned, the exact failure error and search terms used for each planned query, the selected Loki datasource, the query time range, the number of parallel query jobs, and each query's line count, truncation flag, first returned log line, or MCP/Loki error.
 
 Teleport app access should remain narrow. The `github-grafana-access` bot is expected to use Teleport `app_labels` for Kubernetes-discovered Grafana apps, such as `app.kubernetes.io/name=grafana`, `teleport.dev/origin=discovery-kubernetes`, and the allowed cluster labels. It does not need broad Teleport dynamic-resource app rules for this action. Grafana read/query permissions must still come from the provided Grafana service account token; the action also starts `mcp-grafana` with write tools disabled and only datasource/Loki tools enabled.
@@ -156,7 +151,7 @@ steps:
 
 By default, the action uses datasource name `Loki`, a `2h` lookback, `20` log lines per query, `4` parallel Loki queries, and up to `6` failed tests for Grafana lookup. For Nscale Teleport-backed runs, it also infers `grafana-app` from `environment`: `dev` maps to `nks-dev-glo1-grafana`; `uat`, `stage`, and `staging` map to `nks-stg-europe-west2-grafana`.
 
-In the AI-assisted flow, `grafana-logql` and `grafana-logql-template` are optional. Claude receives the failed test name, suite, location, error, captured output, environment, comparison context, and generated failure keyword regex. It returns JSON query plans like:
+Claude receives the failed test name, suite, location, error, captured output, environment, comparison context, and generated failure keyword regex. It returns JSON query plans like:
 
 ```json
 {
@@ -177,27 +172,7 @@ In the AI-assisted flow, `grafana-logql` and `grafana-logql-template` are option
 
 The reporter executes each planned query through Grafana MCP's `query_loki_logs` tool. The GitHub summary shows only compact Grafana observations: test, backend area, line count, matched components, and a neutral Grafana link when available. Raw log rows, LogQL, search terms, exact failure metadata, and query-bearing Explore URLs stay out of the GitHub summary. The final Claude analysis receives summarized Loki evidence, including concrete signal text when available, so it can connect the test error to the backend observation without making the report verbose. Internally, when `grafana-url` is provided, or when `grafana-app` lets the wrapper infer the Teleport public Grafana URL, the reporter can generate an Explore URL for the exact datasource, LogQL, and time range; Claude is instructed not to invent Grafana URLs. If Claude decides no backend lookup is justified, it returns an empty query list and the report continues without Grafana logs.
 
-For manual fallback queries, `grafana-logql-template` runs once per representative failed test, up to `grafana-log-max-failures`. Use the selector part of the template to define the logs that are relevant to the test suite, and use `{{log_keywords_regex}}` to narrow each query to the individual failure. It supports these placeholders:
-
-- `{{test_name}}`
-- `{{test_suite}}`
-- `{{test_file}}`
-- `{{failure_message}}`
-- `{{environment}}`
-- `{{log_keywords_regex}}`
-
-`{{log_keywords_regex}}` prioritizes UUID and trace-like identifiers from the failure message and captured test output before adding lower-signal words from the test name, suite, and file path.
-
-For `nscale-ui` and other cross-component suites, prefer the AI-assisted flow above. If you also provide a manual fallback template, do not pin it to one backend namespace. A single UI run can have unrelated failures caused by different backend components, such as Uni, identity, file storage, or console APIs. Keep the LogQL selector broad enough to cover the backend services that can affect the UI, then let the per-failure keyword filter narrow the result:
-
-```yaml
-with:
-  enable-grafana-log-enrichment: 'true'
-  # Replace the namespace list with the backend namespaces used by the target environment.
-  grafana-logql-template: '{namespace=~"unikorn-region|identity|file-storage|console-api"} |~ "(?i){{log_keywords_regex}}"'
-```
-
-You can also pass `grafana-logql` for one general query that runs once per report. If `grafana-loki-datasource-uid` is omitted, the reporter uses Grafana MCP to discover the default or first Loki datasource, optionally filtered by `grafana-loki-datasource-name`.
+For `nscale-ui` and other cross-component suites, the planner does not assume a single backend component. A single UI run can have unrelated failures caused by different backend components, such as Uni, identity, file storage, or console APIs. Claude chooses backend lookups per failure and may use a broad selector when the failure evidence does not identify one namespace or service. If `grafana-loki-datasource-uid` is omitted, the reporter uses Grafana MCP to discover the default or first Loki datasource, optionally filtered by `grafana-loki-datasource-name`.
 
 ## Previous Result Comparison
 
@@ -259,14 +234,12 @@ When enabled, the report includes:
 | `grafana-mcp-endpoint` | No | empty | Existing `mcp-grafana` streamable HTTP endpoint |
 | `grafana-loki-datasource-uid` | No | empty | Loki datasource UID |
 | `grafana-loki-datasource-name` | No | `Loki` | Loki datasource name used during discovery |
-| `grafana-logql` | No | empty | Static LogQL query run once for the report, useful as a manual fallback or extra context |
-| `grafana-logql-template` | No | empty | Manual per-failed-test LogQL template. For cross-component suites, prefer AI-assisted planning or keep the selector broad and let `{{log_keywords_regex}}` narrow each failure |
 | `grafana-log-start` | No | empty | RFC3339 log query start time |
 | `grafana-log-end` | No | empty | RFC3339 log query end time |
 | `grafana-log-lookback` | No | `2h` | Lookback used when start time is omitted |
 | `grafana-log-limit` | No | `20` | Maximum log lines per MCP query |
 | `grafana-log-concurrency` | No | `4` | Maximum parallel Grafana MCP `query_loki_logs` calls |
-| `grafana-log-max-failures` | No | `6` | Maximum failed tests queried with AI-planned queries or the template |
+| `grafana-log-max-failures` | No | `6` | Maximum failed tests queried with AI-planned queries |
 
 ## Outputs
 

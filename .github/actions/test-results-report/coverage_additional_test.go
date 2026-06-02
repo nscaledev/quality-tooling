@@ -136,8 +136,6 @@ func TestAIPlanningInputAndExtractionBranches(t *testing.T) {
 	input := renderGrafanaLogQueryPlanningInput(analysis, Config{
 		Environment:           "dev",
 		GrafanaLogMaxFailures: 2,
-		GrafanaLogQL:          `{namespace="unikorn-region"}`,
-		GrafanaLogQLTemplate:  `{namespace=~".+"} |~ "{{log_keywords_regex}}"`,
 	})
 	for _, expected := range []string{
 		"Previous result comparison:",
@@ -145,8 +143,6 @@ func TestAIPlanningInputAndExtractionBranches(t *testing.T) {
 		"Failure ref: f1",
 		"Location: test/api/network_test.go:42",
 		"Failure keyword regex:",
-		"Caller-provided general LogQL fallback:",
-		"Caller-provided per-failure LogQL template fallback:",
 		"dca608552b223f324647576f1fcd40b7",
 	} {
 		if !strings.Contains(input, expected) {
@@ -198,8 +194,6 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 		"INPUT_GRAFANA_MCP_ENDPOINT":          "http://127.0.0.1:8000/mcp",
 		"INPUT_GRAFANA_LOKI_DATASOURCE_UID":   "loki-dev",
 		"INPUT_GRAFANA_LOKI_DATASOURCE_NAME":  "Prod Loki",
-		"INPUT_GRAFANA_LOGQL":                 `{namespace="unikorn-region"}`,
-		"INPUT_GRAFANA_LOGQL_TEMPLATE":        `{namespace=~".+"} |~ "{{log_keywords_regex}}"`,
 		"INPUT_GRAFANA_LOG_START":             "2026-06-01T13:00:00Z",
 		"INPUT_GRAFANA_LOG_END":               "2026-06-01T14:00:00Z",
 		"INPUT_GRAFANA_LOG_LOOKBACK":          "3h",
@@ -573,7 +567,7 @@ func TestGrafanaSelectionTimeRangeAndQueryErrorBranches(t *testing.T) {
 	}))
 	defer errorServer.Close()
 
-	context := queryGrafanaLogs(context.Background(), newMCPHTTPClient(errorServer.URL), "loki", `{namespace=~".+"}`, "2026-06-01T13:00:00Z", "2026-06-01T14:00:00Z", 5, nil, "Failure query", "manual")
+	context := queryGrafanaLogs(context.Background(), newMCPHTTPClient(errorServer.URL), "loki", `{namespace=~".+"}`, "2026-06-01T13:00:00Z", "2026-06-01T14:00:00Z", 5, nil, "AI-planned backend query", "planned lookup")
 	if context.Error == "" || !strings.Contains(context.Error, "decode query_loki_logs result") {
 		t.Fatalf("expected decode error context, got %+v", context)
 	}

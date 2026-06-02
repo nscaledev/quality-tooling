@@ -233,17 +233,6 @@ func renderGrafanaLogQueryPlanningInput(analysis Analysis, config Config) string
 		sb.WriteString("\n")
 	}
 
-	if query := strings.TrimSpace(config.GrafanaLogQL); query != "" {
-		sb.WriteString("Caller-provided general LogQL fallback:\n")
-		sb.WriteString(query)
-		sb.WriteString("\n\n")
-	}
-	if template := strings.TrimSpace(config.GrafanaLogQLTemplate); template != "" {
-		sb.WriteString("Caller-provided per-failure LogQL template fallback:\n")
-		sb.WriteString(template)
-		sb.WriteString("\n\n")
-	}
-
 	return sb.String()
 }
 

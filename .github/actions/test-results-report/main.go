@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 var runAIAnalysis = runClaudeAnalysis
@@ -18,40 +19,52 @@ func main() {
 }
 
 func run(ctx context.Context, config Config) error {
+	totalStarted := time.Now()
 	if err := config.validate(); err != nil {
 		return err
 	}
 
+	stageStarted := time.Now()
 	current, err := readAndParse(config.TestResultsPath, config.Format)
 	if err != nil {
 		return err
 	}
+	logReportTiming("parse-current-results", stageStarted)
 
 	var previous *TestRun
 	if config.CompareWithPrevious && config.PreviousResultsPath != "" {
+		stageStarted = time.Now()
 		previousRun, err := readAndParse(config.PreviousResultsPath, config.PreviousResultsFormat)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: previous results could not be parsed: %v\n", err)
 		} else {
 			previous = &previousRun
 		}
+		logReportTiming("parse-previous-results", stageStarted)
 	}
 
+	stageStarted = time.Now()
 	analysis := analyze(current, previous)
+	logReportTiming("analyze-results", stageStarted)
 
+	stageStarted = time.Now()
 	grafanaLogs, err := runGrafanaLogEnrichment(ctx, config, analysis)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Grafana log enrichment skipped: %v\n", err)
 	} else if grafanaLogs != nil {
 		analysis.GrafanaLogs = grafanaLogs
 	}
+	logReportTiming("grafana-log-enrichment", stageStarted)
 
+	stageStarted = time.Now()
 	aiAnalysis, err := runAIAnalysis(ctx, config, analysis)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: AI failure analysis skipped: %v\n", err)
 	}
+	logReportTiming("ai-failure-analysis", stageStarted)
 
 	if config.WriteStepSummary {
+		stageStarted = time.Now()
 		summary := renderStepSummary(analysis, RenderOptions{
 			Title:           config.Title,
 			Environment:     config.Environment,
@@ -68,10 +81,12 @@ func run(ctx context.Context, config Config) error {
 		if err := appendStepSummary(config.StepSummaryPath, summary); err != nil {
 			return err
 		}
+		logReportTiming("write-step-summary", stageStarted)
 	}
 
 	slackSent := false
 	if config.SendSlack {
+		stageStarted = time.Now()
 		slackSummary := ""
 		if aiAnalysis != nil {
 			slackSummary = aiAnalysis.SlackSummary
@@ -95,11 +110,14 @@ func run(ctx context.Context, config Config) error {
 		} else {
 			slackSent = true
 		}
+		logReportTiming("send-slack", stageStarted)
 	}
 
+	stageStarted = time.Now()
 	if err := writeOutputs(os.Getenv("GITHUB_OUTPUT"), analysis, slackSent); err != nil {
 		return err
 	}
+	logReportTiming("write-outputs", stageStarted)
 
 	fmt.Printf("Parsed %d tests: %d passed, %d failed, %d skipped\n",
 		analysis.Stats.Total,
@@ -107,8 +125,23 @@ func run(ctx context.Context, config Config) error {
 		analysis.Stats.Failed,
 		analysis.Stats.Skipped,
 	)
+	logReportTiming("total", totalStarted)
 
 	return nil
+}
+
+func logReportTiming(stage string, started time.Time) {
+	fmt.Printf("test-results-report timing: stage=%s duration=%s\n", stage, formatTimingDuration(time.Since(started)))
+}
+
+func formatTimingDuration(duration time.Duration) string {
+	if duration < 0 {
+		duration = 0
+	}
+	if duration < time.Second {
+		return duration.Truncate(time.Millisecond).String()
+	}
+	return duration.Truncate(100 * time.Millisecond).String()
 }
 
 func readAndParse(path, format string) (TestRun, error) {

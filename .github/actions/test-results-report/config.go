@@ -36,8 +36,6 @@ type Config struct {
 	GrafanaMCPEndpoint    string
 	GrafanaLokiUID        string
 	GrafanaLokiName       string
-	GrafanaLogQL          string
-	GrafanaLogQLTemplate  string
 	GrafanaLogStart       string
 	GrafanaLogEnd         string
 	GrafanaLogLookback    string
@@ -102,8 +100,6 @@ func configFromEnv(env map[string]string) Config {
 		GrafanaMCPEndpoint:    firstNonEmpty(env["INPUT_GRAFANA_MCP_ENDPOINT"], env["GRAFANA_MCP_ENDPOINT"]),
 		GrafanaLokiUID:        env["INPUT_GRAFANA_LOKI_DATASOURCE_UID"],
 		GrafanaLokiName:       firstNonEmpty(env["INPUT_GRAFANA_LOKI_DATASOURCE_NAME"], "Loki"),
-		GrafanaLogQL:          env["INPUT_GRAFANA_LOGQL"],
-		GrafanaLogQLTemplate:  env["INPUT_GRAFANA_LOGQL_TEMPLATE"],
 		GrafanaLogStart:       env["INPUT_GRAFANA_LOG_START"],
 		GrafanaLogEnd:         env["INPUT_GRAFANA_LOG_END"],
 		GrafanaLogLookback:    firstNonEmpty(env["INPUT_GRAFANA_LOG_LOOKBACK"], "2h"),

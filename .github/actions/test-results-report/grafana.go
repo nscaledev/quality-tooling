@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -107,13 +106,11 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 	fmt.Println("::group::Grafana MCP log enrichment")
 	defer fmt.Println("::endgroup::")
 
-	logGrafana("enabled; failures=%d ai_analysis=%t claude_token_configured=%t endpoint_configured=%t manual_logql=%t manual_template=%t max_failures=%d concurrency=%d lookback=%s",
+	logGrafana("enabled; failures=%d ai_analysis=%t claude_token_configured=%t endpoint_configured=%t max_failures=%d concurrency=%d lookback=%s",
 		len(analysis.Failures),
 		config.EnableAIAnalysis,
 		config.ClaudeToken != "",
 		config.GrafanaMCPEndpoint != "",
-		strings.TrimSpace(config.GrafanaLogQL) != "",
-		strings.TrimSpace(config.GrafanaLogQLTemplate) != "",
 		normalizedGrafanaFailureLimit(config.GrafanaLogMaxFailures),
 		config.GrafanaLogConcurrency,
 		firstNonEmpty(config.GrafanaLogLookback, "1h"),
@@ -123,18 +120,16 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 		return nil, nil
 	}
 
-	hasConfiguredQueries := strings.TrimSpace(config.GrafanaLogQL) != "" || strings.TrimSpace(config.GrafanaLogQLTemplate) != ""
 	var plannedQueries []GrafanaLogPlannedQuery
 	planningAttempted := config.EnableAIAnalysis && config.ClaudeToken != ""
 	if planningAttempted {
 		logGrafana("asking Claude to plan backend Loki queries for %d candidate failure(s)", len(selectGrafanaFailureCandidates(analysis, config.GrafanaLogMaxFailures)))
+		stageStarted := time.Now()
 		var err error
 		plannedQueries, err = runGrafanaLogQueryPlanning(ctx, config, analysis)
+		logGrafana("Claude query planning completed in %s", formatTimingDuration(time.Since(stageStarted)))
 		if err != nil {
-			if !hasConfiguredQueries {
-				return nil, err
-			}
-			fmt.Fprintf(os.Stderr, "Warning: AI Grafana log query planning failed; using configured LogQL fallback: %v\n", err)
+			return nil, err
 		}
 		originalPlannedCount := len(plannedQueries)
 		plannedQueries = limitGrafanaPlannedQueries(plannedQueries, config.GrafanaLogMaxFailures)
@@ -145,12 +140,12 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 	} else {
 		logGrafana("AI query planning skipped because enable-ai-analysis is false")
 	}
-	if len(plannedQueries) == 0 && !hasConfiguredQueries {
-		if planningAttempted {
-			logGrafana("Claude did not select any backend-related failures; skipping MCP lookup")
-			return nil, nil
-		}
-		return nil, fmt.Errorf("grafana log enrichment is enabled but neither AI query planning nor grafana-logql/grafana-logql-template is available")
+	if !planningAttempted {
+		return nil, fmt.Errorf("grafana log enrichment requires enable-ai-analysis and claude-token/CLAUDE_CODE_OAUTH_TOKEN so Claude can select backend-related failures")
+	}
+	if len(plannedQueries) == 0 {
+		logGrafana("Claude did not select any backend-related failures; skipping MCP lookup")
+		return nil, nil
 	}
 	if config.GrafanaMCPEndpoint == "" {
 		logGrafana("cannot run MCP lookup because no grafana-mcp-endpoint/GRAFANA_MCP_ENDPOINT is available")
@@ -162,16 +157,19 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 
 	logGrafana("connecting to mcp-grafana endpoint %s", safeURLForLog(config.GrafanaMCPEndpoint))
 	client := newMCPHTTPClient(config.GrafanaMCPEndpoint)
+	stageStarted := time.Now()
 	if err := client.initialize(ctx); err != nil {
 		return nil, err
 	}
-	logGrafana("MCP initialize completed")
+	logGrafana("MCP initialize completed in %s", formatTimingDuration(time.Since(stageStarted)))
 
+	stageStarted = time.Now()
 	uid, name, err := resolveLokiDatasource(ctx, client, config)
 	if err != nil {
 		return nil, err
 	}
 	logGrafana("using Loki datasource uid=%s name=%s", firstNonEmpty(uid, "<empty>"), firstNonEmpty(name, "<empty>"))
+	logGrafana("Loki datasource resolution completed in %s", formatTimingDuration(time.Since(stageStarted)))
 
 	start, end, err := grafanaLogTimeRange(config, time.Now().UTC())
 	if err != nil {
@@ -209,30 +207,10 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 		}
 	}
 
-	if query := strings.TrimSpace(config.GrafanaLogQL); query != "" {
-		jobs = append(jobs, grafanaLogQueryJob{
-			LogQL:  query,
-			Label:  "General query",
-			Reason: "Caller-provided LogQL query",
-		})
-	}
-
-	if template := strings.TrimSpace(config.GrafanaLogQLTemplate); template != "" {
-		for _, failure := range selectFailuresForGrafanaLogs(analysis, config.GrafanaLogMaxFailures) {
-			query := renderGrafanaLogQLTemplate(template, failure, config)
-			jobs = append(jobs, grafanaLogQueryJob{
-				Test:          testCasePointer(failure),
-				TestName:      firstNonEmpty(failure.Name, failure.ID),
-				ExpectedError: failure.Message,
-				LogQL:         query,
-				Label:         "Failure query",
-				Reason:        "Caller-provided per-failure LogQL template",
-			})
-		}
-	}
-
 	logGrafana("prepared %d Loki query job(s)", len(jobs))
+	stageStarted = time.Now()
 	enrichment.Contexts = runGrafanaLogQueryJobs(ctx, client, uid, start, end, config, jobs)
+	logGrafana("Loki query jobs completed in %s", formatTimingDuration(time.Since(stageStarted)))
 	logGrafana("completed Grafana MCP enrichment with %d context result(s)", len(enrichment.Contexts))
 	return enrichment, nil
 }
@@ -911,34 +889,6 @@ func limitGrafanaPlannedQueries(queries []GrafanaLogPlannedQuery, limit int) []G
 		return queries[:limit]
 	}
 	return queries
-}
-
-func renderGrafanaLogQLTemplate(template string, test TestCase, config Config) string {
-	keywords := logKeywordRegex(test)
-	replacements := map[string]string{
-		"test_id":            logQLStringEscape(test.ID),
-		"test_name":          logQLStringEscape(test.Name),
-		"test_suite":         logQLStringEscape(test.Suite),
-		"test_file":          logQLStringEscape(test.File),
-		"failure_message":    logQLStringEscape(test.Message),
-		"environment":        logQLStringEscape(config.Environment),
-		"log_keywords":       keywords,
-		"log_keywords_regex": keywords,
-	}
-
-	output := template
-	for key, value := range replacements {
-		output = strings.ReplaceAll(output, "{{"+key+"}}", value)
-	}
-	return output
-}
-
-func logQLStringEscape(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, `"`, `\"`)
-	value = strings.ReplaceAll(value, "\n", `\n`)
-	value = strings.ReplaceAll(value, "\r", `\r`)
-	return value
 }
 
 func logKeywordRegex(test TestCase) string {

@@ -142,14 +142,6 @@ inputs:
     description: 'Optional Loki datasource name to select during datasource discovery.'
     required: false
     default: 'Loki'
-  grafana-logql:
-    description: 'Optional static LogQL query to run once for general failure context or manual fallback.'
-    required: false
-    default: ''
-  grafana-logql-template:
-    description: 'Optional manual per-failed-test LogQL template. For cross-component suites, prefer AI-assisted planning or keep the selector broad and let {{log_keywords_regex}} narrow each failure. Supports {{test_name}}, {{test_suite}}, {{test_file}}, {{failure_message}}, {{environment}}, and {{log_keywords_regex}}.'
-    required: false
-    default: ''
   grafana-log-start:
     description: 'Optional RFC3339 start time for Grafana log queries.'
     required: false
@@ -171,7 +163,7 @@ inputs:
     required: false
     default: '4'
   grafana-log-max-failures:
-    description: 'Maximum failed tests to query with AI-planned queries or grafana-logql-template.'
+    description: 'Maximum failed tests to query with AI-planned queries.'
     required: false
     default: '6'
 
@@ -314,8 +306,6 @@ runs:
         INPUT_GRAFANA_MCP_ENDPOINT: ${{ inputs.grafana-mcp-endpoint }}
         INPUT_GRAFANA_LOKI_DATASOURCE_UID: ${{ inputs.grafana-loki-datasource-uid }}
         INPUT_GRAFANA_LOKI_DATASOURCE_NAME: ${{ inputs.grafana-loki-datasource-name }}
-        INPUT_GRAFANA_LOGQL: ${{ inputs.grafana-logql }}
-        INPUT_GRAFANA_LOGQL_TEMPLATE: ${{ inputs.grafana-logql-template }}
         INPUT_GRAFANA_LOG_LOOKBACK: ${{ inputs.grafana-log-lookback }}
         INPUT_GRAFANA_LOG_LIMIT: ${{ inputs.grafana-log-limit }}
         INPUT_GRAFANA_LOG_CONCURRENCY: ${{ inputs.grafana-log-concurrency }}
@@ -374,8 +364,6 @@ runs:
         echo "Grafana org ID: ${INPUT_GRAFANA_ORG_ID:-<empty>}"
         echo "Loki datasource UID configured: $(bool "${INPUT_GRAFANA_LOKI_DATASOURCE_UID:-}")"
         echo "Loki datasource name: ${INPUT_GRAFANA_LOKI_DATASOURCE_NAME:-<empty>}"
-        echo "manual general LogQL configured: $(bool "${INPUT_GRAFANA_LOGQL:-}")"
-        echo "manual per-failure LogQL template configured: $(bool "${INPUT_GRAFANA_LOGQL_TEMPLATE:-}")"
         echo "lookback: ${INPUT_GRAFANA_LOG_LOOKBACK}; limit: ${INPUT_GRAFANA_LOG_LIMIT}; max failures: ${INPUT_GRAFANA_LOG_MAX_FAILURES}; concurrency: ${INPUT_GRAFANA_LOG_CONCURRENCY}"
 
         if [[ -n "${INPUT_GRAFANA_MCP_ENDPOINT:-}" ]]; then
@@ -636,8 +624,6 @@ runs:
         INPUT_GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
         INPUT_GRAFANA_LOKI_DATASOURCE_UID: ${{ inputs.grafana-loki-datasource-uid }}
         INPUT_GRAFANA_LOKI_DATASOURCE_NAME: ${{ inputs.grafana-loki-datasource-name }}
-        INPUT_GRAFANA_LOGQL: ${{ inputs.grafana-logql }}
-        INPUT_GRAFANA_LOGQL_TEMPLATE: ${{ inputs.grafana-logql-template }}
         INPUT_GRAFANA_LOG_START: ${{ inputs.grafana-log-start }}
         INPUT_GRAFANA_LOG_END: ${{ inputs.grafana-log-end }}
         INPUT_GRAFANA_LOG_LOOKBACK: ${{ inputs.grafana-log-lookback }}
