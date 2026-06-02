@@ -186,16 +186,7 @@ func grafanaSummaryURL(exploreURL string) string {
 		return ""
 	}
 
-	parsed.RawQuery = ""
 	parsed.Fragment = ""
-	path := strings.TrimRight(parsed.Path, "/")
-	if strings.HasSuffix(path, "/explore") {
-		path = strings.TrimSuffix(path, "/explore")
-	}
-	if path == "" {
-		path = "/"
-	}
-	parsed.Path = path
 	return parsed.String()
 }
 

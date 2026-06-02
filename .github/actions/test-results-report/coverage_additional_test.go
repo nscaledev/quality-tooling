@@ -585,7 +585,7 @@ func TestRenderUtilityBranches(t *testing.T) {
 	if grafanaSummaryURL("") != "" || grafanaSummaryURL("not a url") != "" {
 		t.Fatal("invalid Grafana summary URLs should be omitted")
 	}
-	if got := grafanaSummaryURL("https://grafana.example.com/grafana/explore?panes=secret#frag"); got != "https://grafana.example.com/grafana" {
+	if got := grafanaSummaryURL("https://grafana.example.com/grafana/explore?panes=secret#frag"); got != "https://grafana.example.com/grafana/explore?panes=secret" {
 		t.Fatalf("summary URL = %q", got)
 	}
 	intro := grafanaObservationIntro(&GrafanaLogEnrichment{})
