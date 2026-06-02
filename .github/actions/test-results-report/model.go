@@ -12,22 +12,26 @@ const (
 )
 
 type TestRun struct {
-	Name     string
-	Duration time.Duration
-	Tests    []TestCase
+	Name      string
+	StartTime time.Time
+	EndTime   time.Time
+	Duration  time.Duration
+	Tests     []TestCase
 }
 
 type TestCase struct {
-	ID       string
-	Suite    string
-	Name     string
-	File     string
-	Line     int
-	Status   TestStatus
-	RawState string
-	Duration time.Duration
-	Message  string
-	Output   string
+	ID        string
+	Suite     string
+	Name      string
+	File      string
+	Line      int
+	Status    TestStatus
+	RawState  string
+	StartTime time.Time
+	EndTime   time.Time
+	Duration  time.Duration
+	Message   string
+	Output    string
 }
 
 type Stats struct {

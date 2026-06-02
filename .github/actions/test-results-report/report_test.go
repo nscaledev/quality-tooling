@@ -170,6 +170,57 @@ func TestParseGinkgoJSONReport(t *testing.T) {
 	}
 }
 
+func TestParseGinkgoJSONTimeRanges(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`[
+  {
+    "SuiteDescription": "API Test Suites",
+    "StartTime": "2026-06-02T16:47:57.372674766Z",
+    "EndTime": "2026-06-02T16:53:19.866142729Z",
+    "RunTime": 322493467973,
+    "SpecReports": [
+      {
+        "ContainerHierarchyTexts": ["File Storage Management"],
+        "LeafNodeText": "should create a network for attachment",
+        "State": "failed",
+        "StartTime": "2026-06-02T16:48:19.424926556Z",
+        "EndTime": "2026-06-02T16:53:19.86546Z",
+        "RunTime": 300440533445,
+        "Failure": {
+          "Message": "expected provisioningStatus provisioned, got error",
+          "Location": {
+            "FileName": "filestorage_test.go",
+            "LineNumber": 372
+          }
+        }
+      }
+    ]
+  }
+]`)
+
+	run, err := parseGinkgoJSON(input)
+	if err != nil {
+		t.Fatalf("parseGinkgoJSON returned error: %v", err)
+	}
+
+	if got := run.StartTime.Format(time.RFC3339Nano); got != "2026-06-02T16:47:57.372674766Z" {
+		t.Fatalf("run start time = %s", got)
+	}
+	if got := run.EndTime.Format(time.RFC3339Nano); got != "2026-06-02T16:53:19.866142729Z" {
+		t.Fatalf("run end time = %s", got)
+	}
+	if len(run.Tests) != 1 {
+		t.Fatalf("test count = %d", len(run.Tests))
+	}
+	if got := run.Tests[0].StartTime.Format(time.RFC3339Nano); got != "2026-06-02T16:48:19.424926556Z" {
+		t.Fatalf("test start time = %s", got)
+	}
+	if got := run.Tests[0].EndTime.Format(time.RFC3339Nano); got != "2026-06-02T16:53:19.86546Z" {
+		t.Fatalf("test end time = %s", got)
+	}
+}
+
 func TestParseUniRegionJUnitFixture(t *testing.T) {
 	t.Parallel()
 
@@ -801,6 +852,9 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"do not add a separate Grafana section",
 		"When a Grafana signal is present, mention the concrete signal",
 		"Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs",
+		"If a failed test time range and Grafana query time range are both present",
+		"Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window",
+		"the provisioning error was not present in the returned Grafana lines",
 		`add a "### Representative Failed Tests" table capped at 10 rows`,
 		"group tests with the same failure reason into one row",
 		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
@@ -808,6 +862,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"For Grafana-backed bullets, explicitly connect the test error",
 		`Do not use vague phrases like "Grafana returned related activity"`,
 		"If Grafana only returned audit/cleanup rows",
+		`Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window`,
 		"Group by suite name when one suite is affected",
 		"Lead with the highest-attention real product, infra, or environment blocker",
 		"keep temporary sentinel/test-validation failures short",
@@ -826,7 +881,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"| Suite / area | Representative tests | Failure reason | Count |",
 		"- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.",
 		"- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457",
-		"- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows",
+		"- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window",
 		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
 		aiSlackDelimiter,
 	} {
@@ -836,6 +891,9 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	}
 	if strings.Contains(prompt, "- *Details:* Test-level failure reasons are available in the GitHub build summary.") {
 		t.Fatalf("prompt should not include a separate Details bullet:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "before the log capture window opened") {
+		t.Fatalf("prompt should not encourage unsupported capture-window claims:\n%s", prompt)
 	}
 }
 
@@ -925,12 +983,23 @@ func TestParseGrafanaLogQueryPlan(t *testing.T) {
 func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 	t.Parallel()
 
+	runStart := time.Date(2026, 6, 1, 13, 10, 0, 0, time.UTC)
+	runEnd := time.Date(2026, 6, 1, 13, 58, 0, 0, time.UTC)
+	testStart := time.Date(2026, 6, 1, 13, 20, 0, 123000000, time.UTC)
+	testEnd := time.Date(2026, 6, 1, 13, 55, 0, 456000000, time.UTC)
+
 	input := renderAIInputWithOptions(Analysis{
-		Current: TestRun{Name: "API Tests"},
-		Stats:   Stats{Passed: 1, Failed: 1},
+		Current: TestRun{
+			Name:      "API Tests",
+			StartTime: runStart,
+			EndTime:   runEnd,
+		},
+		Stats: Stats{Passed: 1, Failed: 1},
 		Failures: []TestCase{{
-			Name:    "creates instance",
-			Message: "timeout",
+			Name:      "creates instance",
+			StartTime: testStart,
+			EndTime:   testEnd,
+			Message:   "timeout",
 		}},
 		GrafanaLogs: &GrafanaLogEnrichment{
 			DatasourceUID:  "loki",
@@ -963,10 +1032,12 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 
 	for _, expected := range []string{
 		"Grafana observations for final analysis:",
+		"Test run time range: 2026-06-01T13:10:00Z to 2026-06-01T13:58:00Z",
 		"Scope: time range 2026-06-01T13:00:00Z to 2026-06-01T14:00:00Z; Grafana datasource Loki (loki).",
 		"- Test: creates instance; backend: unikorn-region; confidence: high; Grafana returned 1 matching log line; components: unikorn-region; first match at 2026-06-01T14:00:00Z from unikorn-region; Grafana signal: error signals: failed; filtered 2 Grafana/MCP self-observability line(s); Grafana Explore query link is included in the GitHub summary",
 		"Lookup reason: Instance API returned a backend reconcile timeout.",
 		"Failed tests:",
+		"Time range: 2026-06-01T13:20:00.123Z to 2026-06-01T13:55:00.456Z",
 	} {
 		if !strings.Contains(input, expected) {
 			t.Fatalf("AI input missing %q:\n%s", expected, input)

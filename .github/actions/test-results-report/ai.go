@@ -91,6 +91,9 @@ Section 1: Markdown for the GitHub step summary.
 - Keep the report close to the existing production format; do not add a separate Grafana section, raw log table, LogQL, search terms, or Grafana URL list.
 - When a Grafana signal is present, mention the concrete signal in the Likely reason or Next check, such as "Grafana showed INTERNAL_ERROR/connection refused" or "Grafana only returned audit/cleanup rows and no explicit error".
 - Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs.
+- If a failed test time range and Grafana query time range are both present, compare them before making timing claims.
+- Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window.
+- When the failed test is inside the Grafana window but Grafana only returned cleanup/audit/activity rows, say the provisioning error was not present in the returned Grafana lines and point the next check to the resource creation/provisioning transition period inside the test window.
 - The pattern table must make clear what failed, why it failed, the likely reason, impact, and the next check.
 - When test-level detail is useful, add a "### Representative Failed Tests" table capped at 10 rows.
 - In the representative tests table, group tests with the same failure reason into one row instead of listing duplicate failures separately.
@@ -120,7 +123,8 @@ Section 2: Plain text Slack summary.
 - Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason.
 - For Grafana-backed bullets, explicitly connect the test error, your interpretation, and the Grafana signal in the same bullet.
 - Do not use vague phrases like "Grafana returned related activity" unless you also say what Grafana showed or did not show.
-- If Grafana only returned audit/cleanup rows, say that and point the action to the earlier provisioning/error window; if Grafana returned error signals, name the signals.
+- If Grafana only returned audit/cleanup rows, say that and point the action to the resource creation or provisioning transition period; if Grafana returned error signals, name the signals.
+- Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
 - Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
 - Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
@@ -137,7 +141,7 @@ Use this shape:
 - *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
 - *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.
 - *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
-- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows, so inspect the earlier controller/provisioner error window.
+- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window, so inspect controller/provisioner logs around resource creation and the pending-to-error transition.
 - *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 
@@ -302,7 +306,11 @@ func extractJSONObject(output string) string {
 func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Test run: %s\n", analysis.Current.Name))
-	sb.WriteString(fmt.Sprintf("Totals: %d passed, %d failed, %d skipped\n\n", analysis.Stats.Passed, analysis.Stats.Failed, analysis.Stats.Skipped))
+	sb.WriteString(fmt.Sprintf("Totals: %d passed, %d failed, %d skipped\n", analysis.Stats.Passed, analysis.Stats.Failed, analysis.Stats.Skipped))
+	if timeRange := formatAnalysisTimeRange(analysis.Current.StartTime, analysis.Current.EndTime); timeRange != "" {
+		sb.WriteString(fmt.Sprintf("Test run time range: %s\n", timeRange))
+	}
+	sb.WriteString("\n")
 
 	if analysis.Compare != nil {
 		renderAIComparison(&sb, analysis.Compare, options)
@@ -320,6 +328,9 @@ func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string 
 		}
 		if location := formatLocation(failure); location != "" {
 			sb.WriteString(fmt.Sprintf("Location: %s\n", location))
+		}
+		if timeRange := formatAnalysisTimeRange(failure.StartTime, failure.EndTime); timeRange != "" {
+			sb.WriteString(fmt.Sprintf("Time range: %s\n", timeRange))
 		}
 		if failure.Message != "" {
 			sb.WriteString(fmt.Sprintf("Error: %s\n", truncate(failure.Message, 2000)))
@@ -344,6 +355,9 @@ func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string 
 		if location := formatLocation(skipped); location != "" {
 			sb.WriteString(fmt.Sprintf("Location: %s\n", location))
 		}
+		if timeRange := formatAnalysisTimeRange(skipped.StartTime, skipped.EndTime); timeRange != "" {
+			sb.WriteString(fmt.Sprintf("Time range: %s\n", timeRange))
+		}
 		if skipped.Message != "" {
 			sb.WriteString(fmt.Sprintf("Reason: %s\n", truncate(skipped.Message, 1000)))
 		}
@@ -354,6 +368,19 @@ func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string 
 	}
 
 	return sb.String()
+}
+
+func formatAnalysisTimeRange(start, end time.Time) string {
+	if !start.IsZero() && !end.IsZero() {
+		return fmt.Sprintf("%s to %s", start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+	}
+	if !start.IsZero() {
+		return start.UTC().Format(time.RFC3339Nano)
+	}
+	if !end.IsZero() {
+		return end.UTC().Format(time.RFC3339Nano)
+	}
+	return ""
 }
 
 func renderAIComparison(sb *strings.Builder, comparison *Comparison, options AIInputOptions) {

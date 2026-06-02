@@ -27,17 +27,25 @@ func parseGinkgoJSON(data []byte) (TestRun, error) {
 	}
 
 	for _, report := range reports {
+		if start := parseRFC3339NanoTime(report.StartTime); !start.IsZero() && (run.StartTime.IsZero() || start.Before(run.StartTime)) {
+			run.StartTime = start
+		}
+		if end := parseRFC3339NanoTime(report.EndTime); !end.IsZero() && (run.EndTime.IsZero() || end.After(run.EndTime)) {
+			run.EndTime = end
+		}
 		run.Duration += time.Duration(report.RunTime)
 		for _, spec := range report.SpecReports {
 			testName := buildGinkgoTestName(spec)
 			test := TestCase{
-				ID:       testName,
-				Suite:    firstNonEmpty(firstString(spec.ContainerHierarchyTexts), report.SuiteDescription),
-				Name:     testName,
-				Status:   normalizeStatus(spec.State),
-				RawState: spec.State,
-				Duration: time.Duration(spec.RunTime),
-				Output:   strings.TrimSpace(spec.CapturedGinkgoWriterOutput),
+				ID:        testName,
+				Suite:     firstNonEmpty(firstString(spec.ContainerHierarchyTexts), report.SuiteDescription),
+				Name:      testName,
+				Status:    normalizeStatus(spec.State),
+				RawState:  spec.State,
+				StartTime: parseRFC3339NanoTime(spec.StartTime),
+				EndTime:   parseRFC3339NanoTime(spec.EndTime),
+				Duration:  time.Duration(spec.RunTime),
+				Output:    strings.TrimSpace(spec.CapturedGinkgoWriterOutput),
 			}
 			if spec.Failure != nil {
 				test.Message = strings.TrimSpace(spec.Failure.Message)
@@ -118,6 +126,8 @@ func parsePlaywrightJSON(data []byte) (TestRun, error) {
 
 type ginkgoReport struct {
 	SuiteDescription string             `json:"SuiteDescription"`
+	StartTime        string             `json:"StartTime"`
+	EndTime          string             `json:"EndTime"`
 	RunTime          int64              `json:"RunTime"`
 	SpecReports      []ginkgoSpecReport `json:"SpecReports"`
 }
@@ -126,6 +136,8 @@ type ginkgoSpecReport struct {
 	ContainerHierarchyTexts    []string       `json:"ContainerHierarchyTexts"`
 	LeafNodeText               string         `json:"LeafNodeText"`
 	State                      string         `json:"State"`
+	StartTime                  string         `json:"StartTime"`
+	EndTime                    string         `json:"EndTime"`
 	RunTime                    int64          `json:"RunTime"`
 	Failure                    *ginkgoFailure `json:"Failure,omitempty"`
 	CapturedGinkgoWriterOutput string         `json:"CapturedGinkgoWriterOutput"`
@@ -439,6 +451,17 @@ func parseSecondsDuration(value string) time.Duration {
 		return 0
 	}
 	return time.Duration(seconds * float64(time.Second))
+}
+
+func parseRFC3339NanoTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
 }
 
 func normalizeStatus(value string) TestStatus {
