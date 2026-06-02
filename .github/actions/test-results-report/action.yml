@@ -397,6 +397,7 @@ runs:
         INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT: ${{ inputs.enable-grafana-log-enrichment }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
         INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ runner.temp }}/test-results-report-grafana-query-plan.json
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
 
@@ -444,7 +445,7 @@ runs:
         export INPUT_TEST_RESULTS_PATH="$TEST_RESULTS_PATH"
         export INPUT_PREVIOUS_RESULTS_PATH="$PREVIOUS_RESULTS_PATH"
 
-        cd "${{ github.action_path }}"
+        cd "${ACTION_PATH}"
         go run . --grafana-plan-only
 
     - name: Install Teleport clients for Grafana tunnel
@@ -711,6 +712,7 @@ runs:
         INPUT_GRAFANA_LOG_CONCURRENCY: ${{ inputs.grafana-log-concurrency }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
         INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ steps.grafana-plan.outputs.plan-path }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
 
@@ -765,7 +767,7 @@ runs:
         export INPUT_TEST_RESULTS_PATH="$TEST_RESULTS_PATH"
         export INPUT_PREVIOUS_RESULTS_PATH="$PREVIOUS_RESULTS_PATH"
 
-        cd "${{ github.action_path }}"
+        cd "${ACTION_PATH}"
         go run .
 
     - name: Dump Grafana MCP logs

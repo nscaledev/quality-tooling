@@ -701,6 +701,12 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ steps.grafana-plan.outputs.plan-path }}"))
 			})
 
+			It("should not interpolate the action path directly into shell scripts", func() {
+				Expect(action).To(ContainSubstring("ACTION_PATH: ${{ github.action_path }}"))
+				Expect(action).To(ContainSubstring(`cd "${ACTION_PATH}"`))
+				Expect(action).NotTo(ContainSubstring(`cd "${{ github.action_path }}"`))
+			})
+
 			It("should cache Go modules for the action dependencies", func() {
 				Expect(action).To(ContainSubstring("cache: true"))
 				Expect(action).To(ContainSubstring("cache-dependency-path: ${{ github.action_path }}/go.sum"))
