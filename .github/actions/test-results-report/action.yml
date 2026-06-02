@@ -103,11 +103,11 @@ inputs:
     required: false
     default: ''
   grafana-url:
-    description: 'Direct Grafana URL for mcp-grafana. If omitted and grafana-app is set, defaults to the local Teleport tunnel URL. When set, the reporter also uses it to generate Grafana Explore lookup links.'
+    description: 'Direct Grafana URL for mcp-grafana. If omitted and grafana-app is set, defaults to the local Teleport tunnel URL. When set, the reporter also uses it to generate neutral Grafana links.'
     required: false
     default: ''
   grafana-org-id:
-    description: 'Grafana organization ID used by mcp-grafana and generated Explore links.'
+    description: 'Grafana organization ID used by mcp-grafana and internal Explore URL generation.'
     required: false
     default: '1'
   grafana-teleport-proxy:
@@ -123,9 +123,9 @@ inputs:
     required: false
     default: '3000'
   grafana-mcp-version:
-    description: 'mcp-grafana release tag to install, or latest.'
+    description: 'mcp-grafana release tag to install.'
     required: false
-    default: 'latest'
+    default: 'v0.7.10'
   grafana-mcp-port:
     description: 'Local port for the mcp-grafana streamable HTTP server.'
     required: false
@@ -240,13 +240,37 @@ runs:
       run: |
         set -euo pipefail
 
-        write_output() {
+        require_single_line() {
           local name="$1"
           local value="$2"
           if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
-            echo "::error::Refusing to write multi-line value for ${name}"
+            echo "::error::${name} must be a single-line value"
             exit 1
           fi
+        }
+
+        workflow_escape() {
+          local value="$1"
+          value="${value//%/%25}"
+          value="${value//$'\r'/%0D}"
+          value="${value//$'\n'/%0A}"
+          printf '%s' "$value"
+        }
+
+        mask_value() {
+          local name="$1"
+          local value="$2"
+          if [[ -z "$value" ]]; then
+            return 0
+          fi
+          require_single_line "$name" "$value"
+          echo "::add-mask::$(workflow_escape "$value")"
+        }
+
+        write_output() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
           printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
         }
 
@@ -271,9 +295,7 @@ runs:
         if [[ -z "$grafana_token" && -n "${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
           grafana_token="${GRAFANA_SERVICE_ACCOUNT_TOKEN}"
         fi
-        if [[ -n "$grafana_token" ]]; then
-          echo "::add-mask::${grafana_token}"
-        fi
+        mask_value "grafana-service-account-token" "$grafana_token"
         if [[ -n "$grafana_token" ]]; then
           write_output "token-configured" "true"
         else
@@ -304,11 +326,37 @@ runs:
         set -euo pipefail
 
         echo "::group::Grafana MCP enrichment preflight"
+
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        workflow_escape() {
+          local value="$1"
+          value="${value//%/%25}"
+          value="${value//$'\r'/%0D}"
+          value="${value//$'\n'/%0A}"
+          printf '%s' "$value"
+        }
+
+        mask_value() {
+          local name="$1"
+          local value="$2"
+          if [[ -z "$value" ]]; then
+            return 0
+          fi
+          require_single_line "$name" "$value"
+          echo "::add-mask::$(workflow_escape "$value")"
+        }
+
         grafana_app="${INPUT_GRAFANA_APP_RESOLVED:-${INPUT_GRAFANA_APP:-}}"
         grafana_token="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
-        if [[ -n "${grafana_token}" ]]; then
-          echo "::add-mask::${grafana_token}"
-        fi
+        mask_value "grafana-service-account-token" "$grafana_token"
 
         bool() {
           if [[ -n "${1:-}" ]]; then
@@ -404,14 +452,28 @@ runs:
         esac
 
         release="${INPUT_GRAFANA_MCP_VERSION}"
-        if [[ "$release" == "latest" ]]; then
-          release="$(gh release view -R grafana/mcp-grafana --json tagName --jq .tagName)"
+        if [[ -z "$release" || "$release" == "latest" ]]; then
+          echo "::error::grafana-mcp-version must be a pinned release tag, for example v0.7.10"
+          exit 1
         fi
 
         echo "Installing mcp-grafana ${release} (${artifact})"
         gh release download -R grafana/mcp-grafana "$release" \
           --pattern "$artifact" \
           --output "${RUNNER_TEMP}/mcp-grafana.tar.gz"
+        gh release download -R grafana/mcp-grafana "$release" \
+          --pattern "mcp-grafana_${release#v}_checksums.txt" \
+          --output "${RUNNER_TEMP}/mcp-grafana-checksums.txt"
+        expected_checksum="$(awk -v artifact="$artifact" '$2 == artifact {print $1}' "${RUNNER_TEMP}/mcp-grafana-checksums.txt")"
+        if [[ -z "$expected_checksum" ]]; then
+          echo "::error::No checksum found for ${artifact} in mcp-grafana ${release}"
+          exit 1
+        fi
+        actual_checksum="$(sha256sum "${RUNNER_TEMP}/mcp-grafana.tar.gz" | awk '{print $1}')"
+        if [[ "$actual_checksum" != "$expected_checksum" ]]; then
+          echo "::error::Checksum mismatch for ${artifact}"
+          exit 1
+        fi
         tar -xzf "${RUNNER_TEMP}/mcp-grafana.tar.gz" -C "${RUNNER_TEMP}"
         sudo mv "${RUNNER_TEMP}/mcp-grafana" /usr/local/bin/mcp-grafana
         mcp-grafana --help >/dev/null
@@ -458,6 +520,24 @@ runs:
           printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
         }
 
+        workflow_escape() {
+          local value="$1"
+          value="${value//%/%25}"
+          value="${value//$'\r'/%0D}"
+          value="${value//$'\n'/%0A}"
+          printf '%s' "$value"
+        }
+
+        mask_value() {
+          local name="$1"
+          local value="$2"
+          if [[ -z "$value" ]]; then
+            return 0
+          fi
+          require_single_line "$name" "$value"
+          echo "::add-mask::$(workflow_escape "$value")"
+        }
+
         require_port "grafana-tunnel-port" "$INPUT_GRAFANA_TUNNEL_PORT"
         require_port "grafana-mcp-port" "$INPUT_GRAFANA_MCP_PORT"
         require_single_line "grafana-url" "$INPUT_GRAFANA_URL"
@@ -466,7 +546,7 @@ runs:
         require_single_line "grafana-org-id" "$INPUT_GRAFANA_ORG_ID"
 
         grafana_token="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
-        echo "::add-mask::${grafana_token}"
+        mask_value "grafana-service-account-token" "$grafana_token"
         if ! command -v mcp-grafana >/dev/null 2>&1; then
           echo "::warning::mcp-grafana is not installed; log enrichment will be skipped by the reporter"
           exit 0
@@ -505,7 +585,7 @@ runs:
             write_output "grafana-mcp-endpoint" "http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp"
             write_output "grafana-report-url" "${report_grafana_url}"
             echo "mcp-grafana /healthz is reachable on attempt ${attempt}"
-            echo "Grafana Explore base URL for report links: ${report_grafana_url}"
+            echo "Grafana base URL for report links: ${report_grafana_url}"
             exit 0
           fi
           echo "Waiting for mcp-grafana on 127.0.0.1:${INPUT_GRAFANA_MCP_PORT}, attempt ${attempt}/20"
@@ -567,12 +647,35 @@ runs:
       run: |
         set -euo pipefail
 
-        if [[ -n "${INPUT_SLACK_WEBHOOK_URL:-}" ]]; then
-          echo "::add-mask::${INPUT_SLACK_WEBHOOK_URL}"
-        fi
-        if [[ -n "${INPUT_CLAUDE_TOKEN:-}" ]]; then
-          echo "::add-mask::${INPUT_CLAUDE_TOKEN}"
-        fi
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        workflow_escape() {
+          local value="$1"
+          value="${value//%/%25}"
+          value="${value//$'\r'/%0D}"
+          value="${value//$'\n'/%0A}"
+          printf '%s' "$value"
+        }
+
+        mask_value() {
+          local name="$1"
+          local value="$2"
+          if [[ -z "$value" ]]; then
+            return 0
+          fi
+          require_single_line "$name" "$value"
+          echo "::add-mask::$(workflow_escape "$value")"
+        }
+
+        mask_value "slack-webhook-url" "${INPUT_SLACK_WEBHOOK_URL:-}"
+        mask_value "claude-token" "${INPUT_CLAUDE_TOKEN:-}"
         if [[ -z "${INPUT_GRAFANA_MCP_ENDPOINT:-}" && -n "${GRAFANA_MCP_ENDPOINT:-}" ]]; then
           export INPUT_GRAFANA_MCP_ENDPOINT="${GRAFANA_MCP_ENDPOINT}"
         fi

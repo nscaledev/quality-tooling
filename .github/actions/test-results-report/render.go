@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -119,8 +120,8 @@ func renderGrafanaLogSummary(sb *strings.Builder, enrichment *GrafanaLogEnrichme
 			testName = firstNonEmpty(context.Test.Name, context.Test.ID, testName)
 		}
 		link := "-"
-		if context.GrafanaExploreURL != "" {
-			link = fmt.Sprintf("[Open query in Grafana](%s)", context.GrafanaExploreURL)
+		if grafanaURL := grafanaSummaryURL(context.GrafanaExploreURL); grafanaURL != "" {
+			link = fmt.Sprintf("[Open Grafana](%s)", grafanaURL)
 		}
 		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
 			tableCell(truncate(cleanOneLine(testName), 120)),
@@ -145,14 +146,14 @@ func grafanaObservationIntro(enrichment *GrafanaLogEnrichment) string {
 		parts = append(parts, fmt.Sprintf("time range `%s` to `%s`", escapeMarkdown(enrichment.StartRFC3339), escapeMarkdown(enrichment.EndRFC3339)))
 	}
 	if len(parts) == 0 {
-		return "_Grafana lookups ran; raw log rows are omitted here and available through the query links._\n\n"
+		return "_Grafana lookups ran; raw log rows and query details are omitted here._\n\n"
 	}
-	return fmt.Sprintf("_Grafana lookups ran against %s; raw log rows are omitted here and available through the query links._\n\n", strings.Join(parts, ", "))
+	return fmt.Sprintf("_Grafana lookups ran against %s; raw log rows and query details are omitted here._\n\n", strings.Join(parts, ", "))
 }
 
 func grafanaObservationText(context GrafanaLogContext) string {
 	if context.Error != "" {
-		return "Lookup failed: " + truncate(cleanOneLine(context.Error), 180)
+		return "Lookup failed; details are available in the job logs"
 	}
 
 	var parts []string
@@ -177,6 +178,25 @@ func grafanaObservationText(context GrafanaLogContext) string {
 		parts = append(parts, "results truncated by limit")
 	}
 	return strings.Join(parts, "; ")
+}
+
+func grafanaSummaryURL(exploreURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(exploreURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	path := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(path, "/explore") {
+		path = strings.TrimSuffix(path, "/explore")
+	}
+	if path == "" {
+		path = "/"
+	}
+	parsed.Path = path
+	return parsed.String()
 }
 
 func grafanaLogComponentSummary(entries []GrafanaLogEntry) string {

@@ -453,7 +453,7 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 			sb.WriteString("; results were truncated by the MCP limit")
 		}
 		if context.GrafanaExploreURL != "" {
-			sb.WriteString("; Grafana link is included in the GitHub summary")
+			sb.WriteString("; neutral Grafana link is included in the GitHub summary")
 		}
 		sb.WriteString("\n")
 		if context.Reason != "" {

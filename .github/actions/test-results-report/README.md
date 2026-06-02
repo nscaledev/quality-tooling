@@ -106,7 +106,7 @@ Grafana log enrichment is opt-in. When it is enabled together with AI analysis, 
 
 Without AI analysis, or when callers want additional fixed queries, the action can still run `grafana-logql` once for the report and `grafana-logql-template` once per representative failed test.
 
-The action can either connect to an existing `mcp-grafana` streamable HTTP endpoint or start one itself. For Teleport-protected Grafana apps, the action uses `teleport-actions/application-tunnel@v1`, which is compatible with GitHub bot identities. Do not use `tsh app login` in CI for this flow because bot identities cannot reissue app certificates.
+The action can either connect to an existing `mcp-grafana` streamable HTTP endpoint or start one itself. For Teleport-protected Grafana apps, the action uses a pinned `teleport-actions/application-tunnel` revision, which is compatible with GitHub bot identities. Do not use `tsh app login` in CI for this flow because bot identities cannot reissue app certificates.
 
 Grafana decision logic:
 
@@ -122,8 +122,8 @@ Grafana decision logic:
 | `grafana-logql` is provided | Run it once for the whole report |
 | `grafana-logql-template` is provided | Render and run it once per representative failed test, capped by `grafana-log-max-failures` |
 | Planned or manual queries are ready | Execute `query_loki_logs` calls in parallel, bounded by `grafana-log-concurrency` |
-| Loki returns matching lines | Add query, reason, lookup metadata, labels, and log lines to the GitHub summary and final Claude input |
-| Loki returns no matching lines | Show the query and note that no matching log lines were returned |
+| Loki returns matching lines | Add a compact Grafana observation to the GitHub summary and pass summarized Loki evidence into final Claude analysis |
+| Loki returns no matching lines | Add a compact observation that no matching log lines were returned |
 
 When Grafana enrichment is enabled, the action writes two debug groups to the GitHub job log:
 
@@ -175,7 +175,7 @@ In the AI-assisted flow, `grafana-logql` and `grafana-logql-template` are option
 }
 ```
 
-The reporter executes each planned query through Grafana MCP's `query_loki_logs` tool and includes the test name, backend area, exact failure error, search terms, query reason, matching lines, and labels in the final report context. When `grafana-url` is provided, or when `grafana-app` lets the wrapper infer the Teleport public Grafana URL, the reporter also generates a Grafana Explore link for the exact datasource, LogQL, and time range; Claude is instructed not to invent Grafana URLs. If Claude decides no backend lookup is justified, it returns an empty query list and the report continues without Grafana logs.
+The reporter executes each planned query through Grafana MCP's `query_loki_logs` tool. The GitHub summary shows only compact Grafana observations: test, backend area, line count, matched components, and a neutral Grafana link when available. Raw log rows, LogQL, search terms, exact failure metadata, and query-bearing Explore URLs stay out of the GitHub summary. The final Claude analysis receives summarized Loki evidence, including concrete signal text when available, so it can connect the test error to the backend observation without making the report verbose. Internally, when `grafana-url` is provided, or when `grafana-app` lets the wrapper infer the Teleport public Grafana URL, the reporter can generate an Explore URL for the exact datasource, LogQL, and time range; Claude is instructed not to invent Grafana URLs. If Claude decides no backend lookup is justified, it returns an empty query list and the report continues without Grafana logs.
 
 For manual fallback queries, `grafana-logql-template` runs once per representative failed test, up to `grafana-log-max-failures`. Use the selector part of the template to define the logs that are relevant to the test suite, and use `{{log_keywords_regex}}` to narrow each query to the individual failure. It supports these placeholders:
 
@@ -249,12 +249,12 @@ When enabled, the report includes:
 | `enable-grafana-log-enrichment` | No | `false` | Fetch related logs through Grafana MCP |
 | `grafana-service-account-token` | No | empty | Grafana service account token used when this action starts `mcp-grafana` |
 | `grafana-app` | No | inferred from `environment` | Teleport Grafana app name used for the local tunnel |
-| `grafana-url` | No | empty | Direct Grafana URL when no Teleport tunnel is needed; also used to generate Grafana Explore lookup links |
-| `grafana-org-id` | No | `1` | Grafana organization ID used by `mcp-grafana` and generated Explore links |
+| `grafana-url` | No | empty | Direct Grafana URL when no Teleport tunnel is needed; also used to generate neutral Grafana links |
+| `grafana-org-id` | No | `1` | Grafana organization ID used by `mcp-grafana` and internal Explore URL generation |
 | `grafana-teleport-proxy` | No | `nscale.teleport.sh:443` | Teleport proxy for the Grafana app tunnel |
 | `grafana-teleport-token` | No | `github-grafana-access` | Teleport GitHub join token for the Grafana app tunnel |
 | `grafana-tunnel-port` | No | `3000` | Local Grafana tunnel port |
-| `grafana-mcp-version` | No | `latest` | `mcp-grafana` release tag to install |
+| `grafana-mcp-version` | No | `v0.7.10` | Pinned `mcp-grafana` release tag to install |
 | `grafana-mcp-port` | No | `8000` | Local `mcp-grafana` streamable HTTP port |
 | `grafana-mcp-endpoint` | No | empty | Existing `mcp-grafana` streamable HTTP endpoint |
 | `grafana-loki-datasource-uid` | No | empty | Loki datasource UID |

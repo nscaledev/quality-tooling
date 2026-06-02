@@ -391,7 +391,7 @@ func TestMarkdownSummaryIncludesGrafanaLookupMetadata(t *testing.T) {
 		"datasource `Loki` (`loki-dev`)",
 		"time range `2026-06-01T13:00:00Z` to `2026-06-01T14:00:00Z`",
 		"| uploads file | file-storage | 1 matching log line returned; components: file-storage-api",
-		"[Open query in Grafana](https://grafana.example.com/explore?panes=encoded)",
+		"[Open Grafana](https://grafana.example.com/)",
 		"filtered 2 Grafana/MCP self-observability line(s)",
 	} {
 		if !strings.Contains(markdown, expected) {
@@ -403,7 +403,47 @@ func TestMarkdownSummaryIncludesGrafanaLookupMetadata(t *testing.T) {
 		"Exact failure error:",
 		"Search terms:",
 		`{namespace=~".+"}`,
+		"panes=encoded",
+		"/explore?",
 		"file-storage controller failed claim-123 with backend 500",
+	} {
+		if strings.Contains(markdown, unexpected) {
+			t.Fatalf("summary should not include %q:\n%s", unexpected, markdown)
+		}
+	}
+}
+
+func TestRenderStepSummarySanitizesGrafanaLookupErrors(t *testing.T) {
+	t.Parallel()
+
+	markdown := renderStepSummary(Analysis{
+		Current: TestRun{Name: "API Tests"},
+		Stats:   Stats{Failed: 1, Total: 1},
+		GrafanaLogs: &GrafanaLogEnrichment{
+			Contexts: []GrafanaLogContext{{
+				TestName:          "uploads file",
+				BackendArea:       "file-storage",
+				GrafanaExploreURL: "https://grafana.example.com/explore?panes=claim-123",
+				Error:             `grafana MCP tool query_loki_logs failed for {namespace=~".+"} |~ "claim-123": datasource proxy returned 400`,
+			}},
+		},
+	}, RenderOptions{Title: "E2E Test Results"})
+
+	for _, expected := range []string{
+		"### Grafana Observations",
+		"Lookup failed; details are available in the job logs",
+		"[Open Grafana](https://grafana.example.com/)",
+	} {
+		if !strings.Contains(markdown, expected) {
+			t.Fatalf("summary missing %q:\n%s", expected, markdown)
+		}
+	}
+	for _, unexpected := range []string{
+		"query_loki_logs failed",
+		`{namespace=~".+"}`,
+		"claim-123",
+		"panes=",
+		"/explore?",
 	} {
 		if strings.Contains(markdown, unexpected) {
 			t.Fatalf("summary should not include %q:\n%s", unexpected, markdown)
@@ -866,7 +906,7 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 	for _, expected := range []string{
 		"Grafana/Loki observations for final analysis:",
 		"Scope: time range 2026-06-01T13:00:00Z to 2026-06-01T14:00:00Z; datasource Loki (loki).",
-		"- Test: creates instance; backend: unikorn-region; confidence: high; Loki returned 1 matching log line; components: unikorn-region; first match at 2026-06-01T14:00:00Z from unikorn-region; Loki signal: error signals: failed; filtered 2 Grafana/MCP self-observability line(s); Grafana link is included in the GitHub summary",
+		"- Test: creates instance; backend: unikorn-region; confidence: high; Loki returned 1 matching log line; components: unikorn-region; first match at 2026-06-01T14:00:00Z from unikorn-region; Loki signal: error signals: failed; filtered 2 Grafana/MCP self-observability line(s); neutral Grafana link is included in the GitHub summary",
 		"Lookup reason: Instance API returned a backend reconcile timeout.",
 		"Failed tests:",
 	} {

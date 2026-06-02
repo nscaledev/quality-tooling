@@ -442,11 +442,13 @@ var _ = Describe("Test Results Report", func() {
 				Expect(summary).To(ContainSubstring("file-storage"))
 				Expect(summary).To(ContainSubstring("1 matching log line returned"))
 				Expect(summary).To(ContainSubstring("components: file-storage"))
-				Expect(summary).To(ContainSubstring("[Open query in Grafana]"))
+				Expect(summary).To(ContainSubstring("[Open Grafana]"))
 				Expect(summary).To(ContainSubstring("AI report used Grafana backend evidence for file storage."))
 				Expect(summary).NotTo(ContainSubstring("### Grafana Log Context"))
 				Expect(summary).NotTo(ContainSubstring("Exact failure error: `POST /api/storage returned 500 for claim-123`"))
 				Expect(summary).NotTo(ContainSubstring(`{namespace=~".+"}`))
+				Expect(summary).NotTo(ContainSubstring("/explore?"))
+				Expect(summary).NotTo(ContainSubstring("panes="))
 				Expect(summary).NotTo(ContainSubstring("file-storage controller failed claim-123 with backend 500"))
 				Expect(summary).NotTo(ContainSubstring("### Failed Tests"))
 
@@ -646,9 +648,12 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).NotTo(ContainSubstring(`PREVIOUS_RESULTS_PATH="${{ inputs.previous-results-path }}"`))
 			})
 
-			It("should mask webhook and Claude token inputs before running the reporter", func() {
-				Expect(action).To(ContainSubstring(`echo "::add-mask::${INPUT_SLACK_WEBHOOK_URL}"`))
-				Expect(action).To(ContainSubstring(`echo "::add-mask::${INPUT_CLAUDE_TOKEN}"`))
+			It("should mask webhook and Claude token inputs through escaped workflow commands", func() {
+				Expect(action).To(ContainSubstring(`mask_value "slack-webhook-url" "${INPUT_SLACK_WEBHOOK_URL:-}"`))
+				Expect(action).To(ContainSubstring(`mask_value "claude-token" "${INPUT_CLAUDE_TOKEN:-}"`))
+				Expect(action).To(ContainSubstring(`value="${value//%/%25}"`))
+				Expect(action).NotTo(ContainSubstring(`echo "::add-mask::${INPUT_SLACK_WEBHOOK_URL}"`))
+				Expect(action).NotTo(ContainSubstring(`echo "::add-mask::${INPUT_CLAUDE_TOKEN}"`))
 			})
 
 			It("should use the Teleport application tunnel for optional Grafana MCP enrichment", func() {
@@ -664,14 +669,19 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring(`write_output "grafana-report-url" "${report_grafana_url}"`))
 				Expect(action).To(ContainSubstring("GRAFANA_MCP_ENDPOINT: ${{ steps.grafana-start.outputs.grafana-mcp-endpoint }}"))
 				Expect(action).To(ContainSubstring("GRAFANA_REPORT_URL: ${{ steps.grafana-start.outputs.grafana-report-url }}"))
-				Expect(action).To(ContainSubstring("Grafana Explore base URL for report links"))
+				Expect(action).To(ContainSubstring("Grafana base URL for report links"))
+				Expect(action).To(ContainSubstring("default: 'v0.7.10'"))
+				Expect(action).To(ContainSubstring("grafana-mcp-version must be a pinned release tag"))
+				Expect(action).To(ContainSubstring("mcp-grafana_${release#v}_checksums.txt"))
+				Expect(action).To(ContainSubstring("Checksum mismatch for ${artifact}"))
 				Expect(action).NotTo(ContainSubstring("GRAFANA_APP_RESOLVED=${grafana_app}"))
 				Expect(action).NotTo(ContainSubstring("GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED=${grafana_token}"))
 			})
 
 			It("should log Grafana MCP preflight decisions without exposing the service account token", func() {
 				Expect(action).To(ContainSubstring("Grafana MCP enrichment preflight"))
-				Expect(action).To(ContainSubstring(`echo "::add-mask::${grafana_token}"`))
+				Expect(action).To(ContainSubstring(`mask_value "grafana-service-account-token" "$grafana_token"`))
+				Expect(action).NotTo(ContainSubstring(`echo "::add-mask::${grafana_token}"`))
 				Expect(action).To(ContainSubstring("Grafana service account token configured:"))
 				Expect(action).To(ContainSubstring("Grafana org ID:"))
 				Expect(action).To(ContainSubstring("selected setup path: cannot start mcp-grafana; grafana-service-account-token is empty"))
