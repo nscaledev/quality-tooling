@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -121,27 +122,29 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 	}
 
 	var plannedQueries []GrafanaLogPlannedQuery
-	planningAttempted := config.EnableAIAnalysis && config.ClaudeToken != ""
-	if planningAttempted {
-		logGrafana("asking Claude to plan backend Loki queries for %d candidate failure(s)", len(selectGrafanaFailureCandidates(analysis, config.GrafanaLogMaxFailures)))
-		stageStarted := time.Now()
+	if config.GrafanaQueryPlanPath != "" {
+		logGrafana("loading preplanned backend Loki query plan from %s", config.GrafanaQueryPlanPath)
 		var err error
-		plannedQueries, err = runGrafanaLogQueryPlanning(ctx, config, analysis)
-		logGrafana("Claude query planning completed in %s", formatTimingDuration(time.Since(stageStarted)))
+		plannedQueries, err = readGrafanaLogQueryPlan(config.GrafanaQueryPlanPath)
 		if err != nil {
 			return nil, err
 		}
 		originalPlannedCount := len(plannedQueries)
 		plannedQueries = limitGrafanaPlannedQueries(plannedQueries, config.GrafanaLogMaxFailures)
-		logGrafana("Claude planned %d backend query/queries; using %d after limit", originalPlannedCount, len(plannedQueries))
+		logGrafana("loaded %d preplanned backend query/queries; using %d after limit", originalPlannedCount, len(plannedQueries))
 		logGrafanaPlannedQueries(plannedQueries)
-	} else if config.EnableAIAnalysis {
-		logGrafana("AI query planning skipped because claude-token/CLAUDE_CODE_OAUTH_TOKEN is not configured")
 	} else {
-		logGrafana("AI query planning skipped because enable-ai-analysis is false")
-	}
-	if !planningAttempted {
-		return nil, fmt.Errorf("grafana log enrichment requires enable-ai-analysis and claude-token/CLAUDE_CODE_OAUTH_TOKEN so Claude can select backend-related failures")
+		planningAttempted := config.EnableAIAnalysis && config.ClaudeToken != ""
+		if planningAttempted {
+			var err error
+			plannedQueries, err = planGrafanaLogQueries(ctx, config, analysis)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			logGrafanaPlanningSkip(config, analysis)
+			return nil, fmt.Errorf("grafana log enrichment requires enable-ai-analysis and claude-token/CLAUDE_CODE_OAUTH_TOKEN so Claude can select backend-related failures")
+		}
 	}
 	if len(plannedQueries) == 0 {
 		logGrafana("Claude did not select any backend-related failures; skipping MCP lookup")
@@ -213,6 +216,60 @@ func runGrafanaLogEnrichment(ctx context.Context, config Config, analysis Analys
 	logGrafana("Loki query jobs completed in %s", formatTimingDuration(time.Since(stageStarted)))
 	logGrafana("completed Grafana MCP enrichment with %d context result(s)", len(enrichment.Contexts))
 	return enrichment, nil
+}
+
+func planGrafanaLogQueries(ctx context.Context, config Config, analysis Analysis) ([]GrafanaLogPlannedQuery, error) {
+	logGrafana("asking Claude to plan backend Loki queries for %d candidate failure(s)", len(selectGrafanaFailureCandidates(analysis, config.GrafanaLogMaxFailures)))
+	stageStarted := time.Now()
+	plannedQueries, err := runGrafanaLogQueryPlanning(ctx, config, analysis)
+	logGrafana("Claude query planning completed in %s", formatTimingDuration(time.Since(stageStarted)))
+	if err != nil {
+		return nil, err
+	}
+	originalPlannedCount := len(plannedQueries)
+	plannedQueries = limitGrafanaPlannedQueries(plannedQueries, config.GrafanaLogMaxFailures)
+	logGrafana("Claude planned %d backend query/queries; using %d after limit", originalPlannedCount, len(plannedQueries))
+	logGrafanaPlannedQueries(plannedQueries)
+	return plannedQueries, nil
+}
+
+func logGrafanaPlanningSkip(config Config, analysis Analysis) {
+	switch {
+	case !config.EnableGrafanaLogs:
+		logGrafana("query planning skipped because enable-grafana-log-enrichment is false")
+	case len(analysis.Failures) == 0:
+		logGrafana("query planning skipped because there are no failed tests")
+	case !config.EnableAIAnalysis:
+		logGrafana("AI query planning skipped because enable-ai-analysis is false")
+	case config.ClaudeToken == "":
+		logGrafana("AI query planning skipped because claude-token/CLAUDE_CODE_OAUTH_TOKEN is not configured")
+	}
+}
+
+func writeGrafanaLogQueryPlan(path string, queries []GrafanaLogPlannedQuery) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("grafana query plan path is empty")
+	}
+	if queries == nil {
+		queries = []GrafanaLogPlannedQuery{}
+	}
+	data, err := json.MarshalIndent(grafanaLogQueryPlanResponse{Queries: queries}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode grafana query plan: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write grafana query plan %s: %w", path, err)
+	}
+	return nil
+}
+
+func readGrafanaLogQueryPlan(path string) ([]GrafanaLogPlannedQuery, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read grafana query plan %s: %w", path, err)
+	}
+	return parseGrafanaLogQueryPlan(string(data))
 }
 
 func newMCPHTTPClient(endpoint string) *mcpHTTPClient {

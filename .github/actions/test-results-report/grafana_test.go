@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -140,6 +141,149 @@ func TestRunGrafanaLogEnrichmentThroughMCP(t *testing.T) {
 	}
 	if len(enrichment.Contexts[0].Entries) != 1 || !strings.Contains(enrichment.Contexts[0].Entries[0].Line, "reconcile failed") {
 		t.Fatalf("unexpected log entries: %+v", enrichment.Contexts[0].Entries)
+	}
+}
+
+func TestRunGrafanaLogEnrichmentSkipsMCPForEmptyPreplannedQueryFile(t *testing.T) {
+	previousPlanner := runGrafanaLogQueryPlanning
+	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
+		t.Fatal("planner should not run when a preplanned query file is provided")
+		return nil, nil
+	}
+	defer func() {
+		runGrafanaLogQueryPlanning = previousPlanner
+	}()
+
+	planPath := filepath.Join(t.TempDir(), "grafana-plan.json")
+	if err := writeGrafanaLogQueryPlan(planPath, nil); err != nil {
+		t.Fatalf("write preplanned query file: %v", err)
+	}
+
+	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
+		EnableGrafanaLogs:    true,
+		EnableAIAnalysis:     true,
+		ClaudeToken:          "test-token",
+		GrafanaQueryPlanPath: planPath,
+	}, Analysis{
+		Failures: []TestCase{{
+			ID:      "ui-css",
+			Name:    "button color",
+			Suite:   "Console UI",
+			Message: "expected button color #0055ff, got #0044dd",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("runGrafanaLogEnrichment returned error: %v", err)
+	}
+	if enrichment != nil {
+		t.Fatalf("expected no enrichment for empty preplanned query file, got %+v", enrichment)
+	}
+}
+
+func TestRunGrafanaLogEnrichmentUsesPreplannedQueryFile(t *testing.T) {
+	previousPlanner := runGrafanaLogQueryPlanning
+	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
+		t.Fatal("planner should not run when a preplanned query file is provided")
+		return nil, nil
+	}
+	defer func() {
+		runGrafanaLogQueryPlanning = previousPlanner
+	}()
+
+	planPath := filepath.Join(t.TempDir(), "grafana-plan.json")
+	if err := writeGrafanaLogQueryPlan(planPath, []GrafanaLogPlannedQuery{{
+		FailureRef:    "f1",
+		TestName:      "creates network",
+		BackendArea:   "network",
+		ExpectedError: "network entered error state",
+		SearchTerms:   []string{"network-123", "error"},
+		LogQL:         `{namespace=~".+"} |~ "(?i)(network-123|error)"`,
+		Reason:        "Network provisioning reached error and needs controller evidence.",
+		Confidence:    "high",
+	}}); err != nil {
+		t.Fatalf("write preplanned query file: %v", err)
+	}
+
+	var sawQueryLoki atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var rpc struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
+			t.Fatalf("decode rpc request: %v", err)
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Mcp-Session-Id", "test-session")
+
+		switch rpc.Method {
+		case "initialize":
+			writeMCPResponse(t, writer, rpc.ID, map[string]any{
+				"protocolVersion": mcpProtocolVersion,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "fake-grafana-mcp"},
+			})
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			var params struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			}
+			if err := json.Unmarshal(rpc.Params, &params); err != nil {
+				t.Fatalf("decode tool params: %v", err)
+			}
+			switch params.Name {
+			case "list_datasources":
+				writeMCPToolResponse(t, writer, rpc.ID, `{"datasources":[{"uid":"loki-dev","name":"Loki","type":"loki","isDefault":true}]}`)
+			case "query_loki_logs":
+				sawQueryLoki.Store(true)
+				var args map[string]any
+				if err := json.Unmarshal(params.Arguments, &args); err != nil {
+					t.Fatalf("decode query args: %v", err)
+				}
+				if args["logql"] != `{namespace=~".+"} |~ "(?i)(network-123|error)"` {
+					t.Fatalf("logql = %v", args["logql"])
+				}
+				writeMCPToolResponse(t, writer, rpc.ID, `{"data":[{"timestamp":"1780322400000000000","line":"network-123 controller reached error","labels":{"namespace":"unikorn-region"}}],"metadata":{"linesReturned":1,"resultsTruncated":false}}`)
+			default:
+				t.Fatalf("unexpected tool %s", params.Name)
+			}
+		default:
+			t.Fatalf("unexpected method %s", rpc.Method)
+		}
+	}))
+	defer server.Close()
+
+	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
+		EnableGrafanaLogs:    true,
+		EnableAIAnalysis:     false,
+		GrafanaMCPEndpoint:   server.URL + "/mcp",
+		GrafanaQueryPlanPath: planPath,
+		GrafanaLogStart:      "2026-06-01T13:00:00Z",
+		GrafanaLogEnd:        "2026-06-01T14:00:00Z",
+		GrafanaLogLimit:      5,
+	}, Analysis{
+		Failures: []TestCase{{
+			ID:      "network-create",
+			Name:    "creates network",
+			Suite:   "File Storage Management",
+			Message: "network entered error state",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("runGrafanaLogEnrichment returned error: %v", err)
+	}
+	if !sawQueryLoki.Load() {
+		t.Fatal("expected preplanned Loki query to be executed")
+	}
+	if enrichment == nil || len(enrichment.Contexts) != 1 {
+		t.Fatalf("unexpected enrichment: %+v", enrichment)
+	}
+	if enrichment.Contexts[0].FailureRef != "f1" || enrichment.Contexts[0].BackendArea != "network" {
+		t.Fatalf("unexpected context metadata: %+v", enrichment.Contexts[0])
 	}
 }
 

@@ -61,7 +61,7 @@ At a high level, the action keeps orchestration inside the GitHub workflow runne
 2. Optionally read the previous report when `compare-with-previous` is enabled or auto-detected.
 3. Analyze current failures, skips, deltas, and representative failures.
 4. Optionally ask Claude which failures, if any, need backend log lookup.
-5. Query Grafana MCP in parallel only when Claude planned backend queries.
+5. Resolve or start Grafana MCP only when Claude planned backend queries, then query Loki in parallel.
 6. Optionally run Claude to consolidate the final failure analysis.
 7. Write the GitHub step summary.
 8. Optionally send Slack.
@@ -120,10 +120,11 @@ Grafana decision logic:
 | Loki returns matching lines | Add a compact Grafana observation to the GitHub summary and pass summarized Loki evidence into final Claude analysis |
 | Loki returns no matching lines | Add a compact observation that no matching log lines were returned |
 
-When Grafana enrichment is enabled, the action writes two debug groups to the GitHub job log:
+When Grafana enrichment is enabled, the action writes debug groups to the GitHub job log:
 
-- `Grafana MCP enrichment preflight`: shows whether the token, app, direct URL, existing MCP endpoint, Grafana org ID, datasource selector, lookback, limit, max failures, and concurrency were configured. It also states the selected setup path, such as using an existing endpoint, opening the Teleport app tunnel, or skipping MCP startup because required inputs are missing.
-- `Grafana MCP log enrichment`: shows whether Claude query planning ran, how many backend-related queries were planned, the exact failure error and search terms used for each planned query, the selected Loki datasource, the query time range, the number of parallel query jobs, and each query's line count, truncation flag, first returned log line, or MCP/Loki error.
+- `Grafana MCP enrichment preflight`: shows whether the token, app, direct URL, existing MCP endpoint, Grafana org ID, datasource selector, lookback, limit, max failures, and concurrency were configured. It also states the candidate setup path if backend queries are planned.
+- `Grafana MCP query planning`: shows whether Claude selected backend-related failures, how many Loki queries were planned, and whether the workflow needs MCP setup.
+- `Grafana MCP log enrichment`: shows the loaded query plan, selected Loki datasource, query time range, number of parallel query jobs, and each query's line count, truncation flag, first returned log line, or MCP/Loki error.
 
 Teleport app access should remain narrow. The `github-grafana-access` bot is expected to use Teleport `app_labels` for Kubernetes-discovered Grafana apps, such as `app.kubernetes.io/name=grafana`, `teleport.dev/origin=discovery-kubernetes`, and the allowed cluster labels. It does not need broad Teleport dynamic-resource app rules for this action. Grafana read/query permissions must still come from the provided Grafana service account token; the action also starts `mcp-grafana` with write tools disabled and only datasource/Loki tools enabled.
 

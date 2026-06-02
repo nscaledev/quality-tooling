@@ -11,8 +11,17 @@ import (
 
 var runAIAnalysis = runClaudeAnalysis
 
+const grafanaPlanOnlyArg = "--grafana-plan-only"
+
 func main() {
-	if err := run(context.Background(), loadConfig()); err != nil {
+	config := loadConfig()
+	var err error
+	if len(os.Args) > 1 && os.Args[1] == grafanaPlanOnlyArg {
+		err = runGrafanaQueryPlanningMode(context.Background(), config)
+	} else {
+		err = run(context.Background(), config)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "test-results-report: %v\n", err)
 		os.Exit(1)
 	}
@@ -128,6 +137,63 @@ func run(ctx context.Context, config Config) error {
 	logReportTiming("total", totalStarted)
 
 	return nil
+}
+
+func runGrafanaQueryPlanningMode(ctx context.Context, config Config) error {
+	totalStarted := time.Now()
+	if err := config.validate(); err != nil {
+		return err
+	}
+
+	fmt.Println("::group::Grafana MCP query planning")
+	defer fmt.Println("::endgroup::")
+
+	analysis, err := buildAnalysis(config)
+	if err != nil {
+		return err
+	}
+
+	planPath := firstNonEmpty(config.GrafanaQueryPlanPath, filepath.Join(os.TempDir(), "test-results-report-grafana-query-plan.json"))
+	plannedQueries := []GrafanaLogPlannedQuery{}
+	if config.EnableGrafanaLogs && len(analysis.Failures) > 0 && config.EnableAIAnalysis && config.ClaudeToken != "" {
+		plannedQueries, err = planGrafanaLogQueries(ctx, config, analysis)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Grafana query planning failed; MCP setup will be skipped: %v\n", err)
+			plannedQueries = []GrafanaLogPlannedQuery{}
+		}
+	} else {
+		logGrafanaPlanningSkip(config, analysis)
+	}
+
+	if err := writeGrafanaLogQueryPlan(planPath, plannedQueries); err != nil {
+		return err
+	}
+	if err := writeGrafanaPlanOutputs(os.Getenv("GITHUB_OUTPUT"), planPath, len(plannedQueries)); err != nil {
+		return err
+	}
+	logGrafana("query plan file: %s", planPath)
+	logGrafana("query planning output: queries=%d needs_mcp=%t", len(plannedQueries), len(plannedQueries) > 0)
+	logReportTiming("grafana-query-planning-total", totalStarted)
+	return nil
+}
+
+func buildAnalysis(config Config) (Analysis, error) {
+	current, err := readAndParse(config.TestResultsPath, config.Format)
+	if err != nil {
+		return Analysis{}, err
+	}
+
+	var previous *TestRun
+	if config.CompareWithPrevious && config.PreviousResultsPath != "" {
+		previousRun, err := readAndParse(config.PreviousResultsPath, config.PreviousResultsFormat)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: previous results could not be parsed: %v\n", err)
+		} else {
+			previous = &previousRun
+		}
+	}
+
+	return analyze(current, previous), nil
 }
 
 func logReportTiming(stage string, started time.Time) {
@@ -286,6 +352,34 @@ func writeOutputs(path string, analysis Analysis, slackSent bool) error {
 		{"recurring-skips", fmt.Sprint(recurringSkips)},
 		{"resolved-skips", fmt.Sprint(resolvedSkips)},
 		{"slack-sent", fmt.Sprint(slackSent)},
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
+	}
+	defer file.Close()
+
+	for _, value := range values {
+		if _, err := fmt.Fprintf(file, "%s=%s\n", value.key, value.value); err != nil {
+			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeGrafanaPlanOutputs(path string, planPath string, queryCount int) error {
+	if path == "" {
+		return nil
+	}
+
+	values := []struct {
+		key   string
+		value string
+	}{
+		{"plan-path", planPath},
+		{"query-count", fmt.Sprint(queryCount)},
+		{"needs-mcp", fmt.Sprint(queryCount > 0)},
 	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)

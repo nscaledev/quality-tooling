@@ -42,6 +42,7 @@ type Config struct {
 	GrafanaLogLimit       int
 	GrafanaLogMaxFailures int
 	GrafanaLogConcurrency int
+	GrafanaQueryPlanPath  string
 }
 
 func loadConfig() Config {
@@ -106,6 +107,7 @@ func configFromEnv(env map[string]string) Config {
 		GrafanaLogLimit:       parseIntDefault(env["INPUT_GRAFANA_LOG_LIMIT"], 20),
 		GrafanaLogMaxFailures: parseIntDefault(env["INPUT_GRAFANA_LOG_MAX_FAILURES"], 6),
 		GrafanaLogConcurrency: parseIntDefault(env["INPUT_GRAFANA_LOG_CONCURRENCY"], 4),
+		GrafanaQueryPlanPath:  env["INPUT_GRAFANA_QUERY_PLAN_PATH"],
 	}
 }
 
