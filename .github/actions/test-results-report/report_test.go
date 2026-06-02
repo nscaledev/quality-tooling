@@ -698,11 +698,18 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed",
 		"Use skipped for patterns where all affected tests are skipped",
 		"Use test/false failure only for failed tests",
-		"If Grafana log context is present, use it as supporting evidence",
+		"If Grafana/Loki observations are present, use them only as supporting evidence",
+		"Keep the report close to the existing production format",
+		"do not add a separate Grafana/Loki section",
+		"When a Loki signal is present, mention the concrete signal",
+		"Do not overstate certainty when Loki returned empty, cleanup-only, or loosely related logs",
 		`add a "### Representative Failed Tests" table capped at 10 rows`,
 		"group tests with the same failure reason into one row",
 		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
 		"Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason",
+		"For Grafana/Loki-backed bullets, explicitly connect the test error",
+		`Do not use vague phrases like "Grafana returned related activity"`,
+		"If Loki only returned audit/cleanup rows",
 		"Group by suite name when one suite is affected",
 		"Lead with the highest-attention real product, infra, or environment blocker",
 		"keep temporary sentinel/test-validation failures short",
@@ -721,6 +728,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"| Suite / area | Representative tests | Failure reason | Count |",
 		"- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.",
 		"- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457",
+		"- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Loki matched the resource only in audit/cleanup rows",
 		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
 		aiSlackDelimiter,
 	} {
@@ -856,24 +864,66 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 	}, AIInputOptions{})
 
 	for _, expected := range []string{
-		"Grafana log context queried via mcp-grafana:",
-		"Datasource UID: loki",
-		`Query: {namespace="unikorn-region"} |= "instance"`,
-		"Query reason: Instance API returned a backend reconcile timeout.",
-		"Failure ref: f1",
-		"Planned test: creates instance",
-		"Backend area: unikorn-region",
-		"Exact failure error: instance reconcile timed out",
-		"Search terms: instance, timeout",
-		"Lookup confidence: high",
-		"Grafana lookup URL: https://grafana.example.com/explore?panes=test",
-		"Filtered Grafana/MCP self-observability lines: 2",
-		"controller failed to create instance",
-		"namespace=unikorn-region",
+		"Grafana/Loki observations for final analysis:",
+		"Scope: time range 2026-06-01T13:00:00Z to 2026-06-01T14:00:00Z; datasource Loki (loki).",
+		"- Test: creates instance; backend: unikorn-region; confidence: high; Loki returned 1 matching log line; components: unikorn-region; first match at 2026-06-01T14:00:00Z from unikorn-region; Loki signal: error signals: failed; filtered 2 Grafana/MCP self-observability line(s); Grafana link is included in the GitHub summary",
+		"Lookup reason: Instance API returned a backend reconcile timeout.",
 		"Failed tests:",
 	} {
 		if !strings.Contains(input, expected) {
 			t.Fatalf("AI input missing %q:\n%s", expected, input)
+		}
+	}
+	for _, unexpected := range []string{
+		`Query: {namespace="unikorn-region"} |= "instance"`,
+		"Exact failure error: instance reconcile timed out",
+		"Search terms: instance, timeout",
+		"Grafana lookup URL: https://grafana.example.com/explore?panes=test",
+		"controller failed to create instance",
+	} {
+		if strings.Contains(input, unexpected) {
+			t.Fatalf("AI input should not include %q:\n%s", unexpected, input)
+		}
+	}
+}
+
+func TestGrafanaLogSignalSummaryIncludesCleanupOnlyObservation(t *testing.T) {
+	t.Parallel()
+
+	summary := grafanaLogSignalSummary(GrafanaLogContext{
+		Entries: []GrafanaLogEntry{{
+			Line: `{"level":"info","msg":"audit","spanName":"/api/v2/networks/network-123"`,
+		}, {
+			Line: `{"level":"info","msg":"deletion complete","controller":"unikorn-network-controller"}`,
+		}},
+	})
+
+	for _, expected := range []string{
+		"matched messages: audit, deletion complete",
+		"no explicit error string in returned rows",
+	} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("signal summary missing %q: %s", expected, summary)
+		}
+	}
+}
+
+func TestGrafanaLogSignalSummaryIncludesErrorObservation(t *testing.T) {
+	t.Parallel()
+
+	summary := grafanaLogSignalSummary(GrafanaLogContext{
+		Entries: []GrafanaLogEntry{{
+			Line: "ERROR: Failed to forward scheduled tasks: INTERNAL_ERROR: redis eval error: connect: connection refused",
+		}},
+	})
+
+	for _, expected := range []string{
+		"error signals: INTERNAL_ERROR",
+		"connection refused",
+		"failed",
+	} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("signal summary missing %q: %s", expected, summary)
 		}
 	}
 }
