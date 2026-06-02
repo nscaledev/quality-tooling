@@ -610,6 +610,7 @@ func TestRenderUtilityBranches(t *testing.T) {
 	}
 	if formatLogTimestamp("2026-06-01T14:00:00Z") != "2026-06-01T14:00:00Z" ||
 		formatLogTimestamp("1780322400000000000") != "2026-06-01T14:00:00Z" ||
+		formatLogTimestamp(`"1780322400000000000"`) != "2026-06-01T14:00:00Z" ||
 		formatLogTimestamp("bad") != "bad" ||
 		formatLogTimestamp("") != "-" {
 		t.Fatal("formatLogTimestamp did not cover expected branches")

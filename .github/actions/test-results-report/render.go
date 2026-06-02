@@ -296,6 +296,7 @@ func formatLogTimestamp(value string) string {
 	if value == "" {
 		return "-"
 	}
+	value = strings.Trim(value, `"`)
 	if nanos, err := time.ParseDuration(value + "ns"); err == nil {
 		return time.Unix(0, nanos.Nanoseconds()).UTC().Format(time.RFC3339)
 	}

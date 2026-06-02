@@ -179,6 +179,30 @@ func TestDecodeListDatasourcesResultAcceptsObjectAndLiveArrayShapes(t *testing.T
 	}
 }
 
+func TestDecodeQueryLokiLogsResultAcceptsObjectAndLiveArrayShapes(t *testing.T) {
+	t.Parallel()
+
+	objectResult, err := decodeQueryLokiLogsResult([]byte(`{"data":[{"timestamp":"1780322400000000000","line":"object result","labels":{"namespace":"unikorn-region"}}],"metadata":{"linesReturned":1,"resultsTruncated":true}}`))
+	if err != nil {
+		t.Fatalf("decode object query_loki_logs shape: %v", err)
+	}
+	if len(objectResult.Data) != 1 || objectResult.Data[0].Line != "object result" || objectResult.Metadata == nil || !objectResult.Metadata.ResultsTruncated {
+		t.Fatalf("unexpected object query result: %+v", objectResult)
+	}
+
+	arrayResult, err := decodeQueryLokiLogsResult([]byte(`[{"timestamp":"\"1780412178000870064\"","line":"{\"level\":\"info\",\"msg\":\"audit\"}","labels":{"namespace":"unikorn-region","app":"unikorn-region-server"}}]`))
+	if err != nil {
+		t.Fatalf("decode live array query_loki_logs shape: %v", err)
+	}
+	if len(arrayResult.Data) != 1 || !strings.Contains(arrayResult.Data[0].Line, "audit") || arrayResult.Metadata == nil || arrayResult.Metadata.LinesReturned != 1 {
+		t.Fatalf("unexpected array query result: %+v", arrayResult)
+	}
+
+	if _, err := decodeQueryLokiLogsResult([]byte(`{"unexpected":true}`)); err == nil {
+		t.Fatal("unexpected query_loki_logs object shape should fail to decode")
+	}
+}
+
 func TestGrafanaQueryFinishLogMessageShowsMCPFetchOutcome(t *testing.T) {
 	t.Parallel()
 

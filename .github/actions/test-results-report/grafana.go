@@ -64,17 +64,21 @@ type listDatasourcesResult struct {
 }
 
 type queryLokiLogsResult struct {
-	Data []struct {
-		Timestamp          string            `json:"timestamp,omitempty"`
-		Line               string            `json:"line,omitempty"`
-		Labels             map[string]string `json:"labels,omitempty"`
-		StructuredMetadata map[string]string `json:"structuredMetadata,omitempty"`
-		Parsed             map[string]string `json:"parsed,omitempty"`
-	} `json:"data"`
-	Metadata *struct {
-		LinesReturned    int  `json:"linesReturned"`
-		ResultsTruncated bool `json:"resultsTruncated"`
-	} `json:"metadata,omitempty"`
+	Data     []queryLokiLogEntry `json:"data"`
+	Metadata *queryLokiMetadata  `json:"metadata,omitempty"`
+}
+
+type queryLokiLogEntry struct {
+	Timestamp          string            `json:"timestamp,omitempty"`
+	Line               string            `json:"line,omitempty"`
+	Labels             map[string]string `json:"labels,omitempty"`
+	StructuredMetadata map[string]string `json:"structuredMetadata,omitempty"`
+	Parsed             map[string]string `json:"parsed,omitempty"`
+}
+
+type queryLokiMetadata struct {
+	LinesReturned    int  `json:"linesReturned"`
+	ResultsTruncated bool `json:"resultsTruncated"`
 }
 
 type grafanaFailureCandidate struct {
@@ -543,6 +547,24 @@ func decodeListDatasourcesResult(raw []byte) ([]grafanaDatasource, error) {
 	return datasources, nil
 }
 
+func decodeQueryLokiLogsResult(raw []byte) (queryLokiLogsResult, error) {
+	var result queryLokiLogsResult
+	if err := json.Unmarshal(raw, &result); err == nil && (result.Data != nil || result.Metadata != nil) {
+		return result, nil
+	}
+
+	var entries []queryLokiLogEntry
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return queryLokiLogsResult{}, err
+	}
+	return queryLokiLogsResult{
+		Data: entries,
+		Metadata: &queryLokiMetadata{
+			LinesReturned: len(entries),
+		},
+	}, nil
+}
+
 func runGrafanaLogQueryJobs(ctx context.Context, client *mcpHTTPClient, datasourceUID, start, end string, config Config, jobs []grafanaLogQueryJob) []GrafanaLogContext {
 	if len(jobs) == 0 {
 		return nil
@@ -739,8 +761,8 @@ func queryGrafanaLogs(ctx context.Context, client *mcpHTTPClient, datasourceUID,
 		return context
 	}
 
-	var result queryLokiLogsResult
-	if err := json.Unmarshal(raw, &result); err != nil {
+	result, err := decodeQueryLokiLogsResult(raw)
+	if err != nil {
 		context.Error = fmt.Sprintf("decode query_loki_logs result: %v: %s", err, string(raw))
 		return context
 	}
