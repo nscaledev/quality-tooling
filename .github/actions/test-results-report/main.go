@@ -6,45 +6,74 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 var runAIAnalysis = runClaudeAnalysis
 
+const grafanaPlanOnlyArg = "--grafana-plan-only"
+
 func main() {
-	if err := run(context.Background(), loadConfig()); err != nil {
+	config := loadConfig()
+	var err error
+	if len(os.Args) > 1 && os.Args[1] == grafanaPlanOnlyArg {
+		err = runGrafanaQueryPlanningMode(context.Background(), config)
+	} else {
+		err = run(context.Background(), config)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "test-results-report: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func run(ctx context.Context, config Config) error {
+	totalStarted := time.Now()
 	if err := config.validate(); err != nil {
 		return err
 	}
 
+	stageStarted := time.Now()
 	current, err := readAndParse(config.TestResultsPath, config.Format)
 	if err != nil {
 		return err
 	}
+	logReportTiming("parse-current-results", stageStarted)
 
 	var previous *TestRun
 	if config.CompareWithPrevious && config.PreviousResultsPath != "" {
+		stageStarted = time.Now()
 		previousRun, err := readAndParse(config.PreviousResultsPath, config.PreviousResultsFormat)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: previous results could not be parsed: %v\n", err)
 		} else {
 			previous = &previousRun
 		}
+		logReportTiming("parse-previous-results", stageStarted)
 	}
 
+	stageStarted = time.Now()
 	analysis := analyze(current, previous)
+	logReportTiming("analyze-results", stageStarted)
 
+	stageStarted = time.Now()
+	grafanaLogs, err := runGrafanaLogEnrichment(ctx, config, analysis)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Grafana log enrichment skipped: %v\n", err)
+	} else if grafanaLogs != nil {
+		analysis.GrafanaLogs = grafanaLogs
+	}
+	logReportTiming("grafana-log-enrichment", stageStarted)
+
+	stageStarted = time.Now()
 	aiAnalysis, err := runAIAnalysis(ctx, config, analysis)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: AI failure analysis skipped: %v\n", err)
 	}
+	logReportTiming("ai-failure-analysis", stageStarted)
 
 	if config.WriteStepSummary {
+		stageStarted = time.Now()
 		summary := renderStepSummary(analysis, RenderOptions{
 			Title:           config.Title,
 			Environment:     config.Environment,
@@ -61,10 +90,12 @@ func run(ctx context.Context, config Config) error {
 		if err := appendStepSummary(config.StepSummaryPath, summary); err != nil {
 			return err
 		}
+		logReportTiming("write-step-summary", stageStarted)
 	}
 
 	slackSent := false
 	if config.SendSlack {
+		stageStarted = time.Now()
 		slackSummary := ""
 		if aiAnalysis != nil {
 			slackSummary = aiAnalysis.SlackSummary
@@ -88,11 +119,14 @@ func run(ctx context.Context, config Config) error {
 		} else {
 			slackSent = true
 		}
+		logReportTiming("send-slack", stageStarted)
 	}
 
+	stageStarted = time.Now()
 	if err := writeOutputs(os.Getenv("GITHUB_OUTPUT"), analysis, slackSent); err != nil {
 		return err
 	}
+	logReportTiming("write-outputs", stageStarted)
 
 	fmt.Printf("Parsed %d tests: %d passed, %d failed, %d skipped\n",
 		analysis.Stats.Total,
@@ -100,8 +134,80 @@ func run(ctx context.Context, config Config) error {
 		analysis.Stats.Failed,
 		analysis.Stats.Skipped,
 	)
+	logReportTiming("total", totalStarted)
 
 	return nil
+}
+
+func runGrafanaQueryPlanningMode(ctx context.Context, config Config) error {
+	totalStarted := time.Now()
+	if err := config.validate(); err != nil {
+		return err
+	}
+
+	fmt.Println("::group::Grafana MCP query planning")
+	defer fmt.Println("::endgroup::")
+
+	analysis, err := buildAnalysis(config)
+	if err != nil {
+		return err
+	}
+
+	planPath := firstNonEmpty(config.GrafanaQueryPlanPath, filepath.Join(os.TempDir(), "test-results-report-grafana-query-plan.json"))
+	plannedQueries := []GrafanaLogPlannedQuery{}
+	if config.EnableGrafanaLogs && len(analysis.Failures) > 0 && config.EnableAIAnalysis && config.ClaudeToken != "" {
+		plannedQueries, err = planGrafanaLogQueries(ctx, config, analysis)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Grafana query planning failed; MCP setup will be skipped: %v\n", err)
+			plannedQueries = []GrafanaLogPlannedQuery{}
+		}
+	} else {
+		logGrafanaPlanningSkip(config, analysis)
+	}
+
+	if err := writeGrafanaLogQueryPlan(planPath, plannedQueries); err != nil {
+		return err
+	}
+	if err := writeGrafanaPlanOutputs(os.Getenv("GITHUB_OUTPUT"), planPath, len(plannedQueries)); err != nil {
+		return err
+	}
+	logGrafana("query plan file: %s", planPath)
+	logGrafana("query planning output: queries=%d needs_mcp=%t", len(plannedQueries), len(plannedQueries) > 0)
+	logReportTiming("grafana-query-planning-total", totalStarted)
+	return nil
+}
+
+func buildAnalysis(config Config) (Analysis, error) {
+	current, err := readAndParse(config.TestResultsPath, config.Format)
+	if err != nil {
+		return Analysis{}, err
+	}
+
+	var previous *TestRun
+	if config.CompareWithPrevious && config.PreviousResultsPath != "" {
+		previousRun, err := readAndParse(config.PreviousResultsPath, config.PreviousResultsFormat)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: previous results could not be parsed: %v\n", err)
+		} else {
+			previous = &previousRun
+		}
+	}
+
+	return analyze(current, previous), nil
+}
+
+func logReportTiming(stage string, started time.Time) {
+	fmt.Printf("test-results-report timing: stage=%s duration=%s\n", stage, formatTimingDuration(time.Since(started)))
+}
+
+func formatTimingDuration(duration time.Duration) string {
+	if duration < 0 {
+		duration = 0
+	}
+	if duration < time.Second {
+		return duration.Truncate(time.Millisecond).String()
+	}
+	return duration.Truncate(100 * time.Millisecond).String()
 }
 
 func readAndParse(path, format string) (TestRun, error) {
@@ -246,6 +352,34 @@ func writeOutputs(path string, analysis Analysis, slackSent bool) error {
 		{"recurring-skips", fmt.Sprint(recurringSkips)},
 		{"resolved-skips", fmt.Sprint(resolvedSkips)},
 		{"slack-sent", fmt.Sprint(slackSent)},
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
+	}
+	defer file.Close()
+
+	for _, value := range values {
+		if _, err := fmt.Fprintf(file, "%s=%s\n", value.key, value.value); err != nil {
+			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeGrafanaPlanOutputs(path string, planPath string, queryCount int) error {
+	if path == "" {
+		return nil
+	}
+
+	values := []struct {
+		key   string
+		value string
+	}{
+		{"plan-path", planPath},
+		{"query-count", fmt.Sprint(queryCount)},
+		{"needs-mcp", fmt.Sprint(queryCount > 0)},
 	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)

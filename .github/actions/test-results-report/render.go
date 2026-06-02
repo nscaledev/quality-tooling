@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -51,6 +53,8 @@ func renderStepSummary(analysis Analysis, options RenderOptions) string {
 		sb.WriteString("\n")
 	}
 
+	renderGrafanaLogSummary(&sb, analysis.GrafanaLogs)
+
 	if !options.OmitTestDetails {
 		renderTestTable(&sb, "Failed Tests", analysis.Failures, options.MaxFailures)
 		if options.IncludeSkips {
@@ -98,6 +102,110 @@ func renderTestTable(sb *strings.Builder, title string, tests []TestCase, limit 
 		))
 	}
 	sb.WriteString("\n")
+}
+
+func renderGrafanaLogSummary(sb *strings.Builder, enrichment *GrafanaLogEnrichment) {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return
+	}
+
+	sb.WriteString("### Grafana Observations\n\n")
+	sb.WriteString(grafanaObservationIntro(enrichment))
+	sb.WriteString("| Test | Backend | Observation | Link |\n")
+	sb.WriteString("| --- | --- | --- | --- |\n")
+
+	for _, context := range enrichment.Contexts {
+		testName := firstNonEmpty(context.TestName, "General lookup")
+		if context.Test != nil {
+			testName = firstNonEmpty(context.Test.Name, context.Test.ID, testName)
+		}
+		link := "-"
+		if grafanaURL := grafanaSummaryURL(context.GrafanaExploreURL); grafanaURL != "" {
+			link = fmt.Sprintf("[Open Grafana](%s)", grafanaURL)
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
+			tableCell(truncate(cleanOneLine(testName), 120)),
+			tableCell(truncate(cleanOneLine(context.BackendArea), 80)),
+			tableCell(grafanaObservationText(context)),
+			link,
+		))
+	}
+	sb.WriteString("\n")
+}
+
+func grafanaObservationIntro(enrichment *GrafanaLogEnrichment) string {
+	var parts []string
+	if enrichment.DatasourceName != "" && enrichment.DatasourceUID != "" {
+		parts = append(parts, fmt.Sprintf("datasource `%s` (`%s`)", escapeMarkdown(enrichment.DatasourceName), escapeMarkdown(enrichment.DatasourceUID)))
+	} else if enrichment.DatasourceName != "" {
+		parts = append(parts, fmt.Sprintf("datasource `%s`", escapeMarkdown(enrichment.DatasourceName)))
+	} else if enrichment.DatasourceUID != "" {
+		parts = append(parts, fmt.Sprintf("datasource `%s`", escapeMarkdown(enrichment.DatasourceUID)))
+	}
+	if enrichment.StartRFC3339 != "" || enrichment.EndRFC3339 != "" {
+		parts = append(parts, fmt.Sprintf("time range `%s` to `%s`", escapeMarkdown(enrichment.StartRFC3339), escapeMarkdown(enrichment.EndRFC3339)))
+	}
+	if len(parts) == 0 {
+		return "_Grafana lookups ran; raw log rows and query details are omitted here._\n\n"
+	}
+	return fmt.Sprintf("_Grafana lookups ran against %s; raw log rows and query details are omitted here._\n\n", strings.Join(parts, ", "))
+}
+
+func grafanaObservationText(context GrafanaLogContext) string {
+	if context.Error != "" {
+		return "Lookup failed; details are available in the job logs"
+	}
+
+	var parts []string
+	lineCount := context.LineCount
+	if lineCount == 0 {
+		lineCount = len(context.Entries)
+	}
+	if lineCount == 0 {
+		parts = append(parts, "No matching log lines returned")
+	} else if lineCount == 1 {
+		parts = append(parts, "1 matching log line returned")
+	} else {
+		parts = append(parts, fmt.Sprintf("%d matching log lines returned", lineCount))
+	}
+	if components := grafanaLogComponentSummary(context.Entries); components != "" {
+		parts = append(parts, "components: "+components)
+	}
+	if context.FilteredLineCount > 0 {
+		parts = append(parts, fmt.Sprintf("filtered %d Grafana/MCP self-observability line(s)", context.FilteredLineCount))
+	}
+	if context.Truncated {
+		parts = append(parts, "results truncated by limit")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func grafanaSummaryURL(exploreURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(exploreURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func grafanaLogComponentSummary(entries []GrafanaLogEntry) string {
+	seen := map[string]bool{}
+	var components []string
+	for _, entry := range entries {
+		component := firstNonEmpty(entry.Labels["app"], entry.Labels["container"], entry.Labels["namespace"], entry.Labels["pod"])
+		component = truncate(cleanOneLine(component), 80)
+		if component == "" || seen[component] {
+			continue
+		}
+		seen[component] = true
+		components = append(components, component)
+		if len(components) >= 3 {
+			break
+		}
+	}
+	return strings.Join(components, ", ")
 }
 
 func normalizeRenderOptions(options RenderOptions) RenderOptions {
@@ -173,4 +281,41 @@ func truncate(value string, limit int) string {
 
 func escapeMarkdown(value string) string {
 	return strings.ReplaceAll(value, "`", "\\`")
+}
+
+func formatLogTimestamp(value string) string {
+	if value == "" {
+		return "-"
+	}
+	value = strings.Trim(value, `"`)
+	if nanos, err := time.ParseDuration(value + "ns"); err == nil {
+		return time.Unix(0, nanos.Nanoseconds()).UTC().Format(time.RFC3339)
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.UTC().Format(time.RFC3339)
+	}
+	return value
+}
+
+func formatLogLabels(labels map[string]string) string {
+	if len(labels) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var parts []string
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", key, labels[key]))
+		if len(parts) >= 4 {
+			break
+		}
+	}
+	if len(keys) > len(parts) {
+		parts = append(parts, fmt.Sprintf("+%d", len(keys)-len(parts)))
+	}
+	return strings.Join(parts, " ")
 }

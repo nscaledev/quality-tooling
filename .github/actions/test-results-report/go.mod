@@ -1,6 +1,6 @@
 module github.com/nscale/quality-tooling/test-results-report
 
-go 1.24.3
+go 1.25.8
 
 require (
 	github.com/onsi/ginkgo/v2 v2.23.4

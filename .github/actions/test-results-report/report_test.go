@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,6 +167,57 @@ func TestParseGinkgoJSONReport(t *testing.T) {
 	}
 	if failed.File != "cluster_test.go" || failed.Line != 123 {
 		t.Fatalf("failed location = %s:%d", failed.File, failed.Line)
+	}
+}
+
+func TestParseGinkgoJSONTimeRanges(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`[
+  {
+    "SuiteDescription": "API Test Suites",
+    "StartTime": "2026-06-02T16:47:57.372674766Z",
+    "EndTime": "2026-06-02T16:53:19.866142729Z",
+    "RunTime": 322493467973,
+    "SpecReports": [
+      {
+        "ContainerHierarchyTexts": ["File Storage Management"],
+        "LeafNodeText": "should create a network for attachment",
+        "State": "failed",
+        "StartTime": "2026-06-02T16:48:19.424926556Z",
+        "EndTime": "2026-06-02T16:53:19.86546Z",
+        "RunTime": 300440533445,
+        "Failure": {
+          "Message": "expected provisioningStatus provisioned, got error",
+          "Location": {
+            "FileName": "filestorage_test.go",
+            "LineNumber": 372
+          }
+        }
+      }
+    ]
+  }
+]`)
+
+	run, err := parseGinkgoJSON(input)
+	if err != nil {
+		t.Fatalf("parseGinkgoJSON returned error: %v", err)
+	}
+
+	if got := run.StartTime.Format(time.RFC3339Nano); got != "2026-06-02T16:47:57.372674766Z" {
+		t.Fatalf("run start time = %s", got)
+	}
+	if got := run.EndTime.Format(time.RFC3339Nano); got != "2026-06-02T16:53:19.866142729Z" {
+		t.Fatalf("run end time = %s", got)
+	}
+	if len(run.Tests) != 1 {
+		t.Fatalf("test count = %d", len(run.Tests))
+	}
+	if got := run.Tests[0].StartTime.Format(time.RFC3339Nano); got != "2026-06-02T16:48:19.424926556Z" {
+		t.Fatalf("test start time = %s", got)
+	}
+	if got := run.Tests[0].EndTime.Format(time.RFC3339Nano); got != "2026-06-02T16:53:19.86546Z" {
+		t.Fatalf("test end time = %s", got)
 	}
 }
 
@@ -344,6 +398,165 @@ func TestMarkdownSummaryIncludesFailuresSkipsAndComparison(t *testing.T) {
 		if !strings.Contains(markdown, expected) {
 			t.Fatalf("summary missing %q:\n%s", expected, markdown)
 		}
+	}
+}
+
+func TestMarkdownSummaryIncludesGrafanaLookupMetadata(t *testing.T) {
+	t.Parallel()
+
+	markdown := renderStepSummary(Analysis{
+		Current: TestRun{Name: "Console E2E"},
+		Stats:   Stats{Total: 1, Failed: 1},
+		GrafanaLogs: &GrafanaLogEnrichment{
+			DatasourceUID:  "loki-dev",
+			DatasourceName: "Loki",
+			StartRFC3339:   "2026-06-01T13:00:00Z",
+			EndRFC3339:     "2026-06-01T14:00:00Z",
+			Contexts: []GrafanaLogContext{{
+				QueryLabel:        "AI-planned backend query",
+				FailureRef:        "f1",
+				TestName:          "uploads file",
+				BackendArea:       "file-storage",
+				ExpectedError:     "POST /api/storage returned 500 for claim-123",
+				SearchTerms:       []string{"claim-123", "file-storage", "500"},
+				Confidence:        "medium",
+				Query:             `{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`,
+				GrafanaExploreURL: "https://grafana.example.com/explore?panes=%7B%22expr%22%3A%22%7Bnamespace%3D~%5C%22.%2B%5C%22%7D%22%7D&schemaVersion=1",
+				Reason:            "The UI file upload failed after a backend storage API 500.",
+				LineCount:         1,
+				FilteredLineCount: 2,
+				Entries: []GrafanaLogEntry{{
+					Timestamp: "1780322400000000000",
+					Line:      "file-storage controller failed claim-123 with backend 500",
+					Labels: map[string]string{
+						"app":       "file-storage-api",
+						"namespace": "file-storage",
+					},
+				}},
+			}},
+		},
+	}, RenderOptions{
+		Title:           "E2E Test Results",
+		OmitTestDetails: true,
+	})
+
+	for _, expected := range []string{
+		"### Grafana Observations",
+		"datasource `Loki` (`loki-dev`)",
+		"time range `2026-06-01T13:00:00Z` to `2026-06-01T14:00:00Z`",
+		"| uploads file | file-storage | 1 matching log line returned; components: file-storage-api",
+		"[Open Grafana](https://grafana.example.com/explore?panes=%7B%22expr%22%3A%22%7Bnamespace%3D~%5C%22.%2B%5C%22%7D%22%7D&schemaVersion=1)",
+		"filtered 2 Grafana/MCP self-observability line(s)",
+	} {
+		if !strings.Contains(markdown, expected) {
+			t.Fatalf("summary missing %q:\n%s", expected, markdown)
+		}
+	}
+	for _, unexpected := range []string{
+		"### Grafana Log Context",
+		"Exact failure error:",
+		"Search terms:",
+		`{namespace=~".+"}`,
+		"file-storage controller failed claim-123 with backend 500",
+	} {
+		if strings.Contains(markdown, unexpected) {
+			t.Fatalf("summary should not include %q:\n%s", unexpected, markdown)
+		}
+	}
+}
+
+func TestRenderStepSummarySanitizesGrafanaLookupErrors(t *testing.T) {
+	t.Parallel()
+
+	markdown := renderStepSummary(Analysis{
+		Current: TestRun{Name: "API Tests"},
+		Stats:   Stats{Failed: 1, Total: 1},
+		GrafanaLogs: &GrafanaLogEnrichment{
+			Contexts: []GrafanaLogContext{{
+				TestName:          "uploads file",
+				BackendArea:       "file-storage",
+				GrafanaExploreURL: "https://grafana.example.com/explore?panes=claim-123",
+				Error:             `grafana MCP tool query_loki_logs failed for {namespace=~".+"} |~ "claim-123": datasource proxy returned 400`,
+			}},
+		},
+	}, RenderOptions{Title: "E2E Test Results"})
+
+	for _, expected := range []string{
+		"### Grafana Observations",
+		"Lookup failed; details are available in the job logs",
+		"[Open Grafana](https://grafana.example.com/explore?panes=claim-123)",
+	} {
+		if !strings.Contains(markdown, expected) {
+			t.Fatalf("summary missing %q:\n%s", expected, markdown)
+		}
+	}
+	for _, unexpected := range []string{
+		"query_loki_logs failed",
+		`{namespace=~".+"}`,
+	} {
+		if strings.Contains(markdown, unexpected) {
+			t.Fatalf("summary should not include %q:\n%s", unexpected, markdown)
+		}
+	}
+}
+
+func TestMarkdownSummaryKeepsGrafanaExploreQueryLink(t *testing.T) {
+	t.Parallel()
+
+	logql := `{namespace=~".+"} |~ "(?i)(claim-123|file-storage)"`
+	exploreURL := grafanaExploreURL(
+		"https://grafana.example.com/grafana",
+		"7",
+		"loki-dev",
+		logql,
+		"2026-06-01T13:00:00Z",
+		"2026-06-01T14:00:00Z",
+	)
+	if exploreURL == "" {
+		t.Fatal("expected Grafana Explore URL")
+	}
+
+	markdown := renderStepSummary(Analysis{
+		Stats: Stats{Failed: 1, Total: 1},
+		GrafanaLogs: &GrafanaLogEnrichment{
+			Contexts: []GrafanaLogContext{{
+				TestName:          "uploads file",
+				BackendArea:       "file-storage",
+				GrafanaExploreURL: exploreURL,
+				LineCount:         1,
+				Entries: []GrafanaLogEntry{{
+					Line:   "file-storage controller matched query",
+					Labels: map[string]string{"app": "file-storage"},
+				}},
+			}},
+		},
+	}, RenderOptions{Title: "E2E Test Results"})
+
+	expectedLink := fmt.Sprintf("[Open Grafana](%s)", exploreURL)
+	if !strings.Contains(markdown, expectedLink) {
+		t.Fatalf("summary did not preserve exact Grafana Explore query link %q:\n%s", expectedLink, markdown)
+	}
+
+	parsed, err := url.Parse(exploreURL)
+	if err != nil {
+		t.Fatalf("parse expected explore URL: %v", err)
+	}
+	if parsed.Query().Get("schemaVersion") != "1" || parsed.Query().Get("panes") == "" {
+		t.Fatalf("expected Explore URL query state, got %s", exploreURL)
+	}
+	var panes map[string]struct {
+		Queries []struct {
+			Expr string `json:"expr"`
+		} `json:"queries"`
+	}
+	if err := json.Unmarshal([]byte(parsed.Query().Get("panes")), &panes); err != nil {
+		t.Fatalf("decode panes query state: %v", err)
+	}
+	if got := panes["test-results-report"].Queries[0].Expr; got != logql {
+		t.Fatalf("expected panes query LogQL %q, got %q", logql, got)
+	}
+	if strings.Contains(markdown, logql) {
+		t.Fatalf("summary should not render raw LogQL outside the encoded link:\n%s", markdown)
 	}
 }
 
@@ -584,6 +797,45 @@ func TestConfigDefaults(t *testing.T) {
 	if config.SendSlack {
 		t.Fatal("send slack should default false when no credentials are configured")
 	}
+	if config.EnableGrafanaLogs {
+		t.Fatal("grafana log enrichment should default false")
+	}
+	if config.GrafanaOrgID != "1" {
+		t.Fatalf("grafana org ID default = %q", config.GrafanaOrgID)
+	}
+	if config.GrafanaLokiName != "Loki" {
+		t.Fatalf("grafana Loki datasource name default = %q", config.GrafanaLokiName)
+	}
+	if config.GrafanaLogLookback != "2h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 6 || config.GrafanaLogConcurrency != 4 {
+		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d concurrency %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures, config.GrafanaLogConcurrency)
+	}
+}
+
+func TestConfigUsesGrafanaReportURLFallback(t *testing.T) {
+	t.Parallel()
+
+	config := configFromEnv(map[string]string{
+		"INPUT_TEST_RESULTS_PATH": "results.xml",
+		"GRAFANA_REPORT_URL":      "https://nks-dev-glo1-grafana.nscale.teleport.sh",
+		"GRAFANA_URL":             "http://127.0.0.1:3000",
+		"GRAFANA_ORG_ID":          "7",
+	})
+
+	if config.GrafanaURL != "https://nks-dev-glo1-grafana.nscale.teleport.sh" {
+		t.Fatalf("grafana URL fallback = %q", config.GrafanaURL)
+	}
+	if config.GrafanaOrgID != "7" {
+		t.Fatalf("grafana org ID fallback = %q", config.GrafanaOrgID)
+	}
+
+	config = configFromEnv(map[string]string{
+		"INPUT_TEST_RESULTS_PATH": "results.xml",
+		"INPUT_GRAFANA_URL":       "https://grafana.example.com",
+		"GRAFANA_REPORT_URL":      "https://nks-dev-glo1-grafana.nscale.teleport.sh",
+	})
+	if config.GrafanaURL != "https://grafana.example.com" {
+		t.Fatalf("explicit grafana URL should win, got %q", config.GrafanaURL)
+	}
 }
 
 func TestClaudePromptRequestsPatternSummary(t *testing.T) {
@@ -595,10 +847,22 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed",
 		"Use skipped for patterns where all affected tests are skipped",
 		"Use test/false failure only for failed tests",
+		"If Grafana observations are present, use them only as supporting evidence",
+		"Keep the report close to the existing production format",
+		"do not add a separate Grafana section",
+		"When a Grafana signal is present, mention the concrete signal",
+		"Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs",
+		"If a failed test time range and Grafana query time range are both present",
+		"Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window",
+		"the provisioning error was not present in the returned Grafana lines",
 		`add a "### Representative Failed Tests" table capped at 10 rows`,
 		"group tests with the same failure reason into one row",
 		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
 		"Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason",
+		"For Grafana-backed bullets, explicitly connect the test error",
+		`Do not use vague phrases like "Grafana returned related activity"`,
+		"If Grafana only returned audit/cleanup rows",
+		`Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window`,
 		"Group by suite name when one suite is affected",
 		"Lead with the highest-attention real product, infra, or environment blocker",
 		"keep temporary sentinel/test-validation failures short",
@@ -617,6 +881,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"| Suite / area | Representative tests | Failure reason | Count |",
 		"- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.",
 		"- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457",
+		"- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window",
 		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
 		aiSlackDelimiter,
 	} {
@@ -626,6 +891,213 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	}
 	if strings.Contains(prompt, "- *Details:* Test-level failure reasons are available in the GitHub build summary.") {
 		t.Fatalf("prompt should not include a separate Details bullet:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "before the log capture window opened") {
+		t.Fatalf("prompt should not encourage unsupported capture-window claims:\n%s", prompt)
+	}
+}
+
+func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
+	t.Parallel()
+
+	prompt := grafanaLogQueryPlanningPrompt()
+	for _, expected := range []string{
+		"Return strict JSON only",
+		`"test_name"`,
+		`"backend_area"`,
+		`"expected_error"`,
+		`"search_terms"`,
+		`"confidence"`,
+		"Only create queries for failures that appear backend-related",
+		"Do not query for purely client-side assertion failures",
+		"Use the exact failure_ref values",
+		"Do not include Grafana URLs",
+		"do not assume a single backend component",
+		`return {"queries":[]}`,
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("planning prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
+func TestRenderGrafanaLogQueryPlanningInputIncludesFailureRefs(t *testing.T) {
+	t.Parallel()
+
+	input := renderGrafanaLogQueryPlanningInput(Analysis{
+		Current: TestRun{Name: "Console E2E"},
+		Stats:   Stats{Passed: 1, Failed: 2},
+		Failures: []TestCase{{
+			ID:      "file-upload",
+			Name:    "uploads file",
+			Suite:   "File Storage Management",
+			File:    "packages/e2e-console/src/spec/file-storage.spec.ts",
+			Message: "POST /api/storage returned 500 for claim-123",
+		}, {
+			ID:      "visual-only",
+			Name:    "button color",
+			Suite:   "Visual checks",
+			Message: "expected CSS color to match",
+		}},
+	}, Config{
+		Environment:           "dev",
+		GrafanaLogMaxFailures: 2,
+	})
+
+	for _, expected := range []string{
+		"Failure ref: f1",
+		"Test ID: file-upload",
+		"POST /api/storage returned 500 for claim-123",
+		"Failure ref: f2",
+		"Visual checks",
+		"Maximum queries allowed: 2",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("planning input missing %q:\n%s", expected, input)
+		}
+	}
+}
+
+func TestParseGrafanaLogQueryPlan(t *testing.T) {
+	t.Parallel()
+
+	queries, err := parseGrafanaLogQueryPlan("```json\n{\"queries\":[{\"failure_ref\":\" f1 \",\"test_name\":\" uploads file \",\"backend_area\":\" file-storage \",\"expected_error\":\" POST /api/storage returned 500 for claim-123 \",\"search_terms\":[\" claim-123 \",\"file-storage\",\"claim-123\"],\"logql\":\" {namespace=~\\\".+\\\"} |= \\\"claim-123\\\" \",\"reason\":\" storage backend error \",\"confidence\":\" Medium \"},{\"failure_ref\":\"f2\"}]}\n```")
+	if err != nil {
+		t.Fatalf("parseGrafanaLogQueryPlan returned error: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("queries = %+v", queries)
+	}
+	if queries[0].FailureRef != "f1" ||
+		queries[0].TestName != "uploads file" ||
+		queries[0].BackendArea != "file-storage" ||
+		queries[0].ExpectedError != "POST /api/storage returned 500 for claim-123" ||
+		len(queries[0].SearchTerms) != 2 ||
+		queries[0].Confidence != "medium" ||
+		!strings.Contains(queries[0].LogQL, "claim-123") ||
+		queries[0].Reason != "storage backend error" {
+		t.Fatalf("unexpected query: %+v", queries[0])
+	}
+}
+
+func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
+	t.Parallel()
+
+	runStart := time.Date(2026, 6, 1, 13, 10, 0, 0, time.UTC)
+	runEnd := time.Date(2026, 6, 1, 13, 58, 0, 0, time.UTC)
+	testStart := time.Date(2026, 6, 1, 13, 20, 0, 123000000, time.UTC)
+	testEnd := time.Date(2026, 6, 1, 13, 55, 0, 456000000, time.UTC)
+
+	input := renderAIInputWithOptions(Analysis{
+		Current: TestRun{
+			Name:      "API Tests",
+			StartTime: runStart,
+			EndTime:   runEnd,
+		},
+		Stats: Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:      "creates instance",
+			StartTime: testStart,
+			EndTime:   testEnd,
+			Message:   "timeout",
+		}},
+		GrafanaLogs: &GrafanaLogEnrichment{
+			DatasourceUID:  "loki",
+			DatasourceName: "Loki",
+			StartRFC3339:   "2026-06-01T13:00:00Z",
+			EndRFC3339:     "2026-06-01T14:00:00Z",
+			Contexts: []GrafanaLogContext{{
+				FailureRef:        "f1",
+				TestName:          "creates instance",
+				BackendArea:       "unikorn-region",
+				ExpectedError:     "instance reconcile timed out",
+				SearchTerms:       []string{"instance", "timeout"},
+				Query:             `{namespace="unikorn-region"} |= "instance"`,
+				GrafanaExploreURL: "https://grafana.example.com/explore?panes=test",
+				Reason:            "Instance API returned a backend reconcile timeout.",
+				Confidence:        "high",
+				LineCount:         1,
+				FilteredLineCount: 2,
+				Entries: []GrafanaLogEntry{{
+					Timestamp: "1780322400000000000",
+					Line:      "controller failed to create instance",
+					Labels: map[string]string{
+						"namespace": "unikorn-region",
+						"pod":       "region-api-123",
+					},
+				}},
+			}},
+		},
+	}, AIInputOptions{})
+
+	for _, expected := range []string{
+		"Grafana observations for final analysis:",
+		"Test run time range: 2026-06-01T13:10:00Z to 2026-06-01T13:58:00Z",
+		"Scope: time range 2026-06-01T13:00:00Z to 2026-06-01T14:00:00Z; Grafana datasource Loki (loki).",
+		"- Test: creates instance; backend: unikorn-region; confidence: high; Grafana returned 1 matching log line; components: unikorn-region; first match at 2026-06-01T14:00:00Z from unikorn-region; Grafana signal: error signals: failed; filtered 2 Grafana/MCP self-observability line(s); Grafana Explore query link is included in the GitHub summary",
+		"Lookup reason: Instance API returned a backend reconcile timeout.",
+		"Failed tests:",
+		"Time range: 2026-06-01T13:20:00.123Z to 2026-06-01T13:55:00.456Z",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("AI input missing %q:\n%s", expected, input)
+		}
+	}
+	for _, unexpected := range []string{
+		`Query: {namespace="unikorn-region"} |= "instance"`,
+		"Exact failure error: instance reconcile timed out",
+		"Search terms: instance, timeout",
+		"Grafana lookup URL: https://grafana.example.com/explore?panes=test",
+		"controller failed to create instance",
+	} {
+		if strings.Contains(input, unexpected) {
+			t.Fatalf("AI input should not include %q:\n%s", unexpected, input)
+		}
+	}
+}
+
+func TestGrafanaLogSignalSummaryIncludesCleanupOnlyObservation(t *testing.T) {
+	t.Parallel()
+
+	summary := grafanaLogSignalSummary(GrafanaLogContext{
+		Entries: []GrafanaLogEntry{{
+			Line: `{"level":"info","msg":"audit","spanName":"/api/v2/networks/network-123"`,
+		}, {
+			Line: `{"level":"info","msg":"deletion complete","controller":"unikorn-network-controller"}`,
+		}},
+	})
+
+	if summary != "no explicit error string in returned rows" {
+		t.Fatalf("signal summary should not include raw Loki messages: %s", summary)
+	}
+	for _, unexpected := range []string{
+		"audit",
+		"deletion complete",
+		"matched messages",
+	} {
+		if strings.Contains(summary, unexpected) {
+			t.Fatalf("signal summary should not include raw message %q: %s", unexpected, summary)
+		}
+	}
+}
+
+func TestGrafanaLogSignalSummaryIncludesErrorObservation(t *testing.T) {
+	t.Parallel()
+
+	summary := grafanaLogSignalSummary(GrafanaLogContext{
+		Entries: []GrafanaLogEntry{{
+			Line: "ERROR: Failed to forward scheduled tasks: INTERNAL_ERROR: redis eval error: connect: connection refused",
+		}},
+	})
+
+	for _, expected := range []string{
+		"error signals: INTERNAL_ERROR",
+		"connection refused",
+		"failed",
+	} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("signal summary missing %q: %s", expected, summary)
+		}
 	}
 }
 

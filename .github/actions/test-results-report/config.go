@@ -30,6 +30,19 @@ type Config struct {
 	IncludeSkips          bool
 	EnableAIAnalysis      bool
 	ClaudeToken           string
+	EnableGrafanaLogs     bool
+	GrafanaURL            string
+	GrafanaOrgID          string
+	GrafanaMCPEndpoint    string
+	GrafanaLokiUID        string
+	GrafanaLokiName       string
+	GrafanaLogStart       string
+	GrafanaLogEnd         string
+	GrafanaLogLookback    string
+	GrafanaLogLimit       int
+	GrafanaLogMaxFailures int
+	GrafanaLogConcurrency int
+	GrafanaQueryPlanPath  string
 }
 
 func loadConfig() Config {
@@ -82,6 +95,19 @@ func configFromEnv(env map[string]string) Config {
 		IncludeSkips:          parseBoolDefault(env["INPUT_INCLUDE_SKIPS"], true),
 		EnableAIAnalysis:      parseBoolDefault(env["INPUT_ENABLE_AI_ANALYSIS"], false),
 		ClaudeToken:           firstNonEmpty(env["INPUT_CLAUDE_TOKEN"], env["CLAUDE_CODE_OAUTH_TOKEN"]),
+		EnableGrafanaLogs:     parseBoolDefault(env["INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT"], false),
+		GrafanaURL:            firstNonEmpty(env["INPUT_GRAFANA_URL"], env["GRAFANA_REPORT_URL"], env["GRAFANA_URL"]),
+		GrafanaOrgID:          firstNonEmpty(env["INPUT_GRAFANA_ORG_ID"], env["GRAFANA_ORG_ID"], "1"),
+		GrafanaMCPEndpoint:    firstNonEmpty(env["INPUT_GRAFANA_MCP_ENDPOINT"], env["GRAFANA_MCP_ENDPOINT"]),
+		GrafanaLokiUID:        env["INPUT_GRAFANA_LOKI_DATASOURCE_UID"],
+		GrafanaLokiName:       firstNonEmpty(env["INPUT_GRAFANA_LOKI_DATASOURCE_NAME"], "Loki"),
+		GrafanaLogStart:       env["INPUT_GRAFANA_LOG_START"],
+		GrafanaLogEnd:         env["INPUT_GRAFANA_LOG_END"],
+		GrafanaLogLookback:    firstNonEmpty(env["INPUT_GRAFANA_LOG_LOOKBACK"], "2h"),
+		GrafanaLogLimit:       parseIntDefault(env["INPUT_GRAFANA_LOG_LIMIT"], 20),
+		GrafanaLogMaxFailures: parseIntDefault(env["INPUT_GRAFANA_LOG_MAX_FAILURES"], 6),
+		GrafanaLogConcurrency: parseIntDefault(env["INPUT_GRAFANA_LOG_CONCURRENCY"], 4),
+		GrafanaQueryPlanPath:  env["INPUT_GRAFANA_QUERY_PLAN_PATH"],
 	}
 }
 

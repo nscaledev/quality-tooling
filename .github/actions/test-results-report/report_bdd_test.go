@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -285,6 +286,177 @@ var _ = Describe("Test Results Report", func() {
 				Expect(outputs).To(HaveKeyWithValue("slack-sent", "true"))
 			})
 
+			It("should plan backend Grafana queries, fetch MCP logs, and pass them into the final AI report", func() {
+				writeTestFile(currentPath, `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="Console E2E" tests="2" failures="2" skipped="0" time="18">
+  <testsuite name="chromium" tests="2" failures="2" skipped="0" time="18">
+    <testcase classname="storage.file" name="uploads file" time="11">
+      <failure message="POST /api/storage returned 500 for claim-123">Timeout waiting for file storage upload to finish</failure>
+    </testcase>
+    <testcase classname="visual.button" name="button color" time="7">
+      <failure message="expected CSS color to match">client-side visual assertion failed</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`)
+
+				var queryCount atomic.Int32
+				var executedLogQL string
+				mcpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+					Expect(request.URL.Path).To(Equal("/mcp"))
+
+					var rpc struct {
+						ID     json.RawMessage `json:"id"`
+						Method string          `json:"method"`
+						Params json.RawMessage `json:"params"`
+					}
+					Expect(json.NewDecoder(request.Body).Decode(&rpc)).To(Succeed())
+
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Mcp-Session-Id", "test-session")
+
+					writeRPCResponse := func(result any) {
+						Expect(json.NewEncoder(w).Encode(map[string]any{
+							"jsonrpc": "2.0",
+							"id":      json.RawMessage(rpc.ID),
+							"result":  result,
+						})).To(Succeed())
+					}
+					writeToolResponse := func(text string) {
+						writeRPCResponse(map[string]any{
+							"content": []map[string]string{{
+								"type": "text",
+								"text": text,
+							}},
+						})
+					}
+
+					switch rpc.Method {
+					case "initialize":
+						writeRPCResponse(map[string]any{
+							"protocolVersion": mcpProtocolVersion,
+							"capabilities":    map[string]any{},
+							"serverInfo":      map[string]string{"name": "fake-grafana-mcp"},
+						})
+					case "notifications/initialized":
+						w.WriteHeader(http.StatusAccepted)
+					case "tools/call":
+						var params struct {
+							Name      string          `json:"name"`
+							Arguments json.RawMessage `json:"arguments"`
+						}
+						Expect(json.Unmarshal(rpc.Params, &params)).To(Succeed())
+
+						switch params.Name {
+						case "list_datasources":
+							writeToolResponse(`{"datasources":[{"uid":"loki-dev","name":"Loki","type":"loki","isDefault":true}]}`)
+						case "query_loki_logs":
+							queryCount.Add(1)
+							var args map[string]any
+							Expect(json.Unmarshal(params.Arguments, &args)).To(Succeed())
+							Expect(args).To(HaveKeyWithValue("datasourceUid", "loki-dev"))
+							Expect(args).To(HaveKeyWithValue("startRfc3339", "2026-06-01T13:00:00Z"))
+							Expect(args).To(HaveKeyWithValue("endRfc3339", "2026-06-01T14:00:00Z"))
+							executedLogQL = args["logql"].(string)
+							Expect(executedLogQL).To(ContainSubstring("claim-123"))
+							Expect(executedLogQL).To(ContainSubstring("file-storage"))
+							Expect(executedLogQL).NotTo(ContainSubstring("visual.button"))
+							writeToolResponse(`{"data":[{"timestamp":"1780322400000000000","line":"file-storage controller failed claim-123 with backend 500","labels":{"namespace":"file-storage","pod":"file-storage-api-123"}}],"metadata":{"linesReturned":1,"resultsTruncated":false}}`)
+						default:
+							Fail("unexpected MCP tool call: " + params.Name)
+						}
+					default:
+						Fail("unexpected MCP method: " + rpc.Method)
+					}
+				}))
+				defer mcpServer.Close()
+
+				previousPlanner := runGrafanaLogQueryPlanning
+				previousRunner := runAIAnalysis
+				runGrafanaLogQueryPlanning = func(_ context.Context, receivedConfig Config, analysis Analysis) ([]GrafanaLogPlannedQuery, error) {
+					Expect(receivedConfig.EnableAIAnalysis).To(BeTrue())
+					Expect(receivedConfig.EnableGrafanaLogs).To(BeTrue())
+					Expect(analysis.Failures).To(HaveLen(2))
+					Expect(analysis.Failures[0].Name).To(Equal("uploads file"))
+					Expect(analysis.Failures[1].Name).To(Equal("button color"))
+					return []GrafanaLogPlannedQuery{{
+						FailureRef:    "f1",
+						TestName:      "uploads file",
+						BackendArea:   "file-storage",
+						ExpectedError: "POST /api/storage returned 500 for claim-123",
+						SearchTerms:   []string{"claim-123", "file-storage", "500"},
+						LogQL:         `{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`,
+						Reason:        "The UI file upload failed after a backend storage API 500.",
+						Confidence:    "medium",
+					}}, nil
+				}
+				runAIAnalysis = func(_ context.Context, receivedConfig Config, analysis Analysis) (*AIAnalysis, error) {
+					Expect(receivedConfig.EnableAIAnalysis).To(BeTrue())
+					Expect(analysis.GrafanaLogs).NotTo(BeNil())
+					Expect(analysis.GrafanaLogs.Contexts).To(HaveLen(1))
+					logContext := analysis.GrafanaLogs.Contexts[0]
+					Expect(logContext.QueryLabel).To(Equal("AI-planned backend query"))
+					Expect(logContext.Reason).To(ContainSubstring("storage API 500"))
+					Expect(logContext.FailureRef).To(Equal("f1"))
+					Expect(logContext.TestName).To(Equal("uploads file"))
+					Expect(logContext.BackendArea).To(Equal("file-storage"))
+					Expect(logContext.ExpectedError).To(Equal("POST /api/storage returned 500 for claim-123"))
+					Expect(logContext.SearchTerms).To(ConsistOf("claim-123", "file-storage", "500"))
+					Expect(logContext.Confidence).To(Equal("medium"))
+					Expect(logContext.GrafanaExploreURL).To(ContainSubstring("/explore?"))
+					Expect(logContext.Test).NotTo(BeNil())
+					Expect(logContext.Test.Name).To(Equal("uploads file"))
+					Expect(logContext.Entries).To(HaveLen(1))
+					Expect(logContext.Entries[0].Line).To(ContainSubstring("claim-123"))
+					Expect(logContext.Entries[0].Labels).To(HaveKeyWithValue("namespace", "file-storage"))
+					return &AIAnalysis{
+						StepSummary:  "## Test Failure Analysis\n\nAI report used Grafana backend evidence for file storage.",
+						SlackSummary: "- *File storage* (infra/external): backend 500 evidence found in Grafana logs.\n- *Action:* Use the GitHub build summary for test-level failure reasons; inspect file-storage API logs.",
+					}, nil
+				}
+				DeferCleanup(func() {
+					runGrafanaLogQueryPlanning = previousPlanner
+					runAIAnalysis = previousRunner
+				})
+
+				config.PreviousResultsPath = ""
+				config.CompareWithPrevious = false
+				config.EnableAIAnalysis = true
+				config.ClaudeToken = "test-claude-token"
+				config.EnableGrafanaLogs = true
+				config.GrafanaURL = "https://grafana.example.com"
+				config.GrafanaMCPEndpoint = mcpServer.URL + "/mcp"
+				config.GrafanaLogStart = "2026-06-01T13:00:00Z"
+				config.GrafanaLogEnd = "2026-06-01T14:00:00Z"
+				config.GrafanaLogLimit = 5
+				config.GrafanaLogMaxFailures = 2
+
+				err := run(context.Background(), config)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(queryCount.Load()).To(Equal(int32(1)))
+				Expect(executedLogQL).To(Equal(`{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`))
+
+				summary := readTestFile(summaryPath)
+				Expect(summary).To(ContainSubstring("### Grafana Observations"))
+				Expect(summary).To(ContainSubstring("uploads file"))
+				Expect(summary).To(ContainSubstring("file-storage"))
+				Expect(summary).To(ContainSubstring("1 matching log line returned"))
+				Expect(summary).To(ContainSubstring("components: file-storage"))
+				Expect(summary).To(ContainSubstring("[Open Grafana]"))
+				Expect(summary).To(ContainSubstring("/explore?"))
+				Expect(summary).To(ContainSubstring("panes="))
+				Expect(summary).To(ContainSubstring("AI report used Grafana backend evidence for file storage."))
+				Expect(summary).NotTo(ContainSubstring("### Grafana Log Context"))
+				Expect(summary).NotTo(ContainSubstring("Exact failure error: `POST /api/storage returned 500 for claim-123`"))
+				Expect(summary).NotTo(ContainSubstring(`{namespace=~".+"}`))
+				Expect(summary).NotTo(ContainSubstring("file-storage controller failed claim-123 with backend 500"))
+				Expect(summary).NotTo(ContainSubstring("### Failed Tests"))
+
+				outputs := readOutputFile(outputPath)
+				Expect(outputs).To(HaveKeyWithValue("failed", "2"))
+				Expect(outputs).To(HaveKeyWithValue("slack-sent", "false"))
+			})
+
 			It("should continue when previous results cannot be parsed", func() {
 				writeTestFile(previousPath, `not xml`)
 
@@ -476,9 +648,63 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).NotTo(ContainSubstring(`PREVIOUS_RESULTS_PATH="${{ inputs.previous-results-path }}"`))
 			})
 
-			It("should mask webhook and Claude token inputs before running the reporter", func() {
-				Expect(action).To(ContainSubstring(`echo "::add-mask::${INPUT_SLACK_WEBHOOK_URL}"`))
-				Expect(action).To(ContainSubstring(`echo "::add-mask::${INPUT_CLAUDE_TOKEN}"`))
+			It("should mask webhook and Claude token inputs through escaped workflow commands", func() {
+				Expect(action).To(ContainSubstring(`mask_value "slack-webhook-url" "${INPUT_SLACK_WEBHOOK_URL:-}"`))
+				Expect(action).To(ContainSubstring(`mask_value "claude-token" "${INPUT_CLAUDE_TOKEN:-}"`))
+				Expect(action).To(ContainSubstring(`value="${value//%/%25}"`))
+				Expect(action).NotTo(ContainSubstring(`echo "::add-mask::${INPUT_SLACK_WEBHOOK_URL}"`))
+				Expect(action).NotTo(ContainSubstring(`echo "::add-mask::${INPUT_CLAUDE_TOKEN}"`))
+			})
+
+			It("should use the Teleport application tunnel for optional Grafana MCP enrichment", func() {
+				Expect(action).To(ContainSubstring("enable-grafana-log-enrichment"))
+				Expect(action).To(ContainSubstring("Resolve Grafana MCP inputs"))
+				Expect(action).To(ContainSubstring("nks-dev-glo1-grafana"))
+				Expect(action).To(ContainSubstring("nks-stg-europe-west2-grafana"))
+				Expect(action).To(ContainSubstring("teleport-actions/application-tunnel@bb7a8fbfb67b85d26013554f10d71dd032c1c764"))
+				Expect(action).To(ContainSubstring("token: ${{ inputs.grafana-teleport-token }}"))
+				Expect(action).To(ContainSubstring("app: ${{ steps.grafana-resolve.outputs.grafana-app }}"))
+				Expect(action).To(ContainSubstring("mcp-grafana"))
+				Expect(action).To(ContainSubstring(`write_output "grafana-mcp-endpoint" "http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp"`))
+				Expect(action).To(ContainSubstring(`write_output "grafana-report-url" "${report_grafana_url}"`))
+				Expect(action).To(ContainSubstring("GRAFANA_MCP_ENDPOINT: ${{ steps.grafana-start.outputs.grafana-mcp-endpoint }}"))
+				Expect(action).To(ContainSubstring("GRAFANA_REPORT_URL: ${{ steps.grafana-start.outputs.grafana-report-url }}"))
+				Expect(action).To(ContainSubstring("Grafana base URL for report links"))
+				Expect(action).To(ContainSubstring("default: 'v0.7.10'"))
+				Expect(action).To(ContainSubstring("grafana-mcp-version must be a pinned release tag"))
+				Expect(action).To(ContainSubstring("warn_install_failed()"))
+				Expect(action).To(ContainSubstring("continuing without Grafana log enrichment"))
+				Expect(action).To(ContainSubstring(`warn_install_failed "download ${artifact} from grafana/mcp-grafana ${release} failed"`))
+				Expect(action).To(ContainSubstring("mcp-grafana_${release#v}_checksums.txt"))
+				Expect(action).To(ContainSubstring(`warn_install_failed "checksum mismatch for ${artifact}"`))
+				Expect(action).NotTo(ContainSubstring("::error::Checksum mismatch for ${artifact}"))
+				Expect(action).NotTo(ContainSubstring("GRAFANA_APP_RESOLVED=${grafana_app}"))
+				Expect(action).NotTo(ContainSubstring("GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED=${grafana_token}"))
+			})
+
+			It("should log Grafana MCP preflight decisions without exposing the service account token", func() {
+				Expect(action).To(ContainSubstring("Grafana MCP enrichment preflight"))
+				Expect(action).To(ContainSubstring(`mask_value "grafana-service-account-token" "$grafana_token"`))
+				Expect(action).NotTo(ContainSubstring(`echo "::add-mask::${grafana_token}"`))
+				Expect(action).To(ContainSubstring("Grafana service account token configured:"))
+				Expect(action).To(ContainSubstring("Grafana org ID:"))
+				Expect(action).To(ContainSubstring("MCP setup is deferred until Claude selects at least one backend-related Loki query."))
+				Expect(action).To(ContainSubstring("candidate setup path: cannot start mcp-grafana if backend queries are planned; grafana-service-account-token is empty"))
+				Expect(action).To(ContainSubstring("candidate setup path: open Teleport app tunnel"))
+			})
+
+			It("should plan Grafana MCP queries before starting local MCP infrastructure", func() {
+				Expect(action).To(ContainSubstring("Plan Grafana MCP queries"))
+				Expect(action).To(ContainSubstring("go run . --grafana-plan-only"))
+				Expect(action).To(ContainSubstring("INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ runner.temp }}/test-results-report-grafana-query-plan.json"))
+				Expect(action).To(ContainSubstring("steps.grafana-plan.outputs.needs-mcp == 'true'"))
+				Expect(action).To(ContainSubstring("INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ steps.grafana-plan.outputs.plan-path }}"))
+			})
+
+			It("should not interpolate the action path directly into shell scripts", func() {
+				Expect(action).To(ContainSubstring("ACTION_PATH: ${{ github.action_path }}"))
+				Expect(action).To(ContainSubstring(`cd "${ACTION_PATH}"`))
+				Expect(action).NotTo(ContainSubstring(`cd "${{ github.action_path }}"`))
 			})
 
 			It("should cache Go modules for the action dependencies", func() {
@@ -560,12 +786,23 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("Use skipped for patterns where all affected tests are skipped"))
 				Expect(prompt).To(ContainSubstring("Use test/false failure only for failed tests"))
 				Expect(prompt).To(ContainSubstring("Use unknown/mixed when there is not enough evidence"))
+				Expect(prompt).To(ContainSubstring("If Grafana observations are present, use them only as supporting evidence"))
+				Expect(prompt).To(ContainSubstring("Keep the report close to the existing production format"))
+				Expect(prompt).To(ContainSubstring("do not add a separate Grafana section"))
+				Expect(prompt).To(ContainSubstring("When a Grafana signal is present, mention the concrete signal"))
+				Expect(prompt).To(ContainSubstring("If a failed test time range and Grafana query time range are both present"))
+				Expect(prompt).To(ContainSubstring("Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window"))
+				Expect(prompt).To(ContainSubstring("the provisioning error was not present in the returned Grafana lines"))
 				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
 				Expect(prompt).To(ContainSubstring(`add a "### Representative Failed Tests" table capped at 10 rows`))
 				Expect(prompt).To(ContainSubstring("group tests with the same failure reason into one row"))
 				Expect(prompt).To(ContainSubstring("4-6 high-signal Slack mrkdwn bullet lines"))
 				Expect(prompt).To(ContainSubstring("Each pattern bullet must start with '- *<suite/category>* (<category>):'"))
 				Expect(prompt).To(ContainSubstring("Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason"))
+				Expect(prompt).To(ContainSubstring("For Grafana-backed bullets, explicitly connect the test error"))
+				Expect(prompt).To(ContainSubstring(`Do not use vague phrases like "Grafana returned related activity"`))
+				Expect(prompt).To(ContainSubstring("If Grafana only returned audit/cleanup rows"))
+				Expect(prompt).To(ContainSubstring(`Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window`))
 				Expect(prompt).To(ContainSubstring("Group by suite name when one suite is affected"))
 				Expect(prompt).To(ContainSubstring("Lead with the highest-attention real product, infra, or environment blocker"))
 				Expect(prompt).To(ContainSubstring("keep temporary sentinel/test-validation failures short"))
@@ -595,8 +832,9 @@ var _ = Describe("Test Results Report", func() {
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
 				Expect(prompt).To(ContainSubstring("- *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401"))
 				Expect(prompt).To(ContainSubstring("- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run."))
-				Expect(prompt).To(ContainSubstring("- *Validation paths* (test/false failure): 3 negative-path tests are likely side effects"))
 				Expect(prompt).To(ContainSubstring("- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457"))
+				Expect(prompt).To(ContainSubstring("- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window"))
+				Expect(prompt).NotTo(ContainSubstring("before the log capture window opened"))
 				Expect(prompt).NotTo(ContainSubstring("- *Confidence:* High for the auth/config failure pattern"))
 				Expect(prompt).NotTo(ContainSubstring("- *Details:* Test-level failure reasons are available in the GitHub build summary."))
 				Expect(prompt).To(ContainSubstring("- *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config"))
