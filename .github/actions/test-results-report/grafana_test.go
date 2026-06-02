@@ -579,7 +579,7 @@ func TestGrafanaSelfObservabilityLogFilter(t *testing.T) {
 	}
 }
 
-func TestRunGrafanaLogEnrichmentSkipsMCPWhenAIPlansNoQueries(t *testing.T) {
+func TestRunGrafanaLogEnrichmentSkipsMCPForNonBackendFailureWhenAIPlansNoQueries(t *testing.T) {
 	previousPlanner := runGrafanaLogQueryPlanning
 	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
 		return nil, nil
@@ -588,10 +588,18 @@ func TestRunGrafanaLogEnrichmentSkipsMCPWhenAIPlansNoQueries(t *testing.T) {
 		runGrafanaLogQueryPlanning = previousPlanner
 	}()
 
+	var mcpCallCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mcpCallCount.Add(1)
+		http.Error(writer, "MCP should not be called for non-backend failures", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
 	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
-		EnableGrafanaLogs: true,
-		EnableAIAnalysis:  true,
-		ClaudeToken:       "test-token",
+		EnableGrafanaLogs:  true,
+		EnableAIAnalysis:   true,
+		ClaudeToken:        "test-token",
+		GrafanaMCPEndpoint: server.URL + "/mcp",
 	}, Analysis{
 		Failures: []TestCase{{
 			ID:      "visual-only",
@@ -605,6 +613,9 @@ func TestRunGrafanaLogEnrichmentSkipsMCPWhenAIPlansNoQueries(t *testing.T) {
 	}
 	if enrichment != nil {
 		t.Fatalf("expected nil enrichment when no backend log queries are planned, got %+v", enrichment)
+	}
+	if mcpCallCount.Load() != 0 {
+		t.Fatalf("expected Grafana MCP lookup to be skipped for non-backend failure, got %d MCP call(s)", mcpCallCount.Load())
 	}
 }
 
