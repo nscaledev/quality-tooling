@@ -155,6 +155,72 @@ func TestRunGrafanaLogEnrichmentThroughMCP(t *testing.T) {
 	}
 }
 
+func TestDecodeListDatasourcesResultAcceptsObjectAndLiveArrayShapes(t *testing.T) {
+	t.Parallel()
+
+	objectDatasources, err := decodeListDatasourcesResult([]byte(`{"datasources":[{"uid":"loki-object","name":"Object Loki","type":"loki","isDefault":true}]}`))
+	if err != nil {
+		t.Fatalf("decode object datasource shape: %v", err)
+	}
+	if len(objectDatasources) != 1 || objectDatasources[0].UID != "loki-object" || !objectDatasources[0].IsDefault {
+		t.Fatalf("unexpected object datasources: %+v", objectDatasources)
+	}
+
+	arrayDatasources, err := decodeListDatasourcesResult([]byte(`[{"id":3,"uid":"loki","name":"Loki","type":"loki","isDefault":false}]`))
+	if err != nil {
+		t.Fatalf("decode live array datasource shape: %v", err)
+	}
+	if len(arrayDatasources) != 1 || arrayDatasources[0].UID != "loki" || arrayDatasources[0].Name != "Loki" {
+		t.Fatalf("unexpected array datasources: %+v", arrayDatasources)
+	}
+
+	if _, err := decodeListDatasourcesResult([]byte(`{"unexpected":true}`)); err == nil {
+		t.Fatal("unexpected object shape should fail to decode")
+	}
+}
+
+func TestGrafanaQueryFinishLogMessageShowsMCPFetchOutcome(t *testing.T) {
+	t.Parallel()
+
+	success := grafanaQueryFinishLogMessage(GrafanaLogContext{
+		RawLineCount:      3,
+		LineCount:         2,
+		FilteredLineCount: 1,
+		Entries: []GrafanaLogEntry{
+			{Line: "network controller failed"},
+			{Line: "quota exceeded"},
+		},
+		Truncated:         true,
+		GrafanaExploreURL: "https://grafana.example.com/explore",
+	})
+	for _, expected := range []string{
+		"succeeded; Loki returned usable log lines",
+		"raw_lines=3",
+		"usable_lines=2",
+		"filtered_self_observability=1",
+		"truncated=true",
+		"grafana_url=true",
+	} {
+		if !strings.Contains(success, expected) {
+			t.Fatalf("success log missing %q: %s", expected, success)
+		}
+	}
+
+	empty := grafanaQueryFinishLogMessage(GrafanaLogContext{})
+	if !strings.Contains(empty, "succeeded; Loki returned no matching log lines") || !strings.Contains(empty, "raw_lines=0") {
+		t.Fatalf("empty result log was not explicit: %s", empty)
+	}
+
+	filteredOnly := grafanaQueryFinishLogMessage(GrafanaLogContext{
+		RawLineCount:      2,
+		LineCount:         0,
+		FilteredLineCount: 2,
+	})
+	if !strings.Contains(filteredOnly, "succeeded; Loki returned only Grafana/MCP self-observability lines") || !strings.Contains(filteredOnly, "usable_lines=0") {
+		t.Fatalf("filtered-only result log was not explicit: %s", filteredOnly)
+	}
+}
+
 func TestRunGrafanaLogEnrichmentUsesAIPlannedQueries(t *testing.T) {
 	previousPlanner := runGrafanaLogQueryPlanning
 	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {

@@ -80,6 +80,7 @@ type GrafanaLogContext struct {
 	Query             string
 	GrafanaExploreURL string
 	Entries           []GrafanaLogEntry
+	RawLineCount      int
 	LineCount         int
 	FilteredLineCount int
 	Truncated         bool

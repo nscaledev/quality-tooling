@@ -52,13 +52,15 @@ type mcpToolResult struct {
 	IsError bool `json:"isError,omitempty"`
 }
 
+type grafanaDatasource struct {
+	UID       string `json:"uid"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	IsDefault bool   `json:"isDefault"`
+}
+
 type listDatasourcesResult struct {
-	Datasources []struct {
-		UID       string `json:"uid"`
-		Name      string `json:"name"`
-		Type      string `json:"type"`
-		IsDefault bool   `json:"isDefault"`
-	} `json:"datasources"`
+	Datasources []grafanaDatasource `json:"datasources"`
 }
 
 type queryLokiLogsResult struct {
@@ -505,14 +507,14 @@ func resolveLokiDatasource(ctx context.Context, client *mcpHTTPClient, config Co
 		return "", "", err
 	}
 
-	var result listDatasourcesResult
-	if err := json.Unmarshal(raw, &result); err != nil {
+	datasources, err := decodeListDatasourcesResult(raw)
+	if err != nil {
 		return "", "", fmt.Errorf("decode list_datasources result: %w: %s", err, string(raw))
 	}
-	logGrafana("MCP list_datasources returned %d Loki datasource(s)", len(result.Datasources))
+	logGrafana("MCP list_datasources returned %d Loki datasource(s)", len(datasources))
 
 	var fallbackUID, fallbackName string
-	for _, datasource := range result.Datasources {
+	for _, datasource := range datasources {
 		if fallbackUID == "" || datasource.IsDefault {
 			fallbackUID = datasource.UID
 			fallbackName = datasource.Name
@@ -526,6 +528,19 @@ func resolveLokiDatasource(ctx context.Context, client *mcpHTTPClient, config Co
 		return "", "", fmt.Errorf("no Loki datasource was returned by Grafana MCP list_datasources")
 	}
 	return fallbackUID, fallbackName, nil
+}
+
+func decodeListDatasourcesResult(raw []byte) ([]grafanaDatasource, error) {
+	var result listDatasourcesResult
+	if err := json.Unmarshal(raw, &result); err == nil && result.Datasources != nil {
+		return result.Datasources, nil
+	}
+
+	var datasources []grafanaDatasource
+	if err := json.Unmarshal(raw, &datasources); err != nil {
+		return nil, err
+	}
+	return datasources, nil
 }
 
 func runGrafanaLogQueryJobs(ctx context.Context, client *mcpHTTPClient, datasourceUID, start, end string, config Config, jobs []grafanaLogQueryJob) []GrafanaLogContext {
@@ -580,10 +595,10 @@ func logGrafanaQueryStart(index, total int, job grafanaLogQueryJob) {
 
 func logGrafanaQueryFinish(index, total int, context GrafanaLogContext) {
 	if context.Error != "" {
-		logGrafana("query job %d/%d finished with error: %s", index+1, total, truncate(cleanOneLine(context.Error), 500))
+		logGrafana("query job %d/%d failed: query_loki_logs returned error: %s", index+1, total, truncate(cleanOneLine(context.Error), 500))
 		return
 	}
-	logGrafana("query job %d/%d finished: lines=%d filtered=%d truncated=%t grafana_url=%t", index+1, total, context.LineCount, context.FilteredLineCount, context.Truncated, context.GrafanaExploreURL != "")
+	logGrafana("query job %d/%d %s", index+1, total, grafanaQueryFinishLogMessage(context))
 	if len(context.Entries) > 0 {
 		logGrafana("query job %d first log line: [%s] %s",
 			index+1,
@@ -591,6 +606,35 @@ func logGrafanaQueryFinish(index, total int, context GrafanaLogContext) {
 			truncate(cleanOneLine(context.Entries[0].Line), 300),
 		)
 	}
+}
+
+func grafanaQueryFinishLogMessage(context GrafanaLogContext) string {
+	rawLineCount := context.RawLineCount
+	if rawLineCount == 0 && context.LineCount > 0 {
+		rawLineCount = context.LineCount + context.FilteredLineCount
+	}
+	usableLineCount := len(context.Entries)
+	if usableLineCount == 0 && context.LineCount > 0 && context.FilteredLineCount == 0 {
+		usableLineCount = context.LineCount
+	}
+
+	status := "succeeded"
+	if rawLineCount == 0 {
+		status = "succeeded; Loki returned no matching log lines"
+	} else if usableLineCount == 0 && context.FilteredLineCount > 0 {
+		status = "succeeded; Loki returned only Grafana/MCP self-observability lines"
+	} else {
+		status = "succeeded; Loki returned usable log lines"
+	}
+
+	return fmt.Sprintf("%s: raw_lines=%d usable_lines=%d filtered_self_observability=%d truncated=%t grafana_url=%t",
+		status,
+		rawLineCount,
+		usableLineCount,
+		context.FilteredLineCount,
+		context.Truncated,
+		context.GrafanaExploreURL != "",
+	)
 }
 
 func attachGrafanaLogQueryMetadata(context *GrafanaLogContext, job grafanaLogQueryJob, exploreURL string) {
@@ -701,9 +745,9 @@ func queryGrafanaLogs(ctx context.Context, client *mcpHTTPClient, datasourceUID,
 		return context
 	}
 
-	context.LineCount = len(result.Data)
+	context.RawLineCount = len(result.Data)
 	if result.Metadata != nil {
-		context.LineCount = result.Metadata.LinesReturned
+		context.RawLineCount = result.Metadata.LinesReturned
 		context.Truncated = result.Metadata.ResultsTruncated
 	}
 	for _, entry := range result.Data {
@@ -720,9 +764,7 @@ func queryGrafanaLogs(ctx context.Context, client *mcpHTTPClient, datasourceUID,
 		}
 		context.Entries = append(context.Entries, logEntry)
 	}
-	if context.FilteredLineCount > 0 {
-		context.LineCount = len(context.Entries)
-	}
+	context.LineCount = len(context.Entries)
 	return context
 }
 
