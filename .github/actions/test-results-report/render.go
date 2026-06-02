@@ -108,94 +108,93 @@ func renderGrafanaLogSummary(sb *strings.Builder, enrichment *GrafanaLogEnrichme
 		return
 	}
 
-	sb.WriteString("### Grafana Log Context\n\n")
-	if enrichment.DatasourceUID != "" {
-		if enrichment.DatasourceName != "" {
-			sb.WriteString(fmt.Sprintf("Datasource: `%s` (`%s`)\n\n", escapeMarkdown(enrichment.DatasourceName), escapeMarkdown(enrichment.DatasourceUID)))
-		} else {
-			sb.WriteString(fmt.Sprintf("Datasource: `%s`\n\n", escapeMarkdown(enrichment.DatasourceUID)))
-		}
-	}
-	if enrichment.StartRFC3339 != "" || enrichment.EndRFC3339 != "" {
-		sb.WriteString(fmt.Sprintf("Time range: `%s` to `%s`\n\n", escapeMarkdown(enrichment.StartRFC3339), escapeMarkdown(enrichment.EndRFC3339)))
-	}
+	sb.WriteString("### Grafana Observations\n\n")
+	sb.WriteString(grafanaObservationIntro(enrichment))
+	sb.WriteString("| Test | Backend | Observation | Link |\n")
+	sb.WriteString("| --- | --- | --- | --- |\n")
 
 	for _, context := range enrichment.Contexts {
-		title := context.QueryLabel
-		if title == "" {
-			title = "Query"
-		}
+		testName := firstNonEmpty(context.TestName, "General lookup")
 		if context.Test != nil {
-			title = fmt.Sprintf("%s: %s", title, firstNonEmpty(context.Test.Name, context.Test.ID))
+			testName = firstNonEmpty(context.Test.Name, context.Test.ID, testName)
 		}
-		sb.WriteString(fmt.Sprintf("#### %s\n\n", escapeMarkdown(title)))
-		if context.Reason != "" {
-			sb.WriteString(fmt.Sprintf("_Reason: %s_\n\n", escapeMarkdown(truncate(cleanOneLine(context.Reason), 300))))
-		}
-		renderGrafanaLogMetadata(sb, context)
-		sb.WriteString(fmt.Sprintf("```logql\n%s\n```\n\n", context.Query))
+		link := "-"
 		if context.GrafanaExploreURL != "" {
-			sb.WriteString(fmt.Sprintf("[Open query in Grafana](%s)\n\n", context.GrafanaExploreURL))
+			link = fmt.Sprintf("[Open query in Grafana](%s)", context.GrafanaExploreURL)
 		}
-		if context.FilteredLineCount > 0 {
-			sb.WriteString(fmt.Sprintf("_Filtered %d Grafana/MCP self-observability log line(s) before analysis._\n\n", context.FilteredLineCount))
-		}
-		if context.Error != "" {
-			sb.WriteString(fmt.Sprintf("> Grafana MCP query failed: `%s`\n\n", escapeMarkdown(truncate(cleanOneLine(context.Error), 300))))
-			continue
-		}
-		if len(context.Entries) == 0 {
-			sb.WriteString("_No matching log lines returned._\n\n")
-			continue
-		}
-
-		sb.WriteString("| Time | Labels | Message |\n")
-		sb.WriteString("| --- | --- | --- |\n")
-		for i, entry := range context.Entries {
-			if i >= 5 {
-				sb.WriteString(fmt.Sprintf("| _...and %d more_ | | |\n", len(context.Entries)-i))
-				break
-			}
-			sb.WriteString(fmt.Sprintf("| %s | %s | %s |\n",
-				tableCell(formatLogTimestamp(entry.Timestamp)),
-				tableCell(formatLogLabels(entry.Labels)),
-				tableCell(truncate(cleanOneLine(entry.Line), 300)),
-			))
-		}
-		if context.Truncated {
-			sb.WriteString("| _Results truncated by MCP limit_ | | |\n")
-		}
-		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
+			tableCell(truncate(cleanOneLine(testName), 120)),
+			tableCell(truncate(cleanOneLine(context.BackendArea), 80)),
+			tableCell(grafanaObservationText(context)),
+			link,
+		))
 	}
+	sb.WriteString("\n")
 }
 
-func renderGrafanaLogMetadata(sb *strings.Builder, context GrafanaLogContext) {
-	var metadata []string
-	if context.FailureRef != "" {
-		metadata = append(metadata, fmt.Sprintf("failure ref `%s`", escapeMarkdown(context.FailureRef)))
+func grafanaObservationIntro(enrichment *GrafanaLogEnrichment) string {
+	var parts []string
+	if enrichment.DatasourceName != "" && enrichment.DatasourceUID != "" {
+		parts = append(parts, fmt.Sprintf("datasource `%s` (`%s`)", escapeMarkdown(enrichment.DatasourceName), escapeMarkdown(enrichment.DatasourceUID)))
+	} else if enrichment.DatasourceName != "" {
+		parts = append(parts, fmt.Sprintf("datasource `%s`", escapeMarkdown(enrichment.DatasourceName)))
+	} else if enrichment.DatasourceUID != "" {
+		parts = append(parts, fmt.Sprintf("datasource `%s`", escapeMarkdown(enrichment.DatasourceUID)))
 	}
-	if context.TestName != "" {
-		metadata = append(metadata, fmt.Sprintf("test `%s`", escapeMarkdown(truncate(cleanOneLine(context.TestName), 120))))
+	if enrichment.StartRFC3339 != "" || enrichment.EndRFC3339 != "" {
+		parts = append(parts, fmt.Sprintf("time range `%s` to `%s`", escapeMarkdown(enrichment.StartRFC3339), escapeMarkdown(enrichment.EndRFC3339)))
 	}
-	if context.BackendArea != "" {
-		metadata = append(metadata, fmt.Sprintf("backend `%s`", escapeMarkdown(truncate(cleanOneLine(context.BackendArea), 80))))
+	if len(parts) == 0 {
+		return "_Grafana lookups ran; raw log rows are omitted here and available through the query links._\n\n"
 	}
-	if context.Confidence != "" {
-		metadata = append(metadata, fmt.Sprintf("confidence `%s`", escapeMarkdown(context.Confidence)))
+	return fmt.Sprintf("_Grafana lookups ran against %s; raw log rows are omitted here and available through the query links._\n\n", strings.Join(parts, ", "))
+}
+
+func grafanaObservationText(context GrafanaLogContext) string {
+	if context.Error != "" {
+		return "Lookup failed: " + truncate(cleanOneLine(context.Error), 180)
 	}
-	if len(metadata) > 0 {
-		sb.WriteString(fmt.Sprintf("_Lookup: %s._\n\n", strings.Join(metadata, ", ")))
+
+	var parts []string
+	lineCount := context.LineCount
+	if lineCount == 0 {
+		lineCount = len(context.Entries)
 	}
-	if context.ExpectedError != "" {
-		sb.WriteString(fmt.Sprintf("_Exact failure error: `%s`_\n\n", escapeMarkdown(truncate(cleanOneLine(context.ExpectedError), 240))))
+	if lineCount == 0 {
+		parts = append(parts, "No matching log lines returned")
+	} else if lineCount == 1 {
+		parts = append(parts, "1 matching log line returned")
+	} else {
+		parts = append(parts, fmt.Sprintf("%d matching log lines returned", lineCount))
 	}
-	if len(context.SearchTerms) > 0 {
-		terms := make([]string, 0, len(context.SearchTerms))
-		for _, term := range context.SearchTerms {
-			terms = append(terms, escapeMarkdown(term))
+	if components := grafanaLogComponentSummary(context.Entries); components != "" {
+		parts = append(parts, "components: "+components)
+	}
+	if context.FilteredLineCount > 0 {
+		parts = append(parts, fmt.Sprintf("filtered %d Grafana/MCP self-observability line(s)", context.FilteredLineCount))
+	}
+	if context.Truncated {
+		parts = append(parts, "results truncated by limit")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func grafanaLogComponentSummary(entries []GrafanaLogEntry) string {
+	seen := map[string]bool{}
+	var components []string
+	for _, entry := range entries {
+		component := firstNonEmpty(entry.Labels["app"], entry.Labels["container"], entry.Labels["namespace"], entry.Labels["pod"])
+		component = truncate(cleanOneLine(component), 80)
+		if component == "" || seen[component] {
+			continue
 		}
-		sb.WriteString(fmt.Sprintf("_Search terms: `%s`_\n\n", strings.Join(terms, "`, `")))
+		seen[component] = true
+		components = append(components, component)
+		if len(components) >= 3 {
+			break
+		}
 	}
+	return strings.Join(components, ", ")
 }
 
 func normalizeRenderOptions(options RenderOptions) RenderOptions {

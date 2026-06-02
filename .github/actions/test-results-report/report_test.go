@@ -369,7 +369,16 @@ func TestMarkdownSummaryIncludesGrafanaLookupMetadata(t *testing.T) {
 				Query:             `{namespace=~".+"} |~ "(?i)(claim-123|file-storage|500)"`,
 				GrafanaExploreURL: "https://grafana.example.com/explore?panes=encoded",
 				Reason:            "The UI file upload failed after a backend storage API 500.",
+				LineCount:         1,
 				FilteredLineCount: 2,
+				Entries: []GrafanaLogEntry{{
+					Timestamp: "1780322400000000000",
+					Line:      "file-storage controller failed claim-123 with backend 500",
+					Labels: map[string]string{
+						"app":       "file-storage-api",
+						"namespace": "file-storage",
+					},
+				}},
 			}},
 		},
 	}, RenderOptions{
@@ -378,18 +387,26 @@ func TestMarkdownSummaryIncludesGrafanaLookupMetadata(t *testing.T) {
 	})
 
 	for _, expected := range []string{
-		"### Grafana Log Context",
-		"failure ref `f1`",
-		"test `uploads file`",
-		"backend `file-storage`",
-		"confidence `medium`",
-		"Exact failure error: `POST /api/storage returned 500 for claim-123`",
-		"Search terms: `claim-123`, `file-storage`, `500`",
+		"### Grafana Observations",
+		"datasource `Loki` (`loki-dev`)",
+		"time range `2026-06-01T13:00:00Z` to `2026-06-01T14:00:00Z`",
+		"| uploads file | file-storage | 1 matching log line returned; components: file-storage-api",
 		"[Open query in Grafana](https://grafana.example.com/explore?panes=encoded)",
-		"Filtered 2 Grafana/MCP self-observability log line(s) before analysis.",
+		"filtered 2 Grafana/MCP self-observability line(s)",
 	} {
 		if !strings.Contains(markdown, expected) {
 			t.Fatalf("summary missing %q:\n%s", expected, markdown)
+		}
+	}
+	for _, unexpected := range []string{
+		"### Grafana Log Context",
+		"Exact failure error:",
+		"Search terms:",
+		`{namespace=~".+"}`,
+		"file-storage controller failed claim-123 with backend 500",
+	} {
+		if strings.Contains(markdown, unexpected) {
+			t.Fatalf("summary should not include %q:\n%s", unexpected, markdown)
 		}
 	}
 }
