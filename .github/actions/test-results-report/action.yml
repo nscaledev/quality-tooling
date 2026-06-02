@@ -499,6 +499,12 @@ runs:
       run: |
         set -euo pipefail
 
+        warn_install_failed() {
+          local reason="$1"
+          echo "::warning::Could not install mcp-grafana: ${reason}; continuing without Grafana log enrichment"
+          exit 0
+        }
+
         case "$(uname -m)" in
           x86_64|amd64) artifact="mcp-grafana_Linux_x86_64.tar.gz" ;;
           aarch64|arm64) artifact="mcp-grafana_Linux_arm64.tar.gz" ;;
@@ -512,25 +518,33 @@ runs:
         fi
 
         echo "Installing mcp-grafana ${release} (${artifact})"
-        gh release download -R grafana/mcp-grafana "$release" \
+        if ! gh release download -R grafana/mcp-grafana "$release" \
           --pattern "$artifact" \
-          --output "${RUNNER_TEMP}/mcp-grafana.tar.gz"
-        gh release download -R grafana/mcp-grafana "$release" \
+          --output "${RUNNER_TEMP}/mcp-grafana.tar.gz"; then
+          warn_install_failed "download ${artifact} from grafana/mcp-grafana ${release} failed"
+        fi
+        if ! gh release download -R grafana/mcp-grafana "$release" \
           --pattern "mcp-grafana_${release#v}_checksums.txt" \
-          --output "${RUNNER_TEMP}/mcp-grafana-checksums.txt"
+          --output "${RUNNER_TEMP}/mcp-grafana-checksums.txt"; then
+          warn_install_failed "download checksum file from grafana/mcp-grafana ${release} failed"
+        fi
         expected_checksum="$(awk -v artifact="$artifact" '$2 == artifact {print $1}' "${RUNNER_TEMP}/mcp-grafana-checksums.txt")"
         if [[ -z "$expected_checksum" ]]; then
-          echo "::error::No checksum found for ${artifact} in mcp-grafana ${release}"
-          exit 1
+          warn_install_failed "no checksum found for ${artifact} in mcp-grafana ${release}"
         fi
         actual_checksum="$(sha256sum "${RUNNER_TEMP}/mcp-grafana.tar.gz" | awk '{print $1}')"
         if [[ "$actual_checksum" != "$expected_checksum" ]]; then
-          echo "::error::Checksum mismatch for ${artifact}"
-          exit 1
+          warn_install_failed "checksum mismatch for ${artifact}"
         fi
-        tar -xzf "${RUNNER_TEMP}/mcp-grafana.tar.gz" -C "${RUNNER_TEMP}"
-        sudo mv "${RUNNER_TEMP}/mcp-grafana" /usr/local/bin/mcp-grafana
-        mcp-grafana --help >/dev/null
+        if ! tar -xzf "${RUNNER_TEMP}/mcp-grafana.tar.gz" -C "${RUNNER_TEMP}"; then
+          warn_install_failed "extract ${artifact} failed"
+        fi
+        if ! sudo mv "${RUNNER_TEMP}/mcp-grafana" /usr/local/bin/mcp-grafana; then
+          warn_install_failed "move mcp-grafana binary into PATH failed"
+        fi
+        if ! mcp-grafana --help >/dev/null; then
+          warn_install_failed "mcp-grafana binary health check failed"
+        fi
         echo "mcp-grafana installed at $(command -v mcp-grafana)"
 
     - name: Start Grafana MCP server
