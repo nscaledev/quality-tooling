@@ -87,10 +87,10 @@ Section 1: Markdown for the GitHub step summary.
 - Use test/false failure only for failed tests caused by test code, invalid assertions, sentinel failures, or false failures; do not use it for skipped tests.
 - Use unknown/mixed when there is not enough evidence to choose a category confidently.
 - Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
-- If Grafana/Loki observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
-- Keep the report close to the existing production format; do not add a separate Grafana/Loki section, raw log table, LogQL, search terms, or Grafana URL list.
-- When a Loki signal is present, mention the concrete signal in the Likely reason or Next check, such as "Loki showed INTERNAL_ERROR/connection refused" or "Loki only returned audit/cleanup rows and no explicit error".
-- Do not overstate certainty when Loki returned empty, cleanup-only, or loosely related logs.
+- If Grafana observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
+- Keep the report close to the existing production format; do not add a separate Grafana section, raw log table, LogQL, search terms, or Grafana URL list.
+- When a Grafana signal is present, mention the concrete signal in the Likely reason or Next check, such as "Grafana showed INTERNAL_ERROR/connection refused" or "Grafana only returned audit/cleanup rows and no explicit error".
+- Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs.
 - The pattern table must make clear what failed, why it failed, the likely reason, impact, and the next check.
 - When test-level detail is useful, add a "### Representative Failed Tests" table capped at 10 rows.
 - In the representative tests table, group tests with the same failure reason into one row instead of listing duplicate failures separately.
@@ -118,9 +118,9 @@ Section 2: Plain text Slack summary.
 - Do not use tables in the Slack summary; Slack should stay short bullet lines.
 - Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
 - Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason.
-- For Grafana/Loki-backed bullets, explicitly connect the test error, your interpretation, and the Loki signal in the same bullet.
-- Do not use vague phrases like "Grafana returned related activity" unless you also say what Loki showed or did not show.
-- If Loki only returned audit/cleanup rows, say that and point the action to the earlier provisioning/error window; if Loki returned error signals, name the signals.
+- For Grafana-backed bullets, explicitly connect the test error, your interpretation, and the Grafana signal in the same bullet.
+- Do not use vague phrases like "Grafana returned related activity" unless you also say what Grafana showed or did not show.
+- If Grafana only returned audit/cleanup rows, say that and point the action to the earlier provisioning/error window; if Grafana returned error signals, name the signals.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
 - Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
 - Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
@@ -137,7 +137,7 @@ Use this shape:
 - *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
 - *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.
 - *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
-- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Loki matched the resource only in audit/cleanup rows, so inspect the earlier controller/provisioner error window.
+- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows, so inspect the earlier controller/provisioner error window.
 - *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 
@@ -383,17 +383,17 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 		return
 	}
 
-	sb.WriteString("Grafana/Loki observations for final analysis:\n")
+	sb.WriteString("Grafana observations for final analysis:\n")
 	var scope []string
 	if enrichment.StartRFC3339 != "" || enrichment.EndRFC3339 != "" {
 		scope = append(scope, fmt.Sprintf("time range %s to %s", enrichment.StartRFC3339, enrichment.EndRFC3339))
 	}
 	if enrichment.DatasourceName != "" && enrichment.DatasourceUID != "" {
-		scope = append(scope, fmt.Sprintf("datasource %s (%s)", enrichment.DatasourceName, enrichment.DatasourceUID))
+		scope = append(scope, fmt.Sprintf("Grafana datasource %s (%s)", enrichment.DatasourceName, enrichment.DatasourceUID))
 	} else if enrichment.DatasourceName != "" {
-		scope = append(scope, fmt.Sprintf("datasource %s", enrichment.DatasourceName))
+		scope = append(scope, fmt.Sprintf("Grafana datasource %s", enrichment.DatasourceName))
 	} else if enrichment.DatasourceUID != "" {
-		scope = append(scope, fmt.Sprintf("datasource %s", enrichment.DatasourceUID))
+		scope = append(scope, fmt.Sprintf("Grafana datasource %s", enrichment.DatasourceUID))
 	}
 	if len(scope) > 0 {
 		sb.WriteString(fmt.Sprintf("Scope: %s.\n", strings.Join(scope, "; ")))
@@ -411,7 +411,7 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 			sb.WriteString(fmt.Sprintf("; confidence: %s", context.Confidence))
 		}
 		if context.Error != "" {
-			sb.WriteString(fmt.Sprintf("; Loki lookup failed: %s\n", truncate(cleanOneLine(context.Error), 220)))
+			sb.WriteString(fmt.Sprintf("; Grafana lookup failed: %s\n", truncate(cleanOneLine(context.Error), 220)))
 			continue
 		}
 
@@ -420,11 +420,11 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 			lineCount = len(context.Entries)
 		}
 		if lineCount == 0 {
-			sb.WriteString("; Loki returned no matching log lines")
+			sb.WriteString("; Grafana returned no matching log lines")
 		} else if lineCount == 1 {
-			sb.WriteString("; Loki returned 1 matching log line")
+			sb.WriteString("; Grafana returned 1 matching log line")
 		} else {
-			sb.WriteString(fmt.Sprintf("; Loki returned %d matching log lines", lineCount))
+			sb.WriteString(fmt.Sprintf("; Grafana returned %d matching log lines", lineCount))
 		}
 		if components := grafanaLogComponentSummary(context.Entries); components != "" {
 			sb.WriteString(fmt.Sprintf("; components: %s", components))
@@ -433,7 +433,7 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 			sb.WriteString(fmt.Sprintf("; %s", hint))
 		}
 		if signal := grafanaLogSignalSummary(context); signal != "" {
-			sb.WriteString(fmt.Sprintf("; Loki signal: %s", signal))
+			sb.WriteString(fmt.Sprintf("; Grafana signal: %s", signal))
 		}
 		if context.FilteredLineCount > 0 {
 			sb.WriteString(fmt.Sprintf("; filtered %d Grafana/MCP self-observability line(s)", context.FilteredLineCount))
