@@ -735,6 +735,36 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).NotTo(ContainSubstring("GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED=${grafana_token}"))
 			})
 
+			It("should use the test history OTLP writer bot when publishing needs the observability collector", func() {
+				Expect(action).To(ContainSubstring("Resolve Test History publishing"))
+				Expect(action).To(ContainSubstring("github-test-history-otlp-writer"))
+				Expect(action).To(ContainSubstring("teleport-actions/auth-k8s@v2"))
+				Expect(action).To(ContainSubstring("token: ${{ inputs.test-history-teleport-token }}"))
+				Expect(action).To(ContainSubstring("kubernetes-cluster: ${{ inputs.test-history-kube-cluster }}"))
+				Expect(action).To(ContainSubstring(`kubectl port-forward`))
+				Expect(action).To(ContainSubstring(`--address 127.0.0.1`))
+				Expect(action).To(ContainSubstring(`"svc/${service}"`))
+				Expect(action).To(ContainSubstring(`"${local_port}:${collector_port}"`))
+				Expect(action).To(ContainSubstring(`INPUT_TEST_HISTORY_PUBLISH_MODE: ${{ steps.test-history-resolve.outputs.mode }}`))
+				Expect(action).To(ContainSubstring(`INPUT_TEST_HISTORY_OTLP_ENDPOINT: ${{ steps.test-history-resolve.outputs.otlp-endpoint }}`))
+				Expect(action).To(ContainSubstring("test-history-publish-mode"))
+				Expect(action).To(ContainSubstring("Dump test history OTLP port-forward logs"))
+			})
+
+			It("should attach the test history retry spool when collector shipping fails", func() {
+				Expect(action).To(ContainSubstring("test-history-upload-spool"))
+				Expect(action).To(ContainSubstring("default: 'on-failure'"))
+				Expect(action).To(ContainSubstring("Upload test history retry spool"))
+				Expect(action).To(ContainSubstring("actions/upload-artifact@v4"))
+				Expect(action).To(ContainSubstring("test-history-upload-spool must be one of: on-failure, always, false"))
+				Expect(action).To(ContainSubstring("write_output \"upload-spool\" \"$upload_spool\""))
+				Expect(action).To(ContainSubstring("steps.test-history-resolve.outputs.upload-spool == 'on-failure'"))
+				Expect(action).To(ContainSubstring("steps.report.outputs.test-history-shipping-status == 'failed'"))
+				Expect(action).To(ContainSubstring("steps.report.outputs.test-history-spool-path"))
+				Expect(action).To(ContainSubstring("include-hidden-files: true"))
+				Expect(action).To(ContainSubstring("test-history-spool-artifact-url"))
+			})
+
 			It("should log Grafana MCP preflight decisions without exposing the service account token", func() {
 				Expect(action).To(ContainSubstring("Grafana MCP enrichment preflight"))
 				Expect(action).To(ContainSubstring(`mask_value "grafana-service-account-token" "$grafana_token"`))

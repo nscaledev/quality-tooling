@@ -222,12 +222,13 @@ type playwrightTest struct {
 }
 
 type playwrightResult struct {
-	Status   string             `json:"status"`
-	Duration int64              `json:"duration"`
-	Error    *playwrightError   `json:"error"`
-	Errors   []playwrightError  `json:"errors"`
-	Stdout   []playwrightOutput `json:"stdout"`
-	Stderr   []playwrightOutput `json:"stderr"`
+	Status    string             `json:"status"`
+	Duration  int64              `json:"duration"`
+	StartTime string             `json:"startTime"`
+	Error     *playwrightError   `json:"error"`
+	Errors    []playwrightError  `json:"errors"`
+	Stdout    []playwrightOutput `json:"stdout"`
+	Stderr    []playwrightOutput `json:"stderr"`
 }
 
 type playwrightError struct {

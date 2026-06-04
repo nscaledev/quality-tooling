@@ -183,6 +183,20 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 		"GITHUB_SERVER_URL":                   "https://github.example",
 		"GITHUB_REPOSITORY":                   "nscale/repo",
 		"GITHUB_RUN_ID":                       "12345",
+		"INPUT_REPORT_URL":                    "https://reports.example/allure",
+		"INPUT_PUBLISH_TEST_HISTORY":          "auto",
+		"TEST_HISTORY_API_URL":                "https://history.example",
+		"TEST_HISTORY_TOKEN":                  "env-history-token",
+		"INPUT_TEST_HISTORY_SUITE":            "region-api",
+		"INPUT_TEST_HISTORY_FRAMEWORK":        "ginkgo",
+		"INPUT_TEST_HISTORY_ENV":              "qa",
+		"INPUT_TEST_HISTORY_REPO":             "nscale/override",
+		"INPUT_TEST_HISTORY_BRANCH":           "history-branch",
+		"INPUT_TEST_HISTORY_COMMIT":           "commit-abc",
+		"INPUT_TEST_HISTORY_RUN_ID":           "run-99",
+		"INPUT_TEST_HISTORY_RUN_ATTEMPT":      "3",
+		"INPUT_TEST_HISTORY_ARTIFACT_URL":     "https://artifacts.example/run-99",
+		"GITHUB_WORKSPACE":                    "/workspace/repo",
 		"INPUT_MAX_FAILURES":                  "12",
 		"INPUT_MAX_SKIPS":                     "13",
 		"INPUT_INCLUDE_SKIPS":                 "no",
@@ -218,6 +232,18 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 	if config.ClaudeToken != "env-token" || !config.EnableGrafanaLogs || config.GrafanaURL != "https://grafana.example.com" || config.GrafanaLokiName != "Prod Loki" {
 		t.Fatalf("unexpected Grafana/AI config: %+v", config)
 	}
+	if !config.PublishTestHistory || config.TestHistoryPublishMode != "api" || config.TestHistoryAPIURL != "https://history.example" || config.TestHistoryToken != "env-history-token" {
+		t.Fatalf("unexpected test history enable/API config: %+v", config)
+	}
+	if config.TestHistorySuite != "region-api" || config.TestHistoryFramework != "ginkgo" || config.TestHistoryEnv != "qa" {
+		t.Fatalf("unexpected test history context config: %+v", config)
+	}
+	if config.TestHistoryRepo != "nscale/override" || config.TestHistoryBranch != "history-branch" || config.TestHistoryCommit != "commit-abc" || config.TestHistoryRunID != "run-99" || config.TestHistoryRunAttempt != 3 {
+		t.Fatalf("unexpected test history run identity config: %+v", config)
+	}
+	if config.TestHistoryArtifactURL != "https://artifacts.example/run-99" || config.TestHistoryOutputPath != "/workspace/repo/.test-history/events.ndjson" {
+		t.Fatalf("unexpected test history artifact/spool config: %+v", config)
+	}
 
 	for _, tc := range []struct {
 		value    string
@@ -233,6 +259,28 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 	} {
 		if got := parseBoolDefault(tc.value, tc.fallback); got != tc.want {
 			t.Fatalf("parseBoolDefault(%q, %t) = %t, want %t", tc.value, tc.fallback, got, tc.want)
+		}
+	}
+	if !parseAutoBool("auto", true) || parseAutoBool("auto", false) || !parseAutoBool("yes", false) || parseAutoBool("no", true) {
+		t.Fatal("parseAutoBool did not return expected values")
+	}
+	for _, tc := range []struct {
+		name           string
+		mode           string
+		publishSetting string
+		apiURL         string
+		otlpEndpoint   string
+		want           string
+	}{
+		{"explicit API", "api", "true", "", "", "api"},
+		{"explicit OTLP", "otlp", "auto", "https://history.example", "", "otlp"},
+		{"explicit publish defaults OTLP", "auto", "true", "https://history.example", "", "otlp"},
+		{"legacy API auto", "auto", "auto", "https://history.example", "", "api"},
+		{"OTLP endpoint auto", "auto", "auto", "", "http://127.0.0.1:14318/v1/logs", "otlp"},
+		{"disabled no endpoint still resolves OTLP", "auto", "false", "", "", "otlp"},
+	} {
+		if got := resolveTestHistoryPublishMode(tc.mode, tc.publishSetting, tc.apiURL, tc.otlpEndpoint); got != tc.want {
+			t.Fatalf("%s: resolveTestHistoryPublishMode() = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 	for _, tc := range []struct {

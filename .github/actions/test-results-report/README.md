@@ -11,6 +11,7 @@ This action is additive. Existing users of `slack-test-notifications` can keep u
 - Writes a GitHub step summary by default
 - Compares against previous results when `previous-results-path` is provided
 - Reports new, recurring, and resolved failures/skips
+- Optionally publishes normalized test attempt events to the observability OTLP collector through the `github-test-history-otlp-writer` bot
 - Sends Slack via incoming webhook
 - Optionally adds concise Claude failure analysis grouped by failure pattern, without repeating the raw test tables
 - Optionally enriches failures with related Loki logs fetched through Grafana MCP
@@ -60,12 +61,13 @@ At a high level, the action keeps orchestration inside the GitHub workflow runne
 1. Read the current test report from `test-results-path`.
 2. Optionally read the previous report when `compare-with-previous` is enabled or auto-detected.
 3. Analyze current failures, skips, deltas, and representative failures.
-4. Optionally ask Claude which failures, if any, need backend log lookup.
-5. Resolve or start Grafana MCP only when Claude planned backend queries, then query Loki in parallel.
-6. Optionally run Claude to consolidate the final failure analysis.
-7. Write the GitHub step summary.
-8. Optionally send Slack.
-9. Emit GitHub action outputs.
+4. Optionally write normalized test-history events to `.test-history/events.ndjson` and post them to the observability OTLP collector.
+5. Optionally ask Claude which failures, if any, need backend log lookup.
+6. Resolve or start Grafana MCP only when Claude planned backend queries, then query Loki in parallel.
+7. Optionally run Claude to consolidate the final failure analysis.
+8. Write the GitHub step summary.
+9. Optionally send Slack.
+10. Emit GitHub action outputs.
 
 ```mermaid
 flowchart TD
@@ -74,7 +76,10 @@ flowchart TD
   C -- yes --> D[Parse previous report]
   C -- no --> E[Analyze current results]
   D --> E
-  E --> F{Grafana enrichment enabled and failures exist?}
+  E --> V{Publish test history enabled?}
+  V -- yes --> W[Write NDJSON spool and post OTLP logs to the observability collector]
+  V -- no --> F{Grafana enrichment enabled and failures exist?}
+  W --> F
   F -- no --> K{AI analysis enabled?}
   F -- yes --> H{AI analysis and Claude token available?}
   H -- yes --> I[Claude inspects failures and plans backend LogQL only when needed]
@@ -117,6 +122,44 @@ This section is the operating contract for maintainers and coding agents changin
 - Ginkgo JSON preserves suite and spec start/end timestamps when present. Those timestamps are passed into AI analysis so timing claims can be checked against the Grafana query window.
 - Skipped tests are reported as skipped. Intentional, known-bug, pending, disabled, or sentinel skips must not be classified as `test/false failure`.
 - Previous-result comparison runs only when `compare-with-previous` is enabled or auto-detected from `previous-results-path`. Previous results are advisory comparison context; they do not change current run totals.
+
+### Test History Publishing
+
+Test history publishing is opt-in. Set `publish-test-history: true` to post OTLP log records through the `github-test-history-otlp-writer` Teleport bot into the observability collector. Leave it at `auto` to publish only when a caller provides an existing OTLP endpoint or the legacy API URL. When enabled, the action:
+
+- normalizes parsed test results into test attempt events and writes each event as an OTLP HTTP log record to `/v1/logs`;
+- opens a Teleport-backed Kubernetes port-forward to `telemetry/svc/agent-collector` when no `test-history-otlp-endpoint` is supplied;
+- writes `.test-history/events.ndjson` by default for artifact upload and later replay;
+- uses deterministic SHA-256 `event_id` values from `repo:run_id:run_attempt:test_id:attempt_index`;
+- expands Playwright retry attempts into separate events while preserving the existing summary counts;
+- treats collector, API, token, storage, and network failures as warnings so test history cannot fail the test job;
+- emits `test-history-shipping-status=failed`, `test-history-failure-reason`, and a GitHub warning annotation when OTLP logs do not reach the agent collector.
+- uploads the NDJSON retry spool as a `test-history-events` artifact on shipping failure by default.
+
+The workflow job that calls this action must grant GitHub OIDC when using the default bot path:
+
+```yaml
+jobs:
+  test:
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Report and publish test results
+        uses: nscaledev/quality-tooling/.github/actions/test-results-report@main
+        if: always()
+        with:
+          test-results-path: test-results/results.xml
+          format: junit
+          title: API Test Results
+          environment: dev
+          publish-test-history: 'true'
+          test-history-suite: uni-region-api
+```
+
+The default spool path is `$GITHUB_WORKSPACE/.test-history/events.ndjson`. By default the action uploads that file as the `test-history-events` artifact only when shipping fails. Set `test-history-upload-spool: always` to attach it for every published run, or `false` to disable artifact upload.
+
+Legacy API posting remains available for compatibility by setting `test-history-publish-mode: api` with `test-history-api-url` and `test-history-token`, or by leaving `publish-test-history: auto` while providing `TEST_HISTORY_API_URL`.
 
 ### Grafana Enrichment Gate
 
@@ -295,6 +338,25 @@ When enabled, the report includes:
 | `title` | No | `Test Results` | Report title |
 | `workflow-url` | No | inferred | GitHub Actions workflow URL |
 | `report-url` | No | empty | Published report URL, e.g. Allure |
+| `publish-test-history` | No | `auto` | Publish normalized events: `auto`, `true`, or `false`; explicit `true` uses OTLP through the Teleport writer bot |
+| `test-history-publish-mode` | No | `auto` | `auto`, `otlp`, or `api`; auto uses OTLP for explicit publishing and API only for legacy API URL auto publishing |
+| `test-history-otlp-endpoint` | No | `TEST_HISTORY_OTLP_ENDPOINT` | Existing OTLP HTTP logs endpoint; when omitted in OTLP mode, the action opens a collector port-forward |
+| `test-history-teleport-proxy` | No | `nscale.teleport.sh:443` | Teleport proxy for the test history OTLP writer bot |
+| `test-history-teleport-token` | No | `github-test-history-otlp-writer` | Teleport GitHub join token for OTLP test history shipping |
+| `test-history-kube-cluster` | No | `observability-prod-glo1` | Teleport Kubernetes cluster containing the observability collector |
+| `test-history-collector-namespace` | No | `telemetry` | Kubernetes namespace containing the OTLP collector service |
+| `test-history-collector-service` | No | `agent-collector` | Kubernetes service name for the OTLP collector |
+| `test-history-otlp-local-port` | No | `14318` | Local port used for the OTLP HTTP port-forward |
+| `test-history-otlp-collector-port` | No | `4318` | Collector service OTLP HTTP port |
+| `test-history-api-url` | No | `TEST_HISTORY_API_URL` | Legacy base URL for `test-history-api` |
+| `test-history-token` | No | `TEST_HISTORY_TOKEN` | Legacy bearer token for `test-history-api` |
+| `test-history-suite` | No | parsed run name/title | Suite name stored in test history |
+| `test-history-framework` | No | inferred from format | Framework stored in test history |
+| `test-history-env` | No | `environment` | Environment stored in test history |
+| `test-history-output-path` | No | `$GITHUB_WORKSPACE/.test-history/events.ndjson` | NDJSON spool path for replay |
+| `test-history-upload-spool` | No | `on-failure` | Upload retry spool artifact: `on-failure`, `always`, or `false` |
+| `test-history-spool-artifact-name` | No | `test-history-events` | Artifact name used for the uploaded retry spool |
+| `test-history-artifact-url` | No | `report-url`, then workflow URL | Artifact or workflow URL stored with each event |
 | `max-failures` | No | `10` | Failure detail limit |
 | `max-skips` | No | `10` | Skip detail limit |
 | `include-skips` | No | `true` | Include skipped test details in summary |
@@ -338,6 +400,14 @@ The action emits counts and comparison values:
 - `recurring-skips`
 - `resolved-skips`
 - `slack-sent`
+- `test-history-enabled`
+- `test-history-publish-mode`
+- `test-history-shipping-status`
+- `test-history-failure-reason`
+- `test-history-events`
+- `test-history-posted`
+- `test-history-spool-path`
+- `test-history-spool-artifact-url`
 
 ## Backward Compatibility
 

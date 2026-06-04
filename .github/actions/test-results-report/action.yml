@@ -1,5 +1,5 @@
 name: 'Test Results Report'
-description: 'Analyze test failures/skips, write a GitHub step summary, and optionally notify Slack'
+description: 'Analyze test failures/skips, optionally publish test history, write a GitHub step summary, and optionally notify Slack'
 author: 'Nscale'
 
 branding:
@@ -68,6 +68,82 @@ inputs:
     default: ''
   report-url:
     description: 'Optional published report URL, such as Allure.'
+    required: false
+    default: ''
+  publish-test-history:
+    description: 'Publish normalized test attempt events: auto, true, or false. Explicit true defaults to OTLP over the github-test-history-otlp-writer Teleport bot.'
+    required: false
+    default: 'auto'
+  test-history-publish-mode:
+    description: 'Test history publishing mode: auto, otlp, or api. Auto uses OTLP for explicit publishing and API only for legacy API-url auto publishing.'
+    required: false
+    default: 'auto'
+  test-history-otlp-endpoint:
+    description: 'Existing OTLP HTTP logs endpoint. If omitted in OTLP mode, the action opens a Teleport-backed port-forward to the observability collector.'
+    required: false
+    default: ''
+  test-history-teleport-proxy:
+    description: 'Teleport proxy used for the test-history OTLP writer bot.'
+    required: false
+    default: 'nscale.teleport.sh:443'
+  test-history-teleport-token:
+    description: 'Teleport GitHub join token for OTLP test history shipping.'
+    required: false
+    default: 'github-test-history-otlp-writer'
+  test-history-kube-cluster:
+    description: 'Teleport Kubernetes cluster containing the observability collector.'
+    required: false
+    default: 'observability-prod-glo1'
+  test-history-collector-namespace:
+    description: 'Kubernetes namespace containing the OTLP collector service.'
+    required: false
+    default: 'telemetry'
+  test-history-collector-service:
+    description: 'Kubernetes service name for the OTLP collector.'
+    required: false
+    default: 'agent-collector'
+  test-history-otlp-local-port:
+    description: 'Local port used for the OTLP HTTP port-forward.'
+    required: false
+    default: '14318'
+  test-history-otlp-collector-port:
+    description: 'Collector service OTLP HTTP port.'
+    required: false
+    default: '4318'
+  test-history-api-url:
+    description: 'Legacy base URL for test-history-api. If omitted, TEST_HISTORY_API_URL is used.'
+    required: false
+    default: ''
+  test-history-token:
+    description: 'Legacy bearer token for test-history-api. If omitted, TEST_HISTORY_TOKEN is used.'
+    required: false
+    default: ''
+  test-history-suite:
+    description: 'Suite name stored in test history. Defaults to the parsed report name or action title.'
+    required: false
+    default: ''
+  test-history-framework:
+    description: 'Framework stored in test history. Defaults from format: junit, playwright, or ginkgo.'
+    required: false
+    default: ''
+  test-history-env:
+    description: 'Environment stored in test history. Defaults to environment.'
+    required: false
+    default: ''
+  test-history-output-path:
+    description: 'NDJSON spool path for replay. Defaults to $GITHUB_WORKSPACE/.test-history/events.ndjson.'
+    required: false
+    default: ''
+  test-history-upload-spool:
+    description: 'Upload the NDJSON retry spool artifact: on-failure, always, or false.'
+    required: false
+    default: 'on-failure'
+  test-history-spool-artifact-name:
+    description: 'Artifact name used when uploading the test history retry spool.'
+    required: false
+    default: 'test-history-events'
+  test-history-artifact-url:
+    description: 'Artifact or workflow URL stored with each test event. Defaults to report-url, then the GitHub workflow run URL.'
     required: false
     default: ''
   max-failures:
@@ -210,6 +286,30 @@ outputs:
   slack-sent:
     description: 'true if a Slack notification was sent successfully.'
     value: ${{ steps.report.outputs.slack-sent }}
+  test-history-enabled:
+    description: 'true if test history publishing/spooling ran.'
+    value: ${{ steps.report.outputs.test-history-enabled }}
+  test-history-publish-mode:
+    description: 'Resolved test history publish mode: otlp or api.'
+    value: ${{ steps.report.outputs.test-history-publish-mode }}
+  test-history-shipping-status:
+    description: 'Test history shipping status: disabled, pending, no-events, posted, or failed.'
+    value: ${{ steps.report.outputs.test-history-shipping-status }}
+  test-history-failure-reason:
+    description: 'Single-line reason when test history shipping failed.'
+    value: ${{ steps.report.outputs.test-history-failure-reason }}
+  test-history-events:
+    description: 'Number of normalized test history events produced.'
+    value: ${{ steps.report.outputs.test-history-events }}
+  test-history-posted:
+    description: 'true if events were accepted by the OTLP collector or legacy test-history-api.'
+    value: ${{ steps.report.outputs.test-history-posted }}
+  test-history-spool-path:
+    description: 'Path to the NDJSON test history spool file.'
+    value: ${{ steps.report.outputs.test-history-spool-path }}
+  test-history-spool-artifact-url:
+    description: 'URL for the uploaded test history retry spool artifact when upload ran.'
+    value: ${{ steps.test-history-upload-spool.outputs.artifact-url }}
 
 runs:
   using: 'composite'
@@ -220,6 +320,124 @@ runs:
         go-version-file: ${{ github.action_path }}/go.mod
         cache: true
         cache-dependency-path: ${{ github.action_path }}/go.sum
+
+    - name: Resolve Test History publishing
+      id: test-history-resolve
+      shell: bash
+      env:
+        INPUT_PUBLISH_TEST_HISTORY: ${{ inputs.publish-test-history }}
+        INPUT_TEST_HISTORY_PUBLISH_MODE: ${{ inputs.test-history-publish-mode }}
+        INPUT_TEST_HISTORY_API_URL: ${{ inputs.test-history-api-url }}
+        INPUT_TEST_HISTORY_OTLP_ENDPOINT: ${{ inputs.test-history-otlp-endpoint }}
+        INPUT_TEST_HISTORY_OTLP_LOCAL_PORT: ${{ inputs.test-history-otlp-local-port }}
+        INPUT_TEST_HISTORY_UPLOAD_SPOOL: ${{ inputs.test-history-upload-spool }}
+        TEST_HISTORY_API_URL: ${{ env.TEST_HISTORY_API_URL }}
+        TEST_HISTORY_OTLP_ENDPOINT: ${{ env.TEST_HISTORY_OTLP_ENDPOINT }}
+      run: |
+        set -euo pipefail
+
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        require_port() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+            echo "::error::${name} must be a TCP port between 1 and 65535"
+            exit 1
+          fi
+        }
+
+        write_output() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+        }
+
+        lower() {
+          printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+        }
+
+        publish_setting="$(lower "${INPUT_PUBLISH_TEST_HISTORY:-auto}")"
+        mode_setting="$(lower "${INPUT_TEST_HISTORY_PUBLISH_MODE:-auto}")"
+        api_url="${INPUT_TEST_HISTORY_API_URL:-${TEST_HISTORY_API_URL:-}}"
+        otlp_endpoint="${INPUT_TEST_HISTORY_OTLP_ENDPOINT:-${TEST_HISTORY_OTLP_ENDPOINT:-}}"
+        local_port="${INPUT_TEST_HISTORY_OTLP_LOCAL_PORT}"
+        upload_spool="$(lower "${INPUT_TEST_HISTORY_UPLOAD_SPOOL:-on-failure}")"
+
+        require_single_line "publish-test-history" "$publish_setting"
+        require_single_line "test-history-publish-mode" "$mode_setting"
+        require_single_line "test-history-api-url" "$api_url"
+        require_single_line "test-history-otlp-endpoint" "$otlp_endpoint"
+        require_single_line "test-history-upload-spool" "$upload_spool"
+
+        case "$upload_spool" in
+          always|on-failure|false)
+            ;;
+          *)
+            echo "::error::test-history-upload-spool must be one of: on-failure, always, false"
+            exit 1
+            ;;
+        esac
+
+        case "$publish_setting" in
+          true|1|yes|y|on)
+            enabled="true"
+            explicit_publish="true"
+            ;;
+          false|0|no|n|off)
+            enabled="false"
+            explicit_publish="false"
+            ;;
+          *)
+            explicit_publish="false"
+            if [[ -n "$api_url" || -n "$otlp_endpoint" ]]; then
+              enabled="true"
+            else
+              enabled="false"
+            fi
+            ;;
+        esac
+
+        case "$mode_setting" in
+          api|otlp)
+            mode="$mode_setting"
+            ;;
+          *)
+            if [[ -n "$otlp_endpoint" || "$explicit_publish" == "true" ]]; then
+              mode="otlp"
+            elif [[ -n "$api_url" ]]; then
+              mode="api"
+            else
+              mode="otlp"
+            fi
+            ;;
+        esac
+
+        needs_tunnel="false"
+        if [[ "$enabled" == "true" && "$mode" == "otlp" && -z "$otlp_endpoint" ]]; then
+          require_port "test-history-otlp-local-port" "$local_port"
+          needs_tunnel="true"
+          otlp_endpoint="http://127.0.0.1:${local_port}/v1/logs"
+        fi
+
+        echo "Test history publishing enabled: ${enabled}"
+        echo "Test history publish mode: ${mode}"
+        echo "Test history needs OTLP collector tunnel: ${needs_tunnel}"
+
+        write_output "enabled" "$enabled"
+        write_output "mode" "$mode"
+        write_output "otlp-endpoint" "$otlp_endpoint"
+        write_output "needs-otlp-tunnel" "$needs_tunnel"
+        write_output "upload-spool" "$upload_spool"
 
     - name: Resolve Grafana MCP inputs
       id: grafana-resolve
@@ -681,6 +899,114 @@ runs:
         echo "::warning::mcp-grafana /healthz did not become reachable; log enrichment will be skipped by the reporter"
         cat "${RUNNER_TEMP}/mcp-grafana.log" || true
 
+    - name: Install kubectl for test history OTLP writer
+      if: ${{ steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
+      continue-on-error: true
+      uses: azure/setup-kubectl@v4
+
+    - name: Install Teleport clients for test history OTLP writer
+      if: ${{ steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
+      continue-on-error: true
+      uses: teleport-actions/setup@a820ebbf1bc1a496efca348ad21042d6e8df73a6
+      with:
+        version: auto
+        proxy: ${{ inputs.test-history-teleport-proxy }}
+
+    - name: Authenticate test history OTLP writer
+      if: ${{ steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
+      continue-on-error: true
+      uses: teleport-actions/auth-k8s@v2
+      with:
+        proxy: ${{ inputs.test-history-teleport-proxy }}
+        token: ${{ inputs.test-history-teleport-token }}
+        kubernetes-cluster: ${{ inputs.test-history-kube-cluster }}
+
+    - name: Open test history OTLP collector tunnel
+      if: ${{ steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
+      shell: bash
+      env:
+        INPUT_TEST_HISTORY_COLLECTOR_NAMESPACE: ${{ inputs.test-history-collector-namespace }}
+        INPUT_TEST_HISTORY_COLLECTOR_SERVICE: ${{ inputs.test-history-collector-service }}
+        INPUT_TEST_HISTORY_OTLP_LOCAL_PORT: ${{ inputs.test-history-otlp-local-port }}
+        INPUT_TEST_HISTORY_OTLP_COLLECTOR_PORT: ${{ inputs.test-history-otlp-collector-port }}
+        TEST_HISTORY_OTLP_ENDPOINT: ${{ steps.test-history-resolve.outputs.otlp-endpoint }}
+      run: |
+        set -euo pipefail
+
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        require_port() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+            echo "::error::${name} must be a TCP port between 1 and 65535"
+            exit 1
+          fi
+        }
+
+        namespace="${INPUT_TEST_HISTORY_COLLECTOR_NAMESPACE}"
+        service="${INPUT_TEST_HISTORY_COLLECTOR_SERVICE}"
+        local_port="${INPUT_TEST_HISTORY_OTLP_LOCAL_PORT}"
+        collector_port="${INPUT_TEST_HISTORY_OTLP_COLLECTOR_PORT}"
+        endpoint="${TEST_HISTORY_OTLP_ENDPOINT}"
+
+        require_single_line "test-history-collector-namespace" "$namespace"
+        require_single_line "test-history-collector-service" "$service"
+        require_port "test-history-otlp-local-port" "$local_port"
+        require_port "test-history-otlp-collector-port" "$collector_port"
+        require_single_line "test-history-otlp-endpoint" "$endpoint"
+
+        if [[ ! "$namespace" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::warning::test-history-collector-namespace contains unsupported characters; test history publishing will fall back to spool only"
+          exit 0
+        fi
+        if [[ ! "$service" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::warning::test-history-collector-service contains unsupported characters; test history publishing will fall back to spool only"
+          exit 0
+        fi
+        if ! command -v kubectl >/dev/null 2>&1; then
+          echo "::warning::kubectl is not installed; test history publishing will fall back to spool only"
+          exit 0
+        fi
+
+        log_path="${RUNNER_TEMP}/test-history-otlp-port-forward.log"
+        pid_path="${RUNNER_TEMP}/test-history-otlp-port-forward.pid"
+        echo "Opening OTLP collector port-forward to ${namespace}/svc/${service} on 127.0.0.1:${local_port}"
+        nohup kubectl port-forward \
+          -n "$namespace" \
+          --address 127.0.0.1 \
+          "svc/${service}" \
+          "${local_port}:${collector_port}" \
+          > "$log_path" 2>&1 &
+        port_forward_pid="$!"
+        echo "$port_forward_pid" > "$pid_path"
+
+        for attempt in {1..20}; do
+          if ! kill -0 "$port_forward_pid" 2>/dev/null; then
+            echo "::warning::test history OTLP port-forward exited before the collector became reachable"
+            cat "$log_path" || true
+            exit 0
+          fi
+          status="$(curl --silent --output /dev/null --write-out "%{http_code}" --max-time 2 "$endpoint" || true)"
+          if [[ "$status" != "000" ]]; then
+            echo "Test history OTLP collector tunnel is reachable on attempt ${attempt}"
+            exit 0
+          fi
+          echo "Waiting for test history OTLP collector tunnel on 127.0.0.1:${local_port}, attempt ${attempt}/20"
+          sleep 1
+        done
+
+        echo "::warning::test history OTLP collector tunnel did not become reachable; reporter will still write the NDJSON spool"
+        cat "$log_path" || true
+
     - name: Generate Test Results Report
       id: report
       shell: bash
@@ -701,6 +1027,19 @@ runs:
         INPUT_TITLE: ${{ inputs.title }}
         INPUT_WORKFLOW_URL: ${{ inputs.workflow-url }}
         INPUT_REPORT_URL: ${{ inputs.report-url }}
+        INPUT_PUBLISH_TEST_HISTORY: ${{ steps.test-history-resolve.outputs.enabled }}
+        INPUT_TEST_HISTORY_PUBLISH_MODE: ${{ steps.test-history-resolve.outputs.mode }}
+        INPUT_TEST_HISTORY_OTLP_ENDPOINT: ${{ steps.test-history-resolve.outputs.otlp-endpoint }}
+        INPUT_TEST_HISTORY_API_URL: ${{ inputs.test-history-api-url }}
+        INPUT_TEST_HISTORY_TOKEN: ${{ inputs.test-history-token }}
+        TEST_HISTORY_API_URL: ${{ env.TEST_HISTORY_API_URL }}
+        TEST_HISTORY_TOKEN: ${{ env.TEST_HISTORY_TOKEN }}
+        TEST_HISTORY_OTLP_ENDPOINT: ${{ env.TEST_HISTORY_OTLP_ENDPOINT }}
+        INPUT_TEST_HISTORY_SUITE: ${{ inputs.test-history-suite }}
+        INPUT_TEST_HISTORY_FRAMEWORK: ${{ inputs.test-history-framework }}
+        INPUT_TEST_HISTORY_ENV: ${{ inputs.test-history-env }}
+        INPUT_TEST_HISTORY_OUTPUT_PATH_RAW: ${{ inputs.test-history-output-path }}
+        INPUT_TEST_HISTORY_ARTIFACT_URL: ${{ inputs.test-history-artifact-url }}
         INPUT_MAX_FAILURES: ${{ inputs.max-failures }}
         INPUT_MAX_SKIPS: ${{ inputs.max-skips }}
         INPUT_INCLUDE_SKIPS: ${{ inputs.include-skips }}
@@ -755,6 +1094,10 @@ runs:
 
         mask_value "slack-webhook-url" "${INPUT_SLACK_WEBHOOK_URL:-}"
         mask_value "claude-token" "${INPUT_CLAUDE_TOKEN:-}"
+        require_single_line "test-history-publish-mode" "${INPUT_TEST_HISTORY_PUBLISH_MODE:-}"
+        require_single_line "test-history-api-url" "${INPUT_TEST_HISTORY_API_URL:-${TEST_HISTORY_API_URL:-}}"
+        require_single_line "test-history-otlp-endpoint" "${INPUT_TEST_HISTORY_OTLP_ENDPOINT:-${TEST_HISTORY_OTLP_ENDPOINT:-}}"
+        mask_value "test-history-token" "${INPUT_TEST_HISTORY_TOKEN:-${TEST_HISTORY_TOKEN:-}}"
         if [[ -z "${INPUT_GRAFANA_MCP_ENDPOINT:-}" && -n "${GRAFANA_MCP_ENDPOINT:-}" ]]; then
           export INPUT_GRAFANA_MCP_ENDPOINT="${GRAFANA_MCP_ENDPOINT}"
         fi
@@ -774,11 +1117,42 @@ runs:
           PREVIOUS_RESULTS_PATH="$WORKSPACE_DIR/$PREVIOUS_RESULTS_PATH"
         fi
 
+        TEST_HISTORY_OUTPUT_PATH="${INPUT_TEST_HISTORY_OUTPUT_PATH_RAW}"
+        require_single_line "test-history-output-path" "$TEST_HISTORY_OUTPUT_PATH"
+        if [[ -n "$TEST_HISTORY_OUTPUT_PATH" && ! "$TEST_HISTORY_OUTPUT_PATH" = /* ]]; then
+          TEST_HISTORY_OUTPUT_PATH="$WORKSPACE_DIR/$TEST_HISTORY_OUTPUT_PATH"
+        fi
+
         export INPUT_TEST_RESULTS_PATH="$TEST_RESULTS_PATH"
         export INPUT_PREVIOUS_RESULTS_PATH="$PREVIOUS_RESULTS_PATH"
+        export INPUT_TEST_HISTORY_OUTPUT_PATH="$TEST_HISTORY_OUTPUT_PATH"
 
         cd "${ACTION_PATH}"
         go run .
+
+    - name: Upload test history retry spool
+      id: test-history-upload-spool
+      if: ${{ always() && steps.report.outputs.test-history-enabled == 'true' && steps.report.outputs.test-history-events != '0' && steps.report.outputs.test-history-spool-path != '' && (steps.test-history-resolve.outputs.upload-spool == 'always' || (steps.test-history-resolve.outputs.upload-spool == 'on-failure' && steps.report.outputs.test-history-shipping-status == 'failed')) }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.test-history-spool-artifact-name }}
+        path: ${{ steps.report.outputs.test-history-spool-path }}
+        if-no-files-found: warn
+        include-hidden-files: true
+        retention-days: 14
+
+    - name: Dump test history OTLP port-forward logs
+      if: ${{ always() && steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "=== test history OTLP port-forward log ==="
+        cat "${RUNNER_TEMP}/test-history-otlp-port-forward.log" 2>/dev/null || true
+
+        if [[ -f "${RUNNER_TEMP}/test-history-otlp-port-forward.pid" ]]; then
+          kill "$(cat "${RUNNER_TEMP}/test-history-otlp-port-forward.pid")" 2>/dev/null || true
+        fi
 
     - name: Dump Grafana MCP logs
       if: ${{ always() && inputs.enable-grafana-log-enrichment == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.grafana-url != '' || steps.grafana-resolve.outputs.grafana-app != '') }}
