@@ -97,7 +97,7 @@ flowchart TD
   T --> U[End action]
 ```
 
-Grafana enrichment is fail-open from the report perspective. If Claude decides none of the failures need backend logs, the reporter skips Grafana entirely. If the MCP endpoint, datasource discovery, query planning, or Loki query fails, the action logs a warning and continues with the normal test report unless a lower-level workflow step fails before the reporter runs.
+Grafana enrichment is fail-open from the report perspective. If Claude decides none of the failures need backend logs, the reporter skips Grafana entirely. If Teleport tunnel setup, MCP startup, datasource discovery, query planning, or Loki query fails, the action logs a warning and continues with the normal test report and artifact-only Claude analysis.
 
 ## Business Logic Contract
 
@@ -158,7 +158,7 @@ If any gate fails, the action continues without Grafana log context. Non-backend
 
 - Slack sending is fail-open unless `fail-on-slack-error` is true.
 - AI failure analysis errors are warnings, not action failures.
-- Grafana planning, MCP startup, datasource discovery, and Loki query errors are warnings from the report perspective.
+- Grafana planning, Teleport tunnel setup, MCP startup, datasource discovery, and Loki query errors are warnings from the report perspective.
 - Required input validation and current result parsing errors are real action errors.
 - Secrets such as Slack webhooks, Claude tokens, and Grafana service account tokens must be masked before shelling out.
 - Locally started `mcp-grafana` must use only datasource/Loki tools with writes disabled.
@@ -192,6 +192,7 @@ Grafana decision logic:
 | AI analysis or `claude-token` is unavailable | Log a warning and continue without Grafana log context |
 | Claude returns no planned queries | Continue without Grafana log context |
 | Claude query planning fails | Log a warning and continue without logs |
+| Teleport Grafana tunnel setup fails | Log a warning and continue without Grafana log context |
 | Planned backend queries exist but no `grafana-mcp-endpoint` is available | Log a warning and continue without logs |
 | Planned backend queries are ready | Execute `query_loki_logs` calls in parallel, bounded by `grafana-log-concurrency` |
 | Loki returns matching lines | Add a compact Grafana observation to the GitHub summary and pass summarized Loki evidence into final Claude analysis |

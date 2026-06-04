@@ -457,6 +457,52 @@ var _ = Describe("Test Results Report", func() {
 				Expect(outputs).To(HaveKeyWithValue("slack-sent", "false"))
 			})
 
+			It("should still run AI analysis when planned Grafana queries have no MCP endpoint", func() {
+				planPath := filepath.Join(dir, "grafana-plan.json")
+				Expect(writeGrafanaLogQueryPlan(planPath, []GrafanaLogPlannedQuery{{
+					FailureRef:    "f1",
+					TestName:      "creates instance",
+					BackendArea:   "compute",
+					ExpectedError: "Expected button to be visible",
+					SearchTerms:   []string{"instance"},
+					LogQL:         `{namespace=~".+"} |= "instance"`,
+					Reason:        "Backend-shaped failure selected before MCP setup failed.",
+					Confidence:    "medium",
+				}})).To(Succeed())
+
+				var aiCalled atomic.Bool
+				previousRunner := runAIAnalysis
+				runAIAnalysis = func(_ context.Context, receivedConfig Config, analysis Analysis) (*AIAnalysis, error) {
+					aiCalled.Store(true)
+					Expect(receivedConfig.EnableAIAnalysis).To(BeTrue())
+					Expect(receivedConfig.EnableGrafanaLogs).To(BeTrue())
+					Expect(analysis.Failures).To(HaveLen(1))
+					Expect(analysis.GrafanaLogs).To(BeNil())
+					return &AIAnalysis{
+						StepSummary:  "## Test Failure Analysis\n\nAI fallback used test artifacts without Grafana logs.",
+						SlackSummary: "- *Compute* (unknown): AI fallback used test artifacts without Grafana logs.",
+					}, nil
+				}
+				DeferCleanup(func() {
+					runAIAnalysis = previousRunner
+				})
+
+				config.EnableAIAnalysis = true
+				config.ClaudeToken = "test-claude-token"
+				config.EnableGrafanaLogs = true
+				config.GrafanaQueryPlanPath = planPath
+				config.GrafanaMCPEndpoint = ""
+
+				err := run(context.Background(), config)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(aiCalled.Load()).To(BeTrue())
+				summary := readTestFile(summaryPath)
+				Expect(summary).To(ContainSubstring("AI fallback used test artifacts without Grafana logs."))
+				Expect(summary).NotTo(ContainSubstring("### Grafana Observations"))
+				Expect(summary).NotTo(ContainSubstring(`{namespace=~".+"}`))
+			})
+
 			It("should continue when previous results cannot be parsed", func() {
 				writeTestFile(previousPath, `not xml`)
 
@@ -664,6 +710,13 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("teleport-actions/application-tunnel@bb7a8fbfb67b85d26013554f10d71dd032c1c764"))
 				Expect(action).To(ContainSubstring("token: ${{ inputs.grafana-teleport-token }}"))
 				Expect(action).To(ContainSubstring("app: ${{ steps.grafana-resolve.outputs.grafana-app }}"))
+				Expect(action).To(ContainSubstring("id: grafana-teleport-setup"))
+				Expect(action).To(ContainSubstring("id: grafana-tunnel"))
+				Expect(action).To(ContainSubstring("continue-on-error: true\n      uses: teleport-actions/setup@a820ebbf1bc1a496efca348ad21042d6e8df73a6"))
+				Expect(action).To(ContainSubstring("continue-on-error: true\n      uses: teleport-actions/application-tunnel@bb7a8fbfb67b85d26013554f10d71dd032c1c764"))
+				Expect(action).To(ContainSubstring("Warn Grafana Teleport setup failed"))
+				Expect(action).To(ContainSubstring("Grafana Teleport tunnel setup failed; continuing without Grafana log enrichment so Claude can still analyze the test artifacts"))
+				Expect(action).To(ContainSubstring("steps.grafana-teleport-setup.outcome != 'failure' && steps.grafana-tunnel.outcome != 'failure'"))
 				Expect(action).To(ContainSubstring("mcp-grafana"))
 				Expect(action).To(ContainSubstring(`write_output "grafana-mcp-endpoint" "http://127.0.0.1:${INPUT_GRAFANA_MCP_PORT}/mcp"`))
 				Expect(action).To(ContainSubstring(`write_output "grafana-report-url" "${report_grafana_url}"`))
