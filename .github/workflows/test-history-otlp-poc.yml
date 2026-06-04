@@ -1,0 +1,372 @@
+name: Test History OTLP POC
+
+on:
+  workflow_dispatch:
+    inputs:
+      collector-kube-cluster:
+        description: Teleport Kubernetes cluster containing the OTLP collector.
+        required: false
+        default: observability-prod-glo1
+      collector-namespace:
+        description: Kubernetes namespace containing the OTLP collector service.
+        required: false
+        default: telemetry
+      collector-service:
+        description: Kubernetes service name for the OTLP collector.
+        required: false
+        default: agent-collector
+      grafana-app:
+        description: Teleport app name for the Grafana tunnel.
+        required: false
+        default: nks-stg-europe-west2-grafana
+      loki-datasource-uid:
+        description: Grafana Loki datasource UID to query through MCP.
+        required: false
+        default: product-loki
+      query-timeout-seconds:
+        description: Maximum time to wait for the OTLP log to appear in Loki.
+        required: false
+        default: '180'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  e2e:
+    name: Publish JSON report and verify in Loki
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GRAFANA_MCP_PORT: '8000'
+      GRAFANA_TUNNEL_PORT: '3000'
+      POC_MARKER: test-history-otlp-poc-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create POC Playwright JSON report
+        id: poc-report
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .tmp/test-history-otlp-poc
+          started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          cat > .tmp/test-history-otlp-poc/playwright-report.json <<JSON
+          {
+            "config": {
+              "rootDir": "quality-tooling-poc"
+            },
+            "stats": {
+              "startTime": "${started_at}",
+              "duration": 1234,
+              "expected": 1,
+              "skipped": 0,
+              "unexpected": 0,
+              "flaky": 0
+            },
+            "suites": [
+              {
+                "title": "test-history-otlp-poc.spec.ts",
+                "file": "test-history-otlp-poc.spec.ts",
+                "specs": [
+                  {
+                    "title": "${POC_MARKER}",
+                    "file": "test-history-otlp-poc.spec.ts",
+                    "line": 1,
+                    "tests": [
+                      {
+                        "projectName": "poc",
+                        "status": "expected",
+                        "results": [
+                          {
+                            "status": "passed",
+                            "duration": 1234,
+                            "startTime": "${started_at}"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          JSON
+
+          echo "started-at=${started_at}" >> "$GITHUB_OUTPUT"
+          echo "marker=${POC_MARKER}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish JSON report to OTLP agent collector
+        id: report
+        uses: nscaledev/quality-tooling/.github/actions/test-results-report@c2702819e82537d8f416b70a48dd695c1bfb10bf
+        with:
+          format: playwright-json
+          test-results-path: .tmp/test-history-otlp-poc/playwright-report.json
+          title: Test History OTLP POC
+          write-step-summary: true
+          publish-test-history: 'true'
+          test-history-publish-mode: otlp
+          test-history-kube-cluster: ${{ inputs.collector-kube-cluster }}
+          test-history-collector-namespace: ${{ inputs.collector-namespace }}
+          test-history-collector-service: ${{ inputs.collector-service }}
+          test-history-suite: ${{ env.POC_MARKER }}
+          test-history-framework: playwright
+          test-history-env: poc
+          test-history-output-path: .tmp/test-history-otlp-poc/events.ndjson
+          test-history-upload-spool: always
+          test-history-spool-artifact-name: test-history-otlp-poc-events
+          test-history-artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Assert OTLP publish succeeded
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "test-history-shipping-status=${{ steps.report.outputs.test-history-shipping-status }}"
+          echo "test-history-events=${{ steps.report.outputs.test-history-events }}"
+          if [[ "${{ steps.report.outputs.test-history-shipping-status }}" != "posted" ]]; then
+            echo "::error::test history OTLP publish did not succeed: ${{ steps.report.outputs.test-history-failure-reason }}"
+            exit 1
+          fi
+
+      - name: Install Teleport clients for Grafana tunnel
+        uses: teleport-actions/setup@a820ebbf1bc1a496efca348ad21042d6e8df73a6
+        with:
+          version: auto
+          proxy: nscale.teleport.sh:443
+
+      - name: Open Grafana app tunnel
+        uses: teleport-actions/application-tunnel@bb7a8fbfb67b85d26013554f10d71dd032c1c764
+        with:
+          proxy: nscale.teleport.sh:443
+          token: github-grafana-access
+          app: ${{ inputs.grafana-app }}
+          listen: tcp://127.0.0.1:${{ env.GRAFANA_TUNNEL_PORT }}
+          timeout-ms: '60000'
+
+      - name: Verify Grafana tunnel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${GRAFANA_TUNNEL_PORT}/api/health" > "${RUNNER_TEMP}/grafana-health.json"; then
+              echo "Grafana tunnel is reachable on attempt ${attempt}"
+              cat "${RUNNER_TEMP}/grafana-health.json"
+              exit 0
+            fi
+            echo "Waiting for Grafana tunnel on 127.0.0.1:${GRAFANA_TUNNEL_PORT}, attempt ${attempt}/30"
+            sleep 1
+          done
+
+          echo "::error::Grafana tunnel did not become reachable"
+          exit 1
+
+      - name: Install Grafana MCP server
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GRAFANA_MCP_VERSION: v0.7.10
+        run: |
+          set -euo pipefail
+
+          case "$(uname -m)" in
+            x86_64|amd64) artifact="mcp-grafana_Linux_x86_64.tar.gz" ;;
+            aarch64|arm64) artifact="mcp-grafana_Linux_arm64.tar.gz" ;;
+            *) echo "::error::Unsupported architecture for mcp-grafana: $(uname -m)"; exit 1 ;;
+          esac
+
+          gh release download -R grafana/mcp-grafana "$GRAFANA_MCP_VERSION" \
+            --pattern "$artifact" \
+            --output "${RUNNER_TEMP}/mcp-grafana.tar.gz"
+          gh release download -R grafana/mcp-grafana "$GRAFANA_MCP_VERSION" \
+            --pattern "mcp-grafana_${GRAFANA_MCP_VERSION#v}_checksums.txt" \
+            --output "${RUNNER_TEMP}/mcp-grafana-checksums.txt"
+          expected_checksum="$(awk -v artifact="$artifact" '$2 == artifact {print $1}' "${RUNNER_TEMP}/mcp-grafana-checksums.txt")"
+          actual_checksum="$(sha256sum "${RUNNER_TEMP}/mcp-grafana.tar.gz" | awk '{print $1}')"
+          if [[ -z "$expected_checksum" || "$actual_checksum" != "$expected_checksum" ]]; then
+            echo "::error::checksum mismatch for ${artifact}"
+            exit 1
+          fi
+
+          tar -xzf "${RUNNER_TEMP}/mcp-grafana.tar.gz" -C "${RUNNER_TEMP}"
+          sudo mv "${RUNNER_TEMP}/mcp-grafana" /usr/local/bin/mcp-grafana
+          mcp-grafana --help >/dev/null
+
+      - name: Start Grafana MCP server
+        shell: bash
+        env:
+          GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN }}
+          GRAFANA_ORG_ID: '1'
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GRAFANA_SERVICE_ACCOUNT_TOKEN}" ]]; then
+            echo "::error::GRAFANA_SERVICE_ACCOUNT_TOKEN secret is required for this POC"
+            exit 1
+          fi
+          echo "::add-mask::${GRAFANA_SERVICE_ACCOUNT_TOKEN}"
+
+          GRAFANA_URL="http://127.0.0.1:${GRAFANA_TUNNEL_PORT}" \
+          GRAFANA_SERVICE_ACCOUNT_TOKEN="${GRAFANA_SERVICE_ACCOUNT_TOKEN}" \
+          GRAFANA_ORG_ID="${GRAFANA_ORG_ID}" \
+          nohup mcp-grafana \
+            -t streamable-http \
+            --address "127.0.0.1:${GRAFANA_MCP_PORT}" \
+            --enabled-tools datasource,loki \
+            --disable-write \
+            > "${RUNNER_TEMP}/mcp-grafana.log" 2>&1 &
+          echo "$!" > "${RUNNER_TEMP}/mcp-grafana.pid"
+
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${GRAFANA_MCP_PORT}/healthz" >/dev/null; then
+              echo "mcp-grafana is reachable on attempt ${attempt}"
+              exit 0
+            fi
+            echo "Waiting for mcp-grafana on 127.0.0.1:${GRAFANA_MCP_PORT}, attempt ${attempt}/20"
+            tail -n 40 "${RUNNER_TEMP}/mcp-grafana.log" || true
+            sleep 1
+          done
+
+          echo "::error::mcp-grafana did not become reachable"
+          cat "${RUNNER_TEMP}/mcp-grafana.log" || true
+          exit 1
+
+      - name: Search Loki for published POC event through Grafana MCP
+        shell: bash
+        env:
+          LOKI_DATASOURCE_UID: ${{ inputs.loki-datasource-uid }}
+          QUERY_TIMEOUT_SECONDS: ${{ inputs.query-timeout-seconds }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import datetime as dt
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          endpoint = f"http://127.0.0.1:{os.environ['GRAFANA_MCP_PORT']}/mcp"
+          datasource_uid = os.environ["LOKI_DATASOURCE_UID"]
+          marker = os.environ["POC_MARKER"]
+          timeout_seconds = int(os.environ["QUERY_TIMEOUT_SECONDS"])
+          protocol_version = "2024-11-05"
+          session_id = None
+          next_id = 0
+
+          def decode_response(content_type, body):
+            payload = body.decode("utf-8").strip()
+            if "text/event-stream" in content_type or payload.startswith("event:") or payload.startswith("data:"):
+              for event in payload.replace("\r\n", "\n").split("\n\n"):
+                data = "\n".join(
+                  line.removeprefix("data:").strip()
+                  for line in event.split("\n")
+                  if line.startswith("data:")
+                ).strip()
+                if data.startswith("{"):
+                  payload = data
+                  break
+            return json.loads(payload)
+
+          def post(method, params=None, expect_response=True):
+            nonlocal_vars = globals()
+            nonlocal_vars["next_id"] += 1
+            payload = {"jsonrpc": "2.0", "method": method}
+            if expect_response:
+              payload["id"] = nonlocal_vars["next_id"]
+            if params is not None:
+              payload["params"] = params
+            data = json.dumps(payload).encode("utf-8")
+            headers = {
+              "Content-Type": "application/json",
+              "Accept": "application/json, text/event-stream",
+              "MCP-Protocol-Version": protocol_version,
+            }
+            if nonlocal_vars["session_id"]:
+              headers["Mcp-Session-Id"] = nonlocal_vars["session_id"]
+            request = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
+            with urllib.request.urlopen(request, timeout=30) as response:
+              if response.headers.get("Mcp-Session-Id"):
+                nonlocal_vars["session_id"] = response.headers["Mcp-Session-Id"]
+              body = response.read()
+              if not body.strip():
+                return None
+              message = decode_response(response.headers.get("Content-Type", ""), body)
+            if message.get("error"):
+              raise RuntimeError(f"MCP {method} failed: {message['error']}")
+            return message.get("result")
+
+          def call_tool(name, arguments):
+            result = post("tools/call", {"name": name, "arguments": arguments})
+            if result.get("isError"):
+              raise RuntimeError(f"MCP tool {name} returned error: {result}")
+            text = "\n".join(
+              item.get("text", "")
+              for item in result.get("content", [])
+              if item.get("type") == "text"
+            ).strip()
+            if text.startswith("```"):
+              text = "\n".join(text.splitlines()[1:-1]).strip()
+            return json.loads(text) if text else result
+
+          post("initialize", {
+            "protocolVersion": protocol_version,
+            "capabilities": {},
+            "clientInfo": {"name": "quality-tooling-test-history-otlp-poc", "version": "0.1.0"},
+          })
+          post("notifications/initialized", {}, expect_response=False)
+
+          datasources = call_tool("list_datasources", {"type": "loki", "limit": 100})
+          datasource_items = datasources.get("datasources", []) if isinstance(datasources, dict) else datasources
+          available_uids = [item.get("uid") for item in datasource_items]
+          print(f"Available Loki datasource UIDs: {', '.join(available_uids)}")
+          if datasource_uid not in available_uids:
+            raise RuntimeError(f"Configured Loki datasource UID {datasource_uid!r} not found")
+
+          end = dt.datetime.now(dt.timezone.utc)
+          start = end - dt.timedelta(minutes=30)
+          logql = f'{{service_name="test-results-report"}} |= "{marker}"'
+          deadline = time.time() + timeout_seconds
+          attempt = 0
+          while True:
+            attempt += 1
+            result = call_tool("query_loki_logs", {
+              "datasourceUid": datasource_uid,
+              "logql": logql,
+              "startRfc3339": start.isoformat().replace("+00:00", "Z"),
+              "endRfc3339": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+              "limit": 10,
+              "direction": "backward",
+            })
+            entries = result.get("data", []) if isinstance(result, dict) else result
+            print(f"Loki search attempt {attempt}: lines={len(entries)}")
+            if entries:
+              print("Found POC test history event in Loki.")
+              first = entries[0]
+              print("First match timestamp:", first.get("timestamp", "<unknown>"))
+              print("First match labels:", json.dumps(first.get("labels", {}), sort_keys=True))
+              sys.exit(0)
+            if time.time() >= deadline:
+              break
+            time.sleep(15)
+
+          raise RuntimeError(f"No Loki rows found for marker {marker!r} with query {logql!r}")
+          PY
+
+      - name: Dump Grafana MCP logs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== mcp-grafana log ==="
+          cat "${RUNNER_TEMP}/mcp-grafana.log" 2>/dev/null || true
+          if [[ -f "${RUNNER_TEMP}/mcp-grafana.pid" ]]; then
+            kill "$(cat "${RUNNER_TEMP}/mcp-grafana.pid")" 2>/dev/null || true
+          fi
