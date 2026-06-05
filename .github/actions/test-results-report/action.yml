@@ -242,6 +242,30 @@ inputs:
     description: 'Maximum failed tests to query with AI-planned queries.'
     required: false
     default: '6'
+  enable-unikorn-cr-enrichment:
+    description: 'Fetch compact Unikorn Kubernetes CR state for backend-looking failures. Claude first plans read-only CR lookups from parsed failures, then the fetched CR status is included in the final AI report.'
+    required: false
+    default: 'false'
+  unikorn-cr-teleport-proxy:
+    description: 'Teleport proxy used for the Unikorn CR reader bot.'
+    required: false
+    default: 'nscale.teleport.sh:443'
+  unikorn-cr-teleport-token:
+    description: 'Teleport GitHub join token used for read-only Unikorn CR lookups.'
+    required: false
+    default: 'github-unikorn-cr-reader'
+  unikorn-cr-kube-cluster:
+    description: 'Teleport Kubernetes cluster containing Unikorn CRs. When omitted, the action infers a default from environment: dev -> nks-dev-glo1, uat/stage/staging -> nks-stg-europe-west2.'
+    required: false
+    default: ''
+  unikorn-cr-max-failures:
+    description: 'Maximum failed tests to inspect with AI-planned Kubernetes CR lookups.'
+    required: false
+    default: '4'
+  unikorn-cr-timeout-seconds:
+    description: 'Per-query timeout for read-only kubectl CR lookups.'
+    required: false
+    default: '30'
 
 outputs:
   total:
@@ -666,6 +690,183 @@ runs:
         cd "${ACTION_PATH}"
         go run . --grafana-plan-only
 
+    - name: Resolve Unikorn CR inputs
+      id: unikorn-cr-resolve
+      if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' }}
+      shell: bash
+      env:
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_UNIKORN_CR_KUBE_CLUSTER: ${{ inputs.unikorn-cr-kube-cluster }}
+        INPUT_UNIKORN_CR_TELEPORT_TOKEN: ${{ inputs.unikorn-cr-teleport-token }}
+      run: |
+        set -euo pipefail
+
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        write_output() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+        }
+
+        kube_cluster="${INPUT_UNIKORN_CR_KUBE_CLUSTER:-}"
+        if [[ -z "$kube_cluster" ]]; then
+          case "${INPUT_ENVIRONMENT,,}" in
+            dev|development)
+              kube_cluster="nks-dev-glo1"
+              ;;
+            uat|stage|staging)
+              kube_cluster="nks-stg-europe-west2"
+              ;;
+          esac
+        fi
+        if [[ -n "$kube_cluster" && ! "$kube_cluster" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::unikorn-cr-kube-cluster contains unsupported characters"
+          exit 1
+        fi
+        write_output "kube-cluster" "$kube_cluster"
+
+        require_single_line "unikorn-cr-teleport-token" "${INPUT_UNIKORN_CR_TELEPORT_TOKEN:-}"
+        if [[ -n "${INPUT_UNIKORN_CR_TELEPORT_TOKEN:-}" ]]; then
+          write_output "token-configured" "true"
+        else
+          write_output "token-configured" "false"
+        fi
+
+    - name: Unikorn CR enrichment preflight
+      if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' }}
+      shell: bash
+      env:
+        INPUT_UNIKORN_CR_KUBE_CLUSTER: ${{ steps.unikorn-cr-resolve.outputs.kube-cluster }}
+        INPUT_UNIKORN_CR_TELEPORT_TOKEN: ${{ inputs.unikorn-cr-teleport-token }}
+        INPUT_UNIKORN_CR_MAX_FAILURES: ${{ inputs.unikorn-cr-max-failures }}
+        INPUT_UNIKORN_CR_TIMEOUT_SECONDS: ${{ inputs.unikorn-cr-timeout-seconds }}
+      run: |
+        set -euo pipefail
+
+        echo "::group::Unikorn CR enrichment preflight"
+        echo "enabled: true"
+        echo "Teleport bot token name: ${INPUT_UNIKORN_CR_TELEPORT_TOKEN:-<empty>}"
+        echo "Kubernetes cluster: ${INPUT_UNIKORN_CR_KUBE_CLUSTER:-<empty>}"
+        echo "max failures: ${INPUT_UNIKORN_CR_MAX_FAILURES}; per-query timeout seconds: ${INPUT_UNIKORN_CR_TIMEOUT_SECONDS}"
+        echo "kubectl auth is deferred until Claude selects at least one backend-related CR lookup."
+        echo "::endgroup::"
+
+    - name: Plan Unikorn CR queries
+      id: unikorn-cr-plan
+      if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' }}
+      shell: bash
+      env:
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_TEST_RESULTS_PATH_RAW: ${{ inputs.test-results-path }}
+        INPUT_PREVIOUS_RESULTS_PATH_RAW: ${{ inputs.previous-results-path }}
+        INPUT_PREVIOUS_RESULTS_FORMAT: ${{ inputs.previous-results-format }}
+        INPUT_PREVIOUS_RESULTS_SOURCE: ${{ inputs.previous-results-source }}
+        INPUT_COMPARE_WITH_PREVIOUS: ${{ inputs.compare-with-previous }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_ENABLE_AI_ANALYSIS: ${{ inputs.enable-ai-analysis }}
+        INPUT_CLAUDE_TOKEN: ${{ inputs.claude-token }}
+        INPUT_ENABLE_UNIKORN_CR_ENRICHMENT: ${{ inputs.enable-unikorn-cr-enrichment }}
+        INPUT_UNIKORN_CR_MAX_FAILURES: ${{ inputs.unikorn-cr-max-failures }}
+        INPUT_UNIKORN_CR_PLAN_PATH: ${{ runner.temp }}/test-results-report-unikorn-cr-plan.json
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        workflow_escape() {
+          local value="$1"
+          value="${value//%/%25}"
+          value="${value//$'\r'/%0D}"
+          value="${value//$'\n'/%0A}"
+          printf '%s' "$value"
+        }
+
+        mask_value() {
+          local name="$1"
+          local value="$2"
+          if [[ -z "$value" ]]; then
+            return 0
+          fi
+          require_single_line "$name" "$value"
+          echo "::add-mask::$(workflow_escape "$value")"
+        }
+
+        mask_value "claude-token" "${INPUT_CLAUDE_TOKEN:-}"
+
+        WORKSPACE_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+
+        TEST_RESULTS_PATH="${INPUT_TEST_RESULTS_PATH_RAW}"
+        if [[ ! "$TEST_RESULTS_PATH" = /* ]]; then
+          TEST_RESULTS_PATH="$WORKSPACE_DIR/$TEST_RESULTS_PATH"
+        fi
+
+        PREVIOUS_RESULTS_PATH="${INPUT_PREVIOUS_RESULTS_PATH_RAW}"
+        if [[ -n "$PREVIOUS_RESULTS_PATH" && ! "$PREVIOUS_RESULTS_PATH" = /* ]]; then
+          PREVIOUS_RESULTS_PATH="$WORKSPACE_DIR/$PREVIOUS_RESULTS_PATH"
+        fi
+
+        export INPUT_TEST_RESULTS_PATH="$TEST_RESULTS_PATH"
+        export INPUT_PREVIOUS_RESULTS_PATH="$PREVIOUS_RESULTS_PATH"
+
+        cd "${ACTION_PATH}"
+        go run . --unikorn-cr-plan-only
+
+    - name: Install kubectl for Unikorn CR reader
+      if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' && steps.unikorn-cr-plan.outputs.needs-kube == 'true' && steps.unikorn-cr-resolve.outputs.token-configured == 'true' && steps.unikorn-cr-resolve.outputs.kube-cluster != '' }}
+      continue-on-error: true
+      uses: azure/setup-kubectl@v4
+
+    - name: Install Teleport clients for Unikorn CR reader
+      if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' && steps.unikorn-cr-plan.outputs.needs-kube == 'true' && steps.unikorn-cr-resolve.outputs.token-configured == 'true' && steps.unikorn-cr-resolve.outputs.kube-cluster != '' }}
+      continue-on-error: true
+      uses: teleport-actions/setup@a820ebbf1bc1a496efca348ad21042d6e8df73a6
+      with:
+        version: auto
+        proxy: ${{ inputs.unikorn-cr-teleport-proxy }}
+
+    - name: Authenticate Unikorn CR reader
+      if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' && steps.unikorn-cr-plan.outputs.needs-kube == 'true' && steps.unikorn-cr-resolve.outputs.token-configured == 'true' && steps.unikorn-cr-resolve.outputs.kube-cluster != '' }}
+      continue-on-error: true
+      uses: teleport-actions/auth-k8s@v2
+      with:
+        proxy: ${{ inputs.unikorn-cr-teleport-proxy }}
+        token: ${{ inputs.unikorn-cr-teleport-token }}
+        kubernetes-cluster: ${{ steps.unikorn-cr-resolve.outputs.kube-cluster }}
+
+    - name: Collect Unikorn CR context
+      id: unikorn-cr-collect
+      if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' && steps.unikorn-cr-plan.outputs.needs-kube == 'true' && steps.unikorn-cr-resolve.outputs.token-configured == 'true' && steps.unikorn-cr-resolve.outputs.kube-cluster != '' }}
+      shell: bash
+      env:
+        INPUT_ENABLE_UNIKORN_CR_ENRICHMENT: ${{ inputs.enable-unikorn-cr-enrichment }}
+        INPUT_UNIKORN_CR_PLAN_PATH: ${{ steps.unikorn-cr-plan.outputs.plan-path }}
+        INPUT_UNIKORN_CR_CONTEXT_PATH: ${{ runner.temp }}/test-results-report-unikorn-cr-context.json
+        INPUT_UNIKORN_CR_MAX_FAILURES: ${{ inputs.unikorn-cr-max-failures }}
+        INPUT_UNIKORN_CR_TIMEOUT_SECONDS: ${{ inputs.unikorn-cr-timeout-seconds }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        cd "${ACTION_PATH}"
+        go run . --unikorn-cr-collect-only
+
     - name: Install Teleport clients for Grafana tunnel
       id: grafana-teleport-setup
       if: ${{ inputs.enable-grafana-log-enrichment == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.grafana-url == '' && steps.grafana-resolve.outputs.grafana-app != '' }}
@@ -1061,6 +1262,11 @@ runs:
         INPUT_GRAFANA_LOG_CONCURRENCY: ${{ inputs.grafana-log-concurrency }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
         INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ steps.grafana-plan.outputs.plan-path }}
+        INPUT_ENABLE_UNIKORN_CR_ENRICHMENT: ${{ inputs.enable-unikorn-cr-enrichment }}
+        INPUT_UNIKORN_CR_PLAN_PATH: ${{ steps.unikorn-cr-plan.outputs.plan-path }}
+        INPUT_UNIKORN_CR_CONTEXT_PATH: ${{ steps.unikorn-cr-collect.outputs.context-path }}
+        INPUT_UNIKORN_CR_MAX_FAILURES: ${{ inputs.unikorn-cr-max-failures }}
+        INPUT_UNIKORN_CR_TIMEOUT_SECONDS: ${{ inputs.unikorn-cr-timeout-seconds }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail

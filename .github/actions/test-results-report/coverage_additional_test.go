@@ -271,6 +271,11 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 		"INPUT_GRAFANA_LOG_LIMIT":             "25",
 		"INPUT_GRAFANA_LOG_MAX_FAILURES":      "7",
 		"INPUT_GRAFANA_LOG_CONCURRENCY":       "8",
+		"INPUT_ENABLE_UNIKORN_CR_ENRICHMENT":  "true",
+		"INPUT_UNIKORN_CR_PLAN_PATH":          "/tmp/unikorn-cr-plan.json",
+		"INPUT_UNIKORN_CR_CONTEXT_PATH":       "/tmp/unikorn-cr-context.json",
+		"INPUT_UNIKORN_CR_MAX_FAILURES":       "5",
+		"INPUT_UNIKORN_CR_TIMEOUT_SECONDS":    "12",
 	}
 	config := configFromEnv(env)
 
@@ -288,6 +293,9 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 	}
 	if config.ClaudeToken != "env-token" || !config.EnableGrafanaLogs || config.GrafanaURL != "https://grafana.example.com" || config.GrafanaLokiName != "Prod Loki" {
 		t.Fatalf("unexpected Grafana/AI config: %+v", config)
+	}
+	if !config.EnableUnikornCRs || config.UnikornCRPlanPath != "/tmp/unikorn-cr-plan.json" || config.UnikornCRContextPath != "/tmp/unikorn-cr-context.json" || config.UnikornCRMaxFailures != 5 || config.UnikornCRTimeout != 12*time.Second {
+		t.Fatalf("unexpected Unikorn CR config: %+v", config)
 	}
 	if !config.PublishTestHistory || config.TestHistoryPublishMode != "api" || config.TestHistoryAPIURL != "https://history.example" || config.TestHistoryToken != "env-history-token" {
 		t.Fatalf("unexpected test history enable/API config: %+v", config)

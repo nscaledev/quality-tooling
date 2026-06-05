@@ -45,6 +45,11 @@ type Config struct {
 	GrafanaLogMaxFailures   int
 	GrafanaLogConcurrency   int
 	GrafanaQueryPlanPath    string
+	EnableUnikornCRs        bool
+	UnikornCRPlanPath       string
+	UnikornCRContextPath    string
+	UnikornCRMaxFailures    int
+	UnikornCRTimeout        time.Duration
 	PublishTestHistory      bool
 	TestHistoryPublishMode  string
 	TestHistoryAPIURL       string
@@ -134,6 +139,11 @@ func configFromEnv(env map[string]string) Config {
 		GrafanaLogMaxFailures:   parseIntDefault(env["INPUT_GRAFANA_LOG_MAX_FAILURES"], 6),
 		GrafanaLogConcurrency:   parseIntDefault(env["INPUT_GRAFANA_LOG_CONCURRENCY"], 4),
 		GrafanaQueryPlanPath:    env["INPUT_GRAFANA_QUERY_PLAN_PATH"],
+		EnableUnikornCRs:        parseBoolDefault(env["INPUT_ENABLE_UNIKORN_CR_ENRICHMENT"], false),
+		UnikornCRPlanPath:       env["INPUT_UNIKORN_CR_PLAN_PATH"],
+		UnikornCRContextPath:    env["INPUT_UNIKORN_CR_CONTEXT_PATH"],
+		UnikornCRMaxFailures:    parseIntDefault(env["INPUT_UNIKORN_CR_MAX_FAILURES"], 4),
+		UnikornCRTimeout:        time.Duration(parseIntDefault(env["INPUT_UNIKORN_CR_TIMEOUT_SECONDS"], 30)) * time.Second,
 		PublishTestHistory:      publishTestHistory,
 		TestHistoryPublishMode:  testHistoryPublishMode,
 		TestHistoryAPIURL:       testHistoryAPIURL,

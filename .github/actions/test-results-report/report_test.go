@@ -800,6 +800,9 @@ func TestConfigDefaults(t *testing.T) {
 	if config.EnableGrafanaLogs {
 		t.Fatal("grafana log enrichment should default false")
 	}
+	if config.EnableUnikornCRs {
+		t.Fatal("unikorn CR enrichment should default false")
+	}
 	if config.GrafanaOrgID != "1" {
 		t.Fatalf("grafana org ID default = %q", config.GrafanaOrgID)
 	}
@@ -808,6 +811,9 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if config.GrafanaLogLookback != "2h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 6 || config.GrafanaLogConcurrency != 4 {
 		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d concurrency %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures, config.GrafanaLogConcurrency)
+	}
+	if config.UnikornCRMaxFailures != 4 || config.UnikornCRTimeout != 30*time.Second {
+		t.Fatalf("unikorn CR defaults = max failures %d timeout %s", config.UnikornCRMaxFailures, config.UnikornCRTimeout)
 	}
 }
 
@@ -848,10 +854,13 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Use skipped for patterns where all affected tests are skipped",
 		"Use test/false failure only for failed tests",
 		"If Grafana observations are present, use them only as supporting evidence",
+		"If Unikorn/Kubernetes CR observations are present, use them only as supporting evidence",
 		"Keep the report close to the existing production format",
 		"do not add a separate Grafana section",
 		"When a Grafana signal is present, mention the concrete signal",
+		"When a CR signal is present, mention the concrete signal",
 		"Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs",
+		"Do not overstate certainty when CR lookup returned no objects",
 		"If a failed test time range and Grafana query time range are both present",
 		"Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window",
 		"the provisioning error was not present in the returned Grafana lines",
@@ -860,7 +869,9 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
 		"Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason",
 		"For Grafana-backed bullets, explicitly connect the test error",
+		"For CR-backed bullets, explicitly connect the test error",
 		`Do not use vague phrases like "Grafana returned related activity"`,
+		`Do not use vague phrases like "CR state looked related"`,
 		"If Grafana only returned audit/cleanup rows",
 		`Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window`,
 		"Group by suite name when one suite is affected",
@@ -921,6 +932,32 @@ func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
 	}
 }
 
+func TestUnikornCRQueryPlanningPromptRequestsReadOnlyCRJSON(t *testing.T) {
+	t.Parallel()
+
+	prompt := unikornCRQueryPlanningPrompt()
+	for _, expected := range []string{
+		"Return strict JSON only",
+		`"resource"`,
+		`"namespace"`,
+		`"selector"`,
+		`"all_namespaces"`,
+		"Only create CR lookups for failures where Kubernetes custom-resource state could materially improve",
+		"Do not create CR lookups for purely client-side assertions",
+		"Use the exact failure_ref values",
+		"resource must be one kubectl resource identifier",
+		"networks.region.unikorn-cloud.org",
+		"computeinstances.compute.unikorn-cloud.org",
+		"Include either name or selector",
+		"Do not request pods, logs, exec, secrets, configmaps, events, writes, deletes, patches, or mutations",
+		`return {"queries":[]}`,
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("CR planning prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
 func TestRenderGrafanaLogQueryPlanningInputIncludesFailureRefs(t *testing.T) {
 	t.Parallel()
 
@@ -958,6 +995,36 @@ func TestRenderGrafanaLogQueryPlanningInputIncludesFailureRefs(t *testing.T) {
 	}
 }
 
+func TestRenderUnikornCRQueryPlanningInputIncludesFailureRefs(t *testing.T) {
+	t.Parallel()
+
+	input := renderUnikornCRQueryPlanningInput(Analysis{
+		Current: TestRun{Name: "Region API"},
+		Stats:   Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			ID:      "network-create",
+			Name:    "creates network",
+			Suite:   "Network Management",
+			File:    "network_test.go",
+			Message: "Network cc68d1a4-c005-4b61-a24e-b7c64cb451d0 reached Error: vlan ids exhausted",
+		}},
+	}, Config{
+		Environment:          "uat",
+		UnikornCRMaxFailures: 1,
+	})
+
+	for _, expected := range []string{
+		"Failure ref: f1",
+		"Test ID: network-create",
+		"Network cc68d1a4-c005-4b61-a24e-b7c64cb451d0 reached Error",
+		"Maximum CR lookups allowed: 1",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("CR planning input missing %q:\n%s", expected, input)
+		}
+	}
+}
+
 func TestParseGrafanaLogQueryPlan(t *testing.T) {
 	t.Parallel()
 
@@ -977,6 +1044,28 @@ func TestParseGrafanaLogQueryPlan(t *testing.T) {
 		!strings.Contains(queries[0].LogQL, "claim-123") ||
 		queries[0].Reason != "storage backend error" {
 		t.Fatalf("unexpected query: %+v", queries[0])
+	}
+}
+
+func TestParseUnikornCRQueryPlan(t *testing.T) {
+	t.Parallel()
+
+	queries, err := parseUnikornCRQueryPlan("```json\n{\"queries\":[{\"failure_ref\":\" f1 \",\"test_name\":\" creates network \",\"backend_area\":\" network \",\"resource\":\" networks.region.unikorn-cloud.org \",\"name\":\" network-123 \",\"reason\":\" network CR reached error \",\"confidence\":\" High \"},{\"failure_ref\":\"f2\",\"resource\":\"pods\",\"name\":\"pod-1\"},{\"failure_ref\":\"f3\",\"resource\":\"instances.compute.unikorn-cloud.org\"}]}\n```")
+	if err != nil {
+		t.Fatalf("parseUnikornCRQueryPlan returned error: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("queries = %+v", queries)
+	}
+	if queries[0].FailureRef != "f1" ||
+		queries[0].TestName != "creates network" ||
+		queries[0].BackendArea != "network" ||
+		queries[0].Resource != "networks.region.unikorn-cloud.org" ||
+		queries[0].Name != "network-123" ||
+		!queries[0].AllNamespaces ||
+		queries[0].Confidence != "high" ||
+		queries[0].Reason != "network CR reached error" {
+		t.Fatalf("unexpected CR query: %+v", queries[0])
 	}
 }
 
@@ -1049,6 +1138,59 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 		"Search terms: instance, timeout",
 		"Grafana lookup URL: https://grafana.example.com/explore?panes=test",
 		"controller failed to create instance",
+	} {
+		if strings.Contains(input, unexpected) {
+			t.Fatalf("AI input should not include %q:\n%s", unexpected, input)
+		}
+	}
+}
+
+func TestRenderAIInputIncludesUnikornCRs(t *testing.T) {
+	t.Parallel()
+
+	input := renderAIInputWithOptions(Analysis{
+		Current: TestRun{Name: "API Tests"},
+		Stats:   Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:    "creates network",
+			Message: "network reached error",
+		}},
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				FailureRef:  "f1",
+				TestName:    "creates network",
+				BackendArea: "network",
+				Resource:    "networks.region.unikorn-cloud.org",
+				Name:        "network-123",
+				Reason:      "Network provisioning reached Error and the CR name was present in the failure.",
+				Confidence:  "high",
+				ResultCount: 1,
+				Objects: []UnikornCRObjectSummary{{
+					Kind:              "Network",
+					Namespace:         "unikorn",
+					Name:              "network-123",
+					Phase:             "Error",
+					ProvisioningState: "failed",
+					Conditions:        []string{"Ready =False reason=VLANExhausted message=vlan ids exhausted"},
+					OwnerRefs:         []string{"Region/region-1"},
+				}},
+			}},
+		},
+	}, AIInputOptions{})
+
+	for _, expected := range []string{
+		"Unikorn/Kubernetes CR observations for final analysis:",
+		"- Test: creates network; backend: network; confidence: high; CR: networks.region.unikorn-cloud.org; name: network-123; found 1 CR object; CR signal: Network/network-123 namespace=unikorn, phase=Error, provisioning=failed, conditions=Ready =False reason=VLANExhausted message=vlan ids exhausted, owners=Region/region-1",
+		"Lookup reason: Network provisioning reached Error and the CR name was present in the failure.",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("AI input missing %q:\n%s", expected, input)
+		}
+	}
+	for _, unexpected := range []string{
+		"kubectl get",
+		"raw CR YAML",
+		"raw CR JSON",
 	} {
 		if strings.Contains(input, unexpected) {
 			t.Fatalf("AI input should not include %q:\n%s", unexpected, input)

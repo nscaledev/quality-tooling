@@ -27,8 +27,25 @@ type GrafanaLogPlannedQuery struct {
 	Confidence    string   `json:"confidence,omitempty"`
 }
 
+type UnikornCRPlannedQuery struct {
+	FailureRef    string `json:"failure_ref"`
+	TestName      string `json:"test_name,omitempty"`
+	BackendArea   string `json:"backend_area,omitempty"`
+	Resource      string `json:"resource"`
+	Namespace     string `json:"namespace,omitempty"`
+	Name          string `json:"name,omitempty"`
+	Selector      string `json:"selector,omitempty"`
+	AllNamespaces bool   `json:"all_namespaces,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	Confidence    string `json:"confidence,omitempty"`
+}
+
 type grafanaLogQueryPlanResponse struct {
 	Queries []GrafanaLogPlannedQuery `json:"queries"`
+}
+
+type unikornCRQueryPlanResponse struct {
+	Queries []UnikornCRPlannedQuery `json:"queries"`
 }
 
 type AIInputOptions struct {
@@ -40,6 +57,7 @@ const aiSlackDelimiter = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
 
 var (
 	runGrafanaLogQueryPlanning     = runClaudeGrafanaLogQueryPlanning
+	runUnikornCRQueryPlanning      = runClaudeUnikornCRQueryPlanning
 	grafanaLogQueryPlanningTimeout = 90 * time.Second
 )
 
@@ -91,9 +109,12 @@ Section 1: Markdown for the GitHub step summary.
 - Use unknown/mixed when there is not enough evidence to choose a category confidently.
 - Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
 - If Grafana observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
-- Keep the report close to the existing production format; do not add a separate Grafana section, raw log table, LogQL, search terms, or Grafana URL list.
+- If Unikorn/Kubernetes CR observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
+- Keep the report close to the existing production format; do not add a separate Grafana section or a separate Kubernetes CR section, raw log tables, raw CR YAML/JSON, LogQL, search terms, kubectl commands, or Grafana URL lists.
 - When a Grafana signal is present, mention the concrete signal in the Likely reason or Next check, such as "Grafana showed INTERNAL_ERROR/connection refused" or "Grafana only returned audit/cleanup rows and no explicit error".
+- When a CR signal is present, mention the concrete signal in the Likely reason or Next check, such as "Network CR status phase=Error reason=VLANExhausted", "CR lookup found no matching Network", or "CR query failed with forbidden".
 - Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs.
+- Do not overstate certainty when CR lookup returned no objects, missing fields, weak matches, or query failures.
 - If a failed test time range and Grafana query time range are both present, compare them before making timing claims.
 - Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window.
 - When the failed test is inside the Grafana window but Grafana only returned cleanup/audit/activity rows, say the provisioning error was not present in the returned Grafana lines and point the next check to the resource creation/provisioning transition period inside the test window.
@@ -125,7 +146,9 @@ Section 2: Plain text Slack summary.
 - Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
 - Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason.
 - For Grafana-backed bullets, explicitly connect the test error, your interpretation, and the Grafana signal in the same bullet.
+- For CR-backed bullets, explicitly connect the test error, your interpretation, and the Kubernetes CR signal in the same bullet.
 - Do not use vague phrases like "Grafana returned related activity" unless you also say what Grafana showed or did not show.
+- Do not use vague phrases like "CR state looked related" unless you name the CR kind/name and the status/condition/query failure signal.
 - If Grafana only returned audit/cleanup rows, say that and point the action to the resource creation or provisioning transition period; if Grafana returned error signals, name the signals.
 - Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
@@ -175,6 +198,33 @@ func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analys
 	return parseGrafanaLogQueryPlan(stdout.String())
 }
 
+func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysis Analysis) ([]UnikornCRPlannedQuery, error) {
+	if !config.EnableAIAnalysis || config.ClaudeToken == "" {
+		return nil, nil
+	}
+	if len(analysis.Failures) == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, grafanaLogQueryPlanningTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", unikornCRQueryPlanningPrompt())
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
+	cmd.Stdin = strings.NewReader(renderUnikornCRQueryPlanningInput(analysis, config))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("run claude unikorn CR query planning: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	return parseUnikornCRQueryPlan(stdout.String())
+}
+
 func grafanaLogQueryPlanningPrompt() string {
 	return `You are planning read-only Loki log queries for Grafana MCP based on parsed test failures.
 
@@ -200,6 +250,32 @@ Rules:
 - Keep each LogQL query readable and bounded for the supplied time window. Do not request writes or mutations.
 - Do not include Grafana URLs in this JSON. The reporter generates grafana_explore_url deterministically after it knows the datasource, query, and time range.
 - If no backend-related log lookup is justified, return {"queries":[]}.`
+}
+
+func unikornCRQueryPlanningPrompt() string {
+	return `You are planning read-only Kubernetes custom-resource lookups for Unikorn test failure analysis.
+
+Return strict JSON only. Do not include markdown, prose, code fences, shell scripts, or kubectl commands.
+
+Expected output:
+{"queries":[{"failure_ref":"f1","test_name":"creates network","backend_area":"network","resource":"networks.region.unikorn-cloud.org","namespace":"default","name":"network-123","selector":"","all_namespaces":false,"reason":"The test failed because a VPC/network resource reached Error and the failure includes the Network CR name, so the CR status can confirm the backend state.","confidence":"high"}]}
+
+Rules:
+- Inspect the failed test names, suites, locations, error messages, captured output, environment, and previous-result comparison.
+- Only create CR lookups for failures where Kubernetes custom-resource state could materially improve the failure analysis.
+- Do not create CR lookups for purely client-side assertions, local test framework failures, auth/token failures with no resource name, or failures without any backend/resource signal.
+- Treat provisioning timeouts, Error/Failed CR states, deleted/missing resources, finalizers, owner references, cloud resource UUIDs, VPC/network/load balancer/instance/file storage resource names, and controller-owned custom resources as signals that can justify a lookup.
+- Use the exact failure_ref values from the input.
+- test_name must match the input Test value for that failure_ref.
+- resource must be one kubectl resource identifier, preferably plural.group form such as networks.region.unikorn-cloud.org. Never include spaces, flags, pipes, or shell syntax.
+- Supported resource examples for the github-unikorn-cr-reader bot include networks.region.unikorn-cloud.org, vlanallocations.region.unikorn-cloud.org, loadbalancers.region.unikorn-cloud.org, servers.region.unikorn-cloud.org, filestorages.region.unikorn-cloud.org, computeinstances.compute.unikorn-cloud.org, objectstorageendpoints.storage.unikorn-cloud.org, projects.identity.unikorn-cloud.org, and kubernetesclusters.unikorn-cloud.org.
+- Include either name or selector. Prefer exact names, UUIDs, or resource names from the failure evidence.
+- Set namespace when the evidence provides it. If namespace is unknown for a namespaced CR, set all_namespaces to true.
+- backend_area should name the likely backend component or area when the evidence supports one; otherwise use "unknown".
+- reason must be one consolidated sentence explaining why this specific failure needs Kubernetes CR state.
+- confidence must be one of "high", "medium", or "low".
+- The collector is read-only and only runs kubectl get/list on the requested CRs. Do not request pods, logs, exec, secrets, configmaps, events, writes, deletes, patches, or mutations.
+- If no CR lookup is justified, return {"queries":[]}.`
 }
 
 func renderGrafanaLogQueryPlanningInput(analysis Analysis, config Config) string {
@@ -244,6 +320,47 @@ func renderGrafanaLogQueryPlanningInput(analysis Analysis, config Config) string
 	return sb.String()
 }
 
+func renderUnikornCRQueryPlanningInput(analysis Analysis, config Config) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Test run: %s\n", analysis.Current.Name))
+	sb.WriteString(fmt.Sprintf("Environment: %s\n", config.Environment))
+	sb.WriteString(fmt.Sprintf("Totals: %d passed, %d failed, %d skipped\n", analysis.Stats.Passed, analysis.Stats.Failed, analysis.Stats.Skipped))
+	sb.WriteString(fmt.Sprintf("Maximum CR lookups allowed: %d\n\n", normalizedUnikornCRFailureLimit(config.UnikornCRMaxFailures)))
+
+	if analysis.Compare != nil {
+		sb.WriteString("Previous result comparison:\n")
+		sb.WriteString(fmt.Sprintf("New failures: %d\n", len(analysis.Compare.NewFailures)))
+		sb.WriteString(fmt.Sprintf("Recurring failures: %d\n", len(analysis.Compare.RecurringFailures)))
+		sb.WriteString(fmt.Sprintf("Resolved failures: %d\n", len(analysis.Compare.ResolvedFailures)))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Candidate failed tests for Kubernetes CR lookup:\n")
+	for _, candidate := range selectUnikornCRFailureCandidates(analysis, config.UnikornCRMaxFailures) {
+		test := candidate.Test
+		sb.WriteString(fmt.Sprintf("Failure ref: %s\n", candidate.Ref))
+		if test.ID != "" {
+			sb.WriteString(fmt.Sprintf("Test ID: %s\n", test.ID))
+		}
+		sb.WriteString(fmt.Sprintf("Test: %s\n", test.Name))
+		if test.Suite != "" {
+			sb.WriteString(fmt.Sprintf("Suite: %s\n", test.Suite))
+		}
+		if location := formatLocation(test); location != "" {
+			sb.WriteString(fmt.Sprintf("Location: %s\n", location))
+		}
+		if test.Message != "" {
+			sb.WriteString(fmt.Sprintf("Error: %s\n", truncate(test.Message, 2000)))
+		}
+		if test.Output != "" {
+			sb.WriteString(fmt.Sprintf("Output: %s\n", truncate(test.Output, 2000)))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
 func parseGrafanaLogQueryPlan(output string) ([]GrafanaLogPlannedQuery, error) {
 	var response grafanaLogQueryPlanResponse
 	if err := json.Unmarshal([]byte(extractJSONObject(output)), &response); err != nil {
@@ -261,6 +378,31 @@ func parseGrafanaLogQueryPlan(output string) ([]GrafanaLogPlannedQuery, error) {
 		query.Reason = strings.TrimSpace(query.Reason)
 		query.Confidence = normalizeGrafanaConfidence(query.Confidence)
 		if query.FailureRef == "" || query.LogQL == "" {
+			continue
+		}
+		queries = append(queries, query)
+	}
+	return queries, nil
+}
+
+func parseUnikornCRQueryPlan(output string) ([]UnikornCRPlannedQuery, error) {
+	var response unikornCRQueryPlanResponse
+	if err := json.Unmarshal([]byte(extractJSONObject(output)), &response); err != nil {
+		return nil, fmt.Errorf("decode unikorn CR query plan: %w", err)
+	}
+
+	var queries []UnikornCRPlannedQuery
+	for _, query := range response.Queries {
+		query.FailureRef = strings.TrimSpace(query.FailureRef)
+		query.TestName = strings.TrimSpace(query.TestName)
+		query.BackendArea = strings.TrimSpace(query.BackendArea)
+		query.Resource = strings.TrimSpace(query.Resource)
+		query.Namespace = strings.TrimSpace(query.Namespace)
+		query.Name = strings.TrimSpace(query.Name)
+		query.Selector = strings.TrimSpace(query.Selector)
+		query.Reason = strings.TrimSpace(query.Reason)
+		query.Confidence = normalizeGrafanaConfidence(query.Confidence)
+		if sanitizeUnikornCRPlannedQuery(&query) != nil {
 			continue
 		}
 		queries = append(queries, query)
@@ -321,6 +463,7 @@ func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string 
 	}
 
 	renderAIGrafanaLogs(&sb, analysis.GrafanaLogs)
+	renderAIUnikornCRs(&sb, analysis.UnikornCRs)
 
 	if len(analysis.Failures) > 0 {
 		renderAITestListHeader(&sb, "Failed tests", len(analysis.Failures), options.MaxFailures)
@@ -474,6 +617,59 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 		}
 		if context.GrafanaExploreURL != "" {
 			sb.WriteString("; Grafana Explore query link is included in the GitHub summary")
+		}
+		sb.WriteString("\n")
+		if context.Reason != "" {
+			sb.WriteString(fmt.Sprintf("  Lookup reason: %s\n", truncate(cleanOneLine(context.Reason), 220)))
+		}
+	}
+	sb.WriteString("\n")
+}
+
+func renderAIUnikornCRs(sb *strings.Builder, enrichment *UnikornCREnrichment) {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return
+	}
+
+	sb.WriteString("Unikorn/Kubernetes CR observations for final analysis:\n")
+	for _, context := range enrichment.Contexts {
+		testName := firstNonEmpty(context.TestName, "General lookup")
+		if context.Test != nil {
+			testName = firstNonEmpty(context.Test.Name, context.Test.ID, testName)
+		}
+		sb.WriteString(fmt.Sprintf("- Test: %s", truncate(cleanOneLine(testName), 220)))
+		if context.BackendArea != "" {
+			sb.WriteString(fmt.Sprintf("; backend: %s", truncate(cleanOneLine(context.BackendArea), 80)))
+		}
+		if context.Confidence != "" {
+			sb.WriteString(fmt.Sprintf("; confidence: %s", context.Confidence))
+		}
+		if context.Resource != "" {
+			sb.WriteString(fmt.Sprintf("; CR: %s", truncate(cleanOneLine(context.Resource), 120)))
+		}
+		if context.Namespace != "" {
+			sb.WriteString(fmt.Sprintf("; namespace: %s", truncate(cleanOneLine(context.Namespace), 80)))
+		} else if context.Name == "" {
+			sb.WriteString("; namespace: all")
+		}
+		if context.Name != "" {
+			sb.WriteString(fmt.Sprintf("; name: %s", truncate(cleanOneLine(context.Name), 120)))
+		} else if context.Selector != "" {
+			sb.WriteString("; selector lookup")
+		}
+		if context.Error != "" {
+			sb.WriteString(fmt.Sprintf("; CR lookup failed: %s\n", truncate(cleanOneLine(context.Error), 220)))
+			continue
+		}
+		if context.ResultCount == 0 {
+			sb.WriteString("; no matching CR objects")
+		} else if context.ResultCount == 1 {
+			sb.WriteString("; found 1 CR object")
+		} else {
+			sb.WriteString(fmt.Sprintf("; found %d CR objects", context.ResultCount))
+		}
+		if signal := unikornCRSignalSummary(context); signal != "" {
+			sb.WriteString(fmt.Sprintf("; CR signal: %s", signal))
 		}
 		sb.WriteString("\n")
 		if context.Reason != "" {
