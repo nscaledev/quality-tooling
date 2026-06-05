@@ -1198,6 +1198,64 @@ func TestRenderAIInputIncludesUnikornCRs(t *testing.T) {
 	}
 }
 
+func TestEnsureAIAnalysisEvidenceSignalsAddsMissingUnikornCRSignal(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary: "## Test Failure Analysis\n\n### Patterns\n| Category | What failed | Why it failed | Likely reason | Impact | Next check |\n| --- | --- | --- | --- | ---: | --- |\n| infra/external | Network setup | Network reached error | Network controller/backend issue | 1 failed | Inspect Network CR |\n",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				Resource:    "networks.region.unikorn-cloud.org",
+				Name:        "network-123",
+				ResultCount: 1,
+				Objects: []UnikornCRObjectSummary{{
+					Kind:       "Network",
+					Name:       "network-123",
+					Phase:      "Error",
+					Conditions: []string{"Available =False reason=Errored message=Unhandled error: allocation failure: vlan ids exhausted"},
+				}},
+			}},
+		},
+	})
+
+	if updated == nil {
+		t.Fatal("expected AI analysis")
+	}
+	if !strings.Contains(updated.StepSummary, "Kubernetes CR signal") ||
+		!strings.Contains(updated.StepSummary, "vlan ids exhausted") {
+		t.Fatalf("summary should include CR evidence signal:\n%s", updated.StepSummary)
+	}
+	if strings.Contains(updated.StepSummary, "network-123") {
+		t.Fatalf("summary should not need exact CR object names for the deterministic evidence bullet:\n%s", updated.StepSummary)
+	}
+}
+
+func TestEnsureAIAnalysisEvidenceSignalsDoesNotDuplicateExistingUnikornCRSignal(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary: "## Test Failure Analysis\n\n### Suggested Next Checks\n- Kubernetes CR signal already says `vlan ids exhausted`.\n",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				ResultCount: 1,
+				Objects: []UnikornCRObjectSummary{{
+					Kind:       "Network",
+					Name:       "network-123",
+					Conditions: []string{"Available =False message=vlan ids exhausted"},
+				}},
+			}},
+		},
+	})
+
+	if strings.Count(strings.ToLower(updated.StepSummary), "vlan ids exhausted") != 1 {
+		t.Fatalf("summary should not duplicate existing CR signal:\n%s", updated.StepSummary)
+	}
+}
+
 func TestGrafanaLogSignalSummaryIncludesCleanupOnlyObservation(t *testing.T) {
 	t.Parallel()
 

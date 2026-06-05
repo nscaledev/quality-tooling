@@ -94,6 +94,7 @@ func run(ctx context.Context, config Config) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: AI failure analysis skipped: %v\n", err)
 	}
+	aiAnalysis = ensureAIAnalysisEvidenceSignals(aiAnalysis, analysis)
 	logReportTiming("ai-failure-analysis", stageStarted)
 
 	if config.WriteStepSummary {

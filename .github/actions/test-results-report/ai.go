@@ -796,6 +796,80 @@ func parseAIAnalysis(output string) *AIAnalysis {
 	}
 }
 
+func ensureAIAnalysisEvidenceSignals(analysis *AIAnalysis, testAnalysis Analysis) *AIAnalysis {
+	if analysis == nil {
+		return nil
+	}
+	analysis.StepSummary = ensureAIStepSummaryEvidenceSignals(analysis.StepSummary, testAnalysis)
+	return analysis
+}
+
+func ensureAIStepSummaryEvidenceSignals(summary string, analysis Analysis) string {
+	bullets := missingUnikornCREvidenceBullets(summary, analysis.UnikornCRs)
+	if len(bullets) == 0 {
+		return summary
+	}
+
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return "## Test Failure Analysis\n\n### Suggested Next Checks\n" + strings.Join(bullets, "\n")
+	}
+	if strings.Contains(strings.ToLower(trimmed), "### suggested next checks") {
+		return trimmed + "\n" + strings.Join(bullets, "\n")
+	}
+	return trimmed + "\n\n### Suggested Next Checks\n" + strings.Join(bullets, "\n")
+}
+
+func missingUnikornCREvidenceBullets(summary string, enrichment *UnikornCREnrichment) []string {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return nil
+	}
+
+	lowerSummary := strings.ToLower(summary)
+	seen := map[string]bool{}
+	var bullets []string
+	for _, context := range enrichment.Contexts {
+		text, marker := compactUnikornCREvidenceSignal(context)
+		if text == "" || marker == "" {
+			continue
+		}
+		marker = strings.ToLower(marker)
+		if seen[marker] || strings.Contains(lowerSummary, marker) {
+			continue
+		}
+		seen[marker] = true
+		bullets = append(bullets, "- *Evidence:* "+text)
+		if len(bullets) >= 2 {
+			break
+		}
+	}
+	return bullets
+}
+
+func compactUnikornCREvidenceSignal(context UnikornCRContext) (string, string) {
+	if context.Error != "" {
+		message := truncate(cleanOneLine(context.Error), 160)
+		return "Kubernetes CR lookup failed: `" + message + "`.", message
+	}
+	if context.ResultCount == 0 {
+		resource := firstNonEmpty(context.Resource, "requested resource")
+		return fmt.Sprintf("Kubernetes CR lookup found no matching `%s` object.", truncate(cleanOneLine(resource), 80)), "no matching"
+	}
+
+	signal := unikornCRSignalSummary(context)
+	if signal == "" {
+		return "", ""
+	}
+	lowerSignal := strings.ToLower(signal)
+	if strings.Contains(lowerSignal, "vlan ids exhausted") {
+		return "Kubernetes CR signal: Network CR condition message includes `vlan ids exhausted`.", "vlan ids exhausted"
+	}
+	if strings.Contains(lowerSignal, "vlanexhausted") {
+		return "Kubernetes CR signal: Network CR condition reason is `VLANExhausted`.", "vlanexhausted"
+	}
+	return "Kubernetes CR signal: " + truncate(cleanOneLine(signal), 220) + ".", signal
+}
+
 func cutAIAnalysisOnDelimiter(output string) (string, string, bool) {
 	lines := strings.SplitAfter(output, "\n")
 	offset := 0
