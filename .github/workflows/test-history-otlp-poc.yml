@@ -473,7 +473,7 @@ jobs:
 
             return queries
 
-          def write_summary(status, labels, tried, first=None, matched_by=None, logql=None, explore_url=None):
+          def write_summary(status, labels, tried, first=None, matched_by=None, logql=None, explore_url=None, query_links=None):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("### OTLP POC verification\n\n")
               summary.write(f"- Publish status: `${{ steps.report.outputs.test-history-shipping-status }}`\n")
@@ -484,6 +484,10 @@ jobs:
                 summary.write(f"- Loki labels seen: `{', '.join(labels[:20])}`\n")
               if tried:
                 summary.write(f"- Selectors tried: `{', '.join(tried[:8])}`\n")
+              if query_links:
+                summary.write("\nGrafana query links:\n")
+                for description, url in query_links[:8]:
+                  summary.write(f"- {description}: [open query]({url})\n")
               if first:
                 summary.write(f"- Matched by: `{matched_by or '<unknown>'}`\n")
                 if logql:
@@ -500,6 +504,8 @@ jobs:
           attempt = 0
           last_labels = []
           tried_descriptions = []
+          query_links = []
+          printed_query_links = False
           while True:
             attempt += 1
             end_rfc3339 = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -512,6 +518,14 @@ jobs:
             queries = build_queries(labels)
             if not tried_descriptions:
               tried_descriptions = [description for description, _ in queries]
+
+            if not printed_query_links:
+              for description, logql in queries:
+                url = grafana_explore_url(logql, start_rfc3339, end_rfc3339)
+                if url:
+                  query_links.append((description, url))
+                  print(f"Grafana Explore query link ({description}): {url}")
+              printed_query_links = True
 
             attempt_result = []
             for description, logql in queries:
@@ -544,7 +558,7 @@ jobs:
                 print("Grafana Explore URL:", explore_url or "<not generated>")
                 print("First match timestamp:", first.get("timestamp", "<unknown>"))
                 print("First match labels:", json.dumps(first.get("labels", {}), sort_keys=True))
-                write_summary("found in Loki", labels, tried_descriptions, first, description, logql, explore_url)
+                write_summary("found in Loki", labels, tried_descriptions, first, description, logql, explore_url, query_links)
                 sys.exit(0)
 
             print(f"Loki search attempt {attempt}: " + ", ".join(attempt_result))
@@ -552,7 +566,7 @@ jobs:
               break
             time.sleep(15)
 
-          write_summary("not found in Loki", last_labels, tried_descriptions)
+          write_summary("not found in Loki", last_labels, tried_descriptions, query_links=query_links)
           raise RuntimeError(f"No Loki rows found for marker {marker!r}; checked labels={last_labels!r}; tried={tried_descriptions!r}")
           PY
 
