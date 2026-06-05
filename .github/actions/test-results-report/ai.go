@@ -103,6 +103,7 @@ Section 1: Markdown for the GitHub step summary.
 - Start with '## Test Failure Analysis'.
 - Keep it concise: one compact pattern table plus up to 4 bullets.
 - Group failures and skips by likely area or pattern, not by individual test.
+- Base the analysis on the suite report evidence first: failed/skipped status, suite, message, output, time window, and resource identifiers from the JSON/XML artifacts.
 - Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
 - Use skipped for patterns where all affected tests are skipped, including known-bug, intentional, disabled, pending, or sentinel skips.
 - Use test/false failure only for failed tests caused by test code, invalid assertions, sentinel failures, or false failures; do not use it for skipped tests.
@@ -110,6 +111,7 @@ Section 1: Markdown for the GitHub step summary.
 - Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
 - If Grafana observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
 - If Unikorn/Kubernetes CR observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
+- Combine suite report evidence, Grafana MCP observations, and kubectl CR observations into one failure interpretation; do not produce separate source-by-source analyses.
 - Keep the report close to the existing production format; do not add a separate Grafana section or a separate Kubernetes CR section, raw log tables, raw CR YAML/JSON, LogQL, search terms, kubectl commands, or Grafana URL lists.
 - When a Grafana signal is present, mention the concrete signal in the Likely reason or Next check, such as "Grafana showed INTERNAL_ERROR/connection refused" or "Grafana only returned audit/cleanup rows and no explicit error".
 - When a CR signal is present, mention the concrete signal in the Likely reason or Next check, such as "Network CR status phase=Error reason=VLANExhausted", "CR lookup found no matching Network", or "CR query failed with forbidden".

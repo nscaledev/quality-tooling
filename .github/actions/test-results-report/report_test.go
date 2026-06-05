@@ -850,11 +850,13 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	prompt := claudePrompt()
 	for _, expected := range []string{
 		"4-6 high-signal Slack mrkdwn bullet lines",
+		"Base the analysis on the suite report evidence first",
 		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed",
 		"Use skipped for patterns where all affected tests are skipped",
 		"Use test/false failure only for failed tests",
 		"If Grafana observations are present, use them only as supporting evidence",
 		"If Unikorn/Kubernetes CR observations are present, use them only as supporting evidence",
+		"Combine suite report evidence, Grafana MCP observations, and kubectl CR observations",
 		"Keep the report close to the existing production format",
 		"do not add a separate Grafana section",
 		"When a Grafana signal is present, mention the concrete signal",
