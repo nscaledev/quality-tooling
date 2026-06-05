@@ -101,7 +101,7 @@ jobs:
 
       - name: Publish JSON report to OTLP agent collector
         id: report
-        uses: ./.github/actions/test-results-report
+        uses: nscaledev/quality-tooling/.github/actions/test-results-report@c2702819e82537d8f416b70a48dd695c1bfb10bf
         with:
           format: playwright-json
           test-results-path: .tmp/test-history-otlp-poc/playwright-report.json
