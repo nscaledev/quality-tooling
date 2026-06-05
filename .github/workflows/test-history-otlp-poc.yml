@@ -338,34 +338,154 @@ jobs:
             datasource_uid = selected["uid"]
           print(f"Using Loki datasource UID: {datasource_uid}")
 
+          def logql_escape(value):
+            return value.replace("\\", "\\\\").replace('"', '\\"')
+
+          def entries_from_result(result):
+            return result.get("data", []) if isinstance(result, dict) else result
+
+          def list_loki_labels(start_rfc3339, end_rfc3339):
+            result = call_tool("list_loki_label_names", {
+              "datasourceUid": datasource_uid,
+              "startRfc3339": start_rfc3339,
+              "endRfc3339": end_rfc3339,
+            })
+            if isinstance(result, dict):
+              result = result.get("labels", result.get("data", []))
+            return sorted(label for label in result if isinstance(label, str) and label)
+
+          def add_query(queries, seen, label, matcher, value, line_filter, description):
+            if not label or not value:
+              return
+            operator = "=" if matcher == "=" else "=~"
+            selector = f'{{{label}{operator}"{logql_escape(value)}"}}'
+            query = selector
+            if line_filter:
+              query = f'{selector} |= "{logql_escape(marker)}"'
+            if query in seen:
+              return
+            seen.add(query)
+            queries.append((description, query))
+
+          def build_queries(labels):
+            label_set = set(labels)
+            # If label discovery is empty, still try the common OTLP/Loki label shapes.
+            def known(label):
+              return not label_set or label in label_set
+
+            queries = []
+            seen = set()
+            run_id = os.environ.get("GITHUB_RUN_ID", "")
+            repository = os.environ.get("GITHUB_REPOSITORY", "")
+
+            exact_candidates = [
+              ("test_history_suite", marker, False, "suite label"),
+              ("test_history_test_name", marker, False, "test name label"),
+              ("github_run_id", run_id, True, "GitHub run label"),
+              ("service_name", "test-results-report", True, "service label"),
+              ("service_namespace", "qa-tooling", True, "service namespace label"),
+              ("github_repository", repository, True, "repository label"),
+            ]
+            for label, value, line_filter, description in exact_candidates:
+              if known(label):
+                add_query(queries, seen, label, "=", value, line_filter, description)
+
+            broad_labels = [
+              "service_name",
+              "service_namespace",
+              "test_history_repo",
+              "github_repository",
+              "job",
+              "namespace",
+              "app",
+              "container",
+              "pod",
+              "k8s_namespace_name",
+              "k8s_container_name",
+              "k8s_pod_name",
+            ]
+            for label in broad_labels:
+              if known(label):
+                add_query(queries, seen, label, "=~", ".+", True, f"{label} marker search")
+
+            if label_set and len(queries) < 3:
+              for label in labels:
+                if label.startswith("__"):
+                  continue
+                add_query(queries, seen, label, "=~", ".+", True, f"{label} marker search")
+                if len(queries) >= 5:
+                  break
+
+            return queries
+
+          def write_summary(status, labels, tried, first=None):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("### OTLP POC verification\n\n")
+              summary.write(f"- Publish status: `${{ steps.report.outputs.test-history-shipping-status }}`\n")
+              summary.write(f"- Loki datasource: `{datasource_uid}`\n")
+              summary.write(f"- Marker: `{marker}`\n")
+              summary.write(f"- Result: **{status}**\n")
+              if labels:
+                summary.write(f"- Loki labels seen: `{', '.join(labels[:20])}`\n")
+              if tried:
+                summary.write(f"- Selectors tried: `{', '.join(tried[:8])}`\n")
+              if first:
+                summary.write(f"- First match timestamp: `{first.get('timestamp', '<unknown>')}`\n")
+                summary.write(f"- First match labels: `{json.dumps(first.get('labels', {}), sort_keys=True)}`\n")
+
           end = dt.datetime.now(dt.timezone.utc)
           start = end - dt.timedelta(minutes=30)
-          logql = f'{{service_name="test-results-report"}} |= "{marker}"'
+          start_rfc3339 = start.isoformat().replace("+00:00", "Z")
           deadline = time.time() + timeout_seconds
           attempt = 0
+          last_labels = []
+          tried_descriptions = []
           while True:
             attempt += 1
-            result = call_tool("query_loki_logs", {
-              "datasourceUid": datasource_uid,
-              "logql": logql,
-              "startRfc3339": start.isoformat().replace("+00:00", "Z"),
-              "endRfc3339": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
-              "limit": 10,
-              "direction": "backward",
-            })
-            entries = result.get("data", []) if isinstance(result, dict) else result
-            print(f"Loki search attempt {attempt}: lines={len(entries)}")
-            if entries:
-              print("Found POC test history event in Loki.")
-              first = entries[0]
-              print("First match timestamp:", first.get("timestamp", "<unknown>"))
-              print("First match labels:", json.dumps(first.get("labels", {}), sort_keys=True))
-              sys.exit(0)
+            end_rfc3339 = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+            labels = list_loki_labels(start_rfc3339, end_rfc3339)
+            if labels != last_labels:
+              label_preview = ", ".join(labels[:20]) if labels else "<none>"
+              print(f"Loki labels in search window: {label_preview}")
+              last_labels = labels
+
+            queries = build_queries(labels)
+            if not tried_descriptions:
+              tried_descriptions = [description for description, _ in queries]
+
+            attempt_result = []
+            for description, logql in queries:
+              try:
+                result = call_tool("query_loki_logs", {
+                  "datasourceUid": datasource_uid,
+                  "logql": logql,
+                  "startRfc3339": start_rfc3339,
+                  "endRfc3339": end_rfc3339,
+                  "limit": 10,
+                  "direction": "backward",
+                })
+              except Exception as exc:
+                attempt_result.append(f"{description}=error")
+                print(f"Loki query {description!r} failed: {exc}")
+                continue
+
+              entries = entries_from_result(result)
+              attempt_result.append(f"{description}={len(entries)}")
+              if entries:
+                print("Found POC test history event in Loki.")
+                first = entries[0]
+                print("First match timestamp:", first.get("timestamp", "<unknown>"))
+                print("First match labels:", json.dumps(first.get("labels", {}), sort_keys=True))
+                write_summary("found in Loki", labels, tried_descriptions, first)
+                sys.exit(0)
+
+            print(f"Loki search attempt {attempt}: " + ", ".join(attempt_result))
             if time.time() >= deadline:
               break
             time.sleep(15)
 
-          raise RuntimeError(f"No Loki rows found for marker {marker!r} with query {logql!r}")
+          write_summary("not found in Loki", last_labels, tried_descriptions)
+          raise RuntimeError(f"No Loki rows found for marker {marker!r}; checked labels={last_labels!r}; tried={tried_descriptions!r}")
           PY
 
       - name: Dump Grafana MCP logs
