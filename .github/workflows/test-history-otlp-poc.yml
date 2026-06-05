@@ -20,9 +20,9 @@ on:
         required: false
         default: nks-stg-europe-west2-grafana
       loki-datasource-uid:
-        description: Grafana Loki datasource UID to query through MCP.
+        description: Optional Grafana Loki datasource UID to query through MCP. Leave empty to use the first discovered Loki datasource.
         required: false
-        default: product-loki
+        default: ''
       query-timeout-seconds:
         description: Maximum time to wait for the OTLP log to appear in Loki.
         required: false
@@ -101,7 +101,7 @@ jobs:
 
       - name: Publish JSON report to OTLP agent collector
         id: report
-        uses: nscaledev/quality-tooling/.github/actions/test-results-report@c2702819e82537d8f416b70a48dd695c1bfb10bf
+        uses: ./.github/actions/test-results-report
         with:
           format: playwright-json
           test-results-path: .tmp/test-history-otlp-poc/playwright-report.json
@@ -324,10 +324,19 @@ jobs:
 
           datasources = call_tool("list_datasources", {"type": "loki", "limit": 100})
           datasource_items = datasources.get("datasources", []) if isinstance(datasources, dict) else datasources
-          available_uids = [item.get("uid") for item in datasource_items]
+          available_uids = [item.get("uid", "") for item in datasource_items if item.get("uid")]
           print(f"Available Loki datasource UIDs: {', '.join(available_uids)}")
-          if datasource_uid not in available_uids:
-            raise RuntimeError(f"Configured Loki datasource UID {datasource_uid!r} not found")
+          if datasource_uid:
+            if datasource_uid not in available_uids:
+              print(f"Configured Loki datasource UID {datasource_uid!r} was not found; falling back to discovered datasource")
+              datasource_uid = ""
+          if not datasource_uid:
+            default_datasource = next((item for item in datasource_items if item.get("isDefault")), None)
+            selected = default_datasource or (datasource_items[0] if datasource_items else None)
+            if not selected or not selected.get("uid"):
+              raise RuntimeError("Grafana MCP returned no Loki datasources")
+            datasource_uid = selected["uid"]
+          print(f"Using Loki datasource UID: {datasource_uid}")
 
           end = dt.datetime.now(dt.timezone.utc)
           start = end - dt.timedelta(minutes=30)
