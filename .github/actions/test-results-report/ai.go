@@ -956,6 +956,9 @@ func compactUnikornCREvidenceSignal(context UnikornCRContext) (string, string) {
 		return "", ""
 	}
 	lowerSignal := strings.ToLower(signal)
+	if strings.Contains(lowerSignal, "allocation failure: vlan ids exhausted") {
+		return "Kubernetes CR signal: Network CR condition message includes `allocation failure: vlan ids exhausted`.", "allocation failure: vlan ids exhausted"
+	}
 	if strings.Contains(lowerSignal, "vlan ids exhausted") {
 		return "Kubernetes CR signal: Network CR condition message includes `vlan ids exhausted`.", "vlan ids exhausted"
 	}

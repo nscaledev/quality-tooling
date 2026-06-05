@@ -1228,14 +1228,14 @@ func TestEnsureAIAnalysisEvidenceSignalsAddsMissingUnikornCRSignal(t *testing.T)
 		t.Fatal("expected AI analysis")
 	}
 	if !strings.Contains(updated.StepSummary, "Kubernetes CR signal") ||
-		!strings.Contains(updated.StepSummary, "vlan ids exhausted") {
+		!strings.Contains(updated.StepSummary, "allocation failure: vlan ids exhausted") {
 		t.Fatalf("summary should include CR evidence signal:\n%s", updated.StepSummary)
 	}
 	if strings.Contains(updated.StepSummary, "network-123") {
 		t.Fatalf("summary should not need exact CR object names for the deterministic evidence bullet:\n%s", updated.StepSummary)
 	}
 	if !strings.Contains(updated.SlackSummary, "Kubernetes CR signal") ||
-		!strings.Contains(updated.SlackSummary, "vlan ids exhausted") {
+		!strings.Contains(updated.SlackSummary, "allocation failure: vlan ids exhausted") {
 		t.Fatalf("slack summary should include CR evidence signal:\n%s", updated.SlackSummary)
 	}
 	if strings.Index(updated.SlackSummary, "Kubernetes CR signal") > strings.Index(updated.SlackSummary, "- *Action:*") {
