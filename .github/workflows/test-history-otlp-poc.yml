@@ -238,6 +238,8 @@ jobs:
       - name: Search Loki for published POC event through Grafana MCP
         shell: bash
         env:
+          GRAFANA_APP: ${{ inputs.grafana-app }}
+          GRAFANA_TELEPORT_PROXY: nscale.teleport.sh:443
           LOKI_DATASOURCE_UID: ${{ inputs.loki-datasource-uid }}
           QUERY_TIMEOUT_SECONDS: ${{ inputs.query-timeout-seconds }}
         run: |
@@ -250,6 +252,7 @@ jobs:
           import sys
           import time
           import urllib.error
+          import urllib.parse
           import urllib.request
 
           endpoint = f"http://127.0.0.1:{os.environ['GRAFANA_MCP_PORT']}/mcp"
@@ -343,6 +346,31 @@ jobs:
 
           def entries_from_result(result):
             return result.get("data", []) if isinstance(result, dict) else result
+
+          def grafana_explore_url(logql, start_rfc3339, end_rfc3339):
+            grafana_app = os.environ.get("GRAFANA_APP", "").strip()
+            proxy_host = os.environ.get("GRAFANA_TELEPORT_PROXY", "nscale.teleport.sh:443").split(":", 1)[0]
+            if not grafana_app or not proxy_host:
+              return ""
+            base_url = f"https://{grafana_app}.{proxy_host}/explore"
+            panes = {
+              "test-history-otlp-poc": {
+                "datasource": datasource_uid,
+                "queries": [{
+                  "refId": "A",
+                  "expr": logql,
+                  "queryType": "range",
+                  "datasource": {"type": "loki", "uid": datasource_uid},
+                }],
+                "range": {"from": start_rfc3339, "to": end_rfc3339},
+              },
+            }
+            query = urllib.parse.urlencode({
+              "orgId": "1",
+              "schemaVersion": "1",
+              "panes": json.dumps(panes, separators=(",", ":")),
+            })
+            return f"{base_url}?{query}"
 
           def list_loki_labels(start_rfc3339, end_rfc3339):
             result = call_tool("list_loki_label_names", {
@@ -445,7 +473,7 @@ jobs:
 
             return queries
 
-          def write_summary(status, labels, tried, first=None, matched_by=None):
+          def write_summary(status, labels, tried, first=None, matched_by=None, logql=None, explore_url=None):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("### OTLP POC verification\n\n")
               summary.write(f"- Publish status: `${{ steps.report.outputs.test-history-shipping-status }}`\n")
@@ -458,6 +486,10 @@ jobs:
                 summary.write(f"- Selectors tried: `{', '.join(tried[:8])}`\n")
               if first:
                 summary.write(f"- Matched by: `{matched_by or '<unknown>'}`\n")
+                if logql:
+                  summary.write(f"- LogQL: `{logql}`\n")
+                if explore_url:
+                  summary.write(f"- Grafana Explore: [open query]({explore_url})\n")
                 summary.write(f"- First match timestamp: `{first.get('timestamp', '<unknown>')}`\n")
                 summary.write(f"- First match labels: `{json.dumps(first.get('labels', {}), sort_keys=True)}`\n")
 
@@ -506,10 +538,13 @@ jobs:
               if entries:
                 print("Found POC test history event in Loki.")
                 first = entries[0]
+                explore_url = grafana_explore_url(logql, start_rfc3339, end_rfc3339)
                 print("Matched by:", description)
+                print("LogQL:", logql)
+                print("Grafana Explore URL:", explore_url or "<not generated>")
                 print("First match timestamp:", first.get("timestamp", "<unknown>"))
                 print("First match labels:", json.dumps(first.get("labels", {}), sort_keys=True))
-                write_summary("found in Loki", labels, tried_descriptions, first, description)
+                write_summary("found in Loki", labels, tried_descriptions, first, description, logql, explore_url)
                 sys.exit(0)
 
             print(f"Loki search attempt {attempt}: " + ", ".join(attempt_result))
