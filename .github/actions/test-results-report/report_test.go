@@ -1272,6 +1272,62 @@ func TestEnsureAIAnalysisEvidenceSignalsDoesNotDuplicateExistingUnikornCRSignal(
 	}
 }
 
+func TestEnsureAIAnalysisEvidenceSignalsAddsConcreteGrafanaSignal(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary: "## Test Failure Analysis\n\n### Patterns\n| Category | What failed | Why it failed | Likely reason | Impact | Next check |\n| --- | --- | --- | --- | ---: | --- |\n| infra/external | Network setup | Network reached error | Network controller/backend issue | 1 failed | Inspect controller logs |\n",
+		SlackSummary: "- *Network setup* (infra/external): Network reached error instead of provisioned; inspect controller logs.\n" +
+			"- *Action:* Use the GitHub build summary for test-level failure reasons; inspect network controller state, then rerun the focused suite.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		GrafanaLogs: &GrafanaLogEnrichment{
+			Contexts: []GrafanaLogContext{{
+				Entries: []GrafanaLogEntry{{
+					Line: `{"logger":"controllers.Network","error":"allocation failure: vlan ids exhausted"}`,
+				}},
+			}},
+		},
+	})
+
+	if updated == nil {
+		t.Fatal("expected AI analysis")
+	}
+	for _, summary := range []string{updated.StepSummary, updated.SlackSummary} {
+		if !strings.Contains(summary, "Grafana/Loki signal") ||
+			!strings.Contains(summary, "allocation failure: vlan ids exhausted") {
+			t.Fatalf("summary should include concrete Grafana signal:\n%s", summary)
+		}
+	}
+	if strings.Index(updated.SlackSummary, "Grafana/Loki signal") > strings.Index(updated.SlackSummary, "- *Action:*") {
+		t.Fatalf("slack evidence should be inserted before the final action bullet:\n%s", updated.SlackSummary)
+	}
+}
+
+func TestEnsureAIAnalysisEvidenceSignalsDoesNotBackfillEmptyCRLookup(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary:  "## Test Failure Analysis\n\n### Suggested Next Checks\n- Inspect the network controller logs.\n",
+		SlackSummary: "- *Network setup* (infra/external): Network reached error; inspect controller logs.\n- *Action:* Use the GitHub build summary for test-level failure reasons; rerun the focused suite.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				Resource:    "networks.region.unikorn-cloud.org",
+				ResultCount: 0,
+			}},
+		},
+	})
+
+	for _, summary := range []string{updated.StepSummary, updated.SlackSummary} {
+		if strings.Contains(summary, "Kubernetes CR lookup found no matching") ||
+			strings.Contains(summary, "no matching `networks.region.unikorn-cloud.org`") {
+			t.Fatalf("empty CR lookups should not create deterministic evidence bullets:\n%s", summary)
+		}
+	}
+}
+
 func TestGrafanaLogSignalSummaryIncludesCleanupOnlyObservation(t *testing.T) {
 	t.Parallel()
 
@@ -1294,6 +1350,20 @@ func TestGrafanaLogSignalSummaryIncludesCleanupOnlyObservation(t *testing.T) {
 		if strings.Contains(summary, unexpected) {
 			t.Fatalf("signal summary should not include raw message %q: %s", unexpected, summary)
 		}
+	}
+}
+
+func TestGrafanaLogSignalSummaryIncludesVLANExhaustion(t *testing.T) {
+	t.Parallel()
+
+	summary := grafanaLogSignalSummary(GrafanaLogContext{
+		Entries: []GrafanaLogEntry{{
+			Line: `{"level":"error","logger":"controllers.Network","error":"allocation failure: vlan ids exhausted"}`,
+		}},
+	})
+
+	if summary != "controller error: allocation failure: vlan ids exhausted" {
+		t.Fatalf("signal summary should preserve concrete controller error: %s", summary)
 	}
 }
 

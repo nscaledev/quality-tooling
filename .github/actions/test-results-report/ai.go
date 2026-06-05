@@ -155,6 +155,7 @@ Section 2: Plain text Slack summary.
 - Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
 - Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
 - Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*' when it makes Slack easier to act on.
+- Do not add standalone Evidence bullets for skipped-only patterns or empty post-cleanup CR lookups; mention them only when they materially change the next action.
 - For intentional or sentinel skipped tests, use the skipped category and one short phrase that says when the skip should be removed or re-enabled; do not mention issue alerting unless it appears in the evidence.
 - For intentional or sentinel failed tests, use one short phrase that says it is temporary and should be removed or disabled before review; do not mention issue alerting unless it appears in the evidence.
 - Do not list every failed or skipped test.
@@ -702,10 +703,36 @@ func grafanaLogSignalSummary(context GrafanaLogContext) string {
 		return ""
 	}
 
+	if signals := grafanaLogConcreteErrorSignals(context.Entries); len(signals) > 0 {
+		return "controller error: " + strings.Join(signals, ", ")
+	}
 	if signals := grafanaLogErrorSignals(context.Entries); len(signals) > 0 {
 		return "error signals: " + strings.Join(signals, ", ")
 	}
 	return "no explicit error string in returned rows"
+}
+
+func grafanaLogConcreteErrorSignals(entries []GrafanaLogEntry) []string {
+	seen := map[string]bool{}
+	var signals []string
+	for _, entry := range entries {
+		line := strings.ToLower(cleanOneLine(entry.Line))
+		if strings.Contains(line, "allocation failure: vlan ids exhausted") {
+			if !seen["vlan ids exhausted"] {
+				seen["vlan ids exhausted"] = true
+				signals = append(signals, "allocation failure: vlan ids exhausted")
+			}
+			continue
+		}
+		if strings.Contains(line, "vlan ids exhausted") && !seen["vlan ids exhausted"] {
+			seen["vlan ids exhausted"] = true
+			signals = append(signals, "vlan ids exhausted")
+		}
+		if len(signals) >= 2 {
+			return signals
+		}
+	}
+	return signals
 }
 
 func grafanaLogErrorSignals(entries []GrafanaLogEntry) []string {
@@ -806,7 +833,7 @@ func ensureAIAnalysisEvidenceSignals(analysis *AIAnalysis, testAnalysis Analysis
 }
 
 func ensureAIStepSummaryEvidenceSignals(summary string, analysis Analysis) string {
-	bullets := missingUnikornCREvidenceBullets(summary, analysis.UnikornCRs)
+	bullets := missingAIAnalysisEvidenceBullets(summary, analysis)
 	if len(bullets) == 0 {
 		return summary
 	}
@@ -822,7 +849,7 @@ func ensureAIStepSummaryEvidenceSignals(summary string, analysis Analysis) strin
 }
 
 func ensureAISlackSummaryEvidenceSignals(summary string, analysis Analysis) string {
-	bullets := missingUnikornCREvidenceBullets(summary, analysis.UnikornCRs)
+	bullets := missingAIAnalysisEvidenceBullets(summary, analysis)
 	if len(bullets) == 0 {
 		return summary
 	}
@@ -843,6 +870,51 @@ func ensureAISlackSummaryEvidenceSignals(summary string, analysis Analysis) stri
 	}
 
 	return trimmed + "\n" + strings.Join(bullets, "\n")
+}
+
+func missingAIAnalysisEvidenceBullets(summary string, analysis Analysis) []string {
+	var bullets []string
+	bullets = append(bullets, missingGrafanaLogEvidenceBullets(summary, analysis.GrafanaLogs)...)
+	bullets = append(bullets, missingUnikornCREvidenceBullets(summary, analysis.UnikornCRs)...)
+	if len(bullets) > 2 {
+		return bullets[:2]
+	}
+	return bullets
+}
+
+func missingGrafanaLogEvidenceBullets(summary string, enrichment *GrafanaLogEnrichment) []string {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return nil
+	}
+
+	lowerSummary := strings.ToLower(summary)
+	seen := map[string]bool{}
+	var bullets []string
+	for _, context := range enrichment.Contexts {
+		text, marker := compactGrafanaLogEvidenceSignal(context)
+		if text == "" || marker == "" {
+			continue
+		}
+		marker = strings.ToLower(marker)
+		if seen[marker] || strings.Contains(lowerSummary, marker) {
+			continue
+		}
+		seen[marker] = true
+		bullets = append(bullets, "- *Evidence:* "+text)
+		if len(bullets) >= 2 {
+			break
+		}
+	}
+	return bullets
+}
+
+func compactGrafanaLogEvidenceSignal(context GrafanaLogContext) (string, string) {
+	signals := grafanaLogConcreteErrorSignals(context.Entries)
+	if len(signals) == 0 {
+		return "", ""
+	}
+	signal := signals[0]
+	return "Grafana/Loki signal: controller error includes `" + signal + "`.", signal
 }
 
 func missingUnikornCREvidenceBullets(summary string, enrichment *UnikornCREnrichment) []string {
@@ -875,10 +947,6 @@ func compactUnikornCREvidenceSignal(context UnikornCRContext) (string, string) {
 	if context.Error != "" {
 		message := truncate(cleanOneLine(context.Error), 160)
 		return "Kubernetes CR lookup failed: `" + message + "`.", message
-	}
-	if context.ResultCount == 0 {
-		resource := firstNonEmpty(context.Resource, "requested resource")
-		return fmt.Sprintf("Kubernetes CR lookup found no matching `%s` object.", truncate(cleanOneLine(resource), 80)), "no matching"
 	}
 
 	signal := unikornCRSignalSummary(context)
