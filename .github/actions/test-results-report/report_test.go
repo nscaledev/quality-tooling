@@ -1203,6 +1203,8 @@ func TestEnsureAIAnalysisEvidenceSignalsAddsMissingUnikornCRSignal(t *testing.T)
 
 	aiAnalysis := &AIAnalysis{
 		StepSummary: "## Test Failure Analysis\n\n### Patterns\n| Category | What failed | Why it failed | Likely reason | Impact | Next check |\n| --- | --- | --- | --- | ---: | --- |\n| infra/external | Network setup | Network reached error | Network controller/backend issue | 1 failed | Inspect Network CR |\n",
+		SlackSummary: "- *Network setup* (infra/external): Network reached error instead of provisioned; inspect the Network CR.\n" +
+			"- *Action:* Use the GitHub build summary for test-level failure reasons; inspect network controller state, then rerun the focused suite.",
 	}
 	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
 		UnikornCRs: &UnikornCREnrichment{
@@ -1230,13 +1232,24 @@ func TestEnsureAIAnalysisEvidenceSignalsAddsMissingUnikornCRSignal(t *testing.T)
 	if strings.Contains(updated.StepSummary, "network-123") {
 		t.Fatalf("summary should not need exact CR object names for the deterministic evidence bullet:\n%s", updated.StepSummary)
 	}
+	if !strings.Contains(updated.SlackSummary, "Kubernetes CR signal") ||
+		!strings.Contains(updated.SlackSummary, "vlan ids exhausted") {
+		t.Fatalf("slack summary should include CR evidence signal:\n%s", updated.SlackSummary)
+	}
+	if strings.Index(updated.SlackSummary, "Kubernetes CR signal") > strings.Index(updated.SlackSummary, "- *Action:*") {
+		t.Fatalf("slack evidence should be inserted before the final action bullet:\n%s", updated.SlackSummary)
+	}
+	if strings.Contains(updated.SlackSummary, "network-123") {
+		t.Fatalf("slack summary should not need exact CR object names for the deterministic evidence bullet:\n%s", updated.SlackSummary)
+	}
 }
 
 func TestEnsureAIAnalysisEvidenceSignalsDoesNotDuplicateExistingUnikornCRSignal(t *testing.T) {
 	t.Parallel()
 
 	aiAnalysis := &AIAnalysis{
-		StepSummary: "## Test Failure Analysis\n\n### Suggested Next Checks\n- Kubernetes CR signal already says `vlan ids exhausted`.\n",
+		StepSummary:  "## Test Failure Analysis\n\n### Suggested Next Checks\n- Kubernetes CR signal already says `vlan ids exhausted`.\n",
+		SlackSummary: "- *Network setup* (infra/external): Kubernetes CR signal already says `vlan ids exhausted`.\n- *Action:* Rerun after checking capacity.",
 	}
 	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
 		UnikornCRs: &UnikornCREnrichment{
@@ -1253,6 +1266,9 @@ func TestEnsureAIAnalysisEvidenceSignalsDoesNotDuplicateExistingUnikornCRSignal(
 
 	if strings.Count(strings.ToLower(updated.StepSummary), "vlan ids exhausted") != 1 {
 		t.Fatalf("summary should not duplicate existing CR signal:\n%s", updated.StepSummary)
+	}
+	if strings.Count(strings.ToLower(updated.SlackSummary), "vlan ids exhausted") != 1 {
+		t.Fatalf("slack summary should not duplicate existing CR signal:\n%s", updated.SlackSummary)
 	}
 }
 

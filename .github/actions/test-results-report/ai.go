@@ -801,6 +801,7 @@ func ensureAIAnalysisEvidenceSignals(analysis *AIAnalysis, testAnalysis Analysis
 		return nil
 	}
 	analysis.StepSummary = ensureAIStepSummaryEvidenceSignals(analysis.StepSummary, testAnalysis)
+	analysis.SlackSummary = ensureAISlackSummaryEvidenceSignals(analysis.SlackSummary, testAnalysis)
 	return analysis
 }
 
@@ -818,6 +819,30 @@ func ensureAIStepSummaryEvidenceSignals(summary string, analysis Analysis) strin
 		return trimmed + "\n" + strings.Join(bullets, "\n")
 	}
 	return trimmed + "\n\n### Suggested Next Checks\n" + strings.Join(bullets, "\n")
+}
+
+func ensureAISlackSummaryEvidenceSignals(summary string, analysis Analysis) string {
+	bullets := missingUnikornCREvidenceBullets(summary, analysis.UnikornCRs)
+	if len(bullets) == 0 {
+		return summary
+	}
+
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return strings.Join(bullets, "\n")
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	for index, line := range lines {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "- *action:*") {
+			updated := append([]string{}, lines[:index]...)
+			updated = append(updated, bullets...)
+			updated = append(updated, lines[index:]...)
+			return strings.Join(updated, "\n")
+		}
+	}
+
+	return trimmed + "\n" + strings.Join(bullets, "\n")
 }
 
 func missingUnikornCREvidenceBullets(summary string, enrichment *UnikornCREnrichment) []string {
