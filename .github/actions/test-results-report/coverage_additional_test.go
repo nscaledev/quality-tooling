@@ -193,6 +193,19 @@ func TestAIPlanningInputAndExtractionBranches(t *testing.T) {
 			t.Fatalf("planning input missing %q:\n%s", expected, input)
 		}
 	}
+	if grafanaLogQueryPlanningTimeout != 90*time.Second {
+		t.Fatalf("grafana query planning timeout = %s, want 1m30s", grafanaLogQueryPlanningTimeout)
+	}
+	planningPrompt := grafanaLogQueryPlanningPrompt()
+	for _, expected := range []string{
+		"provisioningStatus/error state mismatches",
+		"resource UUIDs",
+		"cloud resource names",
+	} {
+		if !strings.Contains(planningPrompt, expected) {
+			t.Fatalf("planning prompt missing backend signal %q:\n%s", expected, planningPrompt)
+		}
+	}
 
 	for _, tc := range []struct {
 		output string

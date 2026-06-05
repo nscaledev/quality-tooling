@@ -40,7 +40,7 @@ const aiSlackDelimiter = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
 
 var (
 	runGrafanaLogQueryPlanning     = runClaudeGrafanaLogQueryPlanning
-	grafanaLogQueryPlanningTimeout = 30 * time.Second
+	grafanaLogQueryPlanningTimeout = 90 * time.Second
 )
 
 func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*AIAnalysis, error) {
@@ -187,6 +187,7 @@ Rules:
 - Inspect the failed test names, suites, locations, error messages, captured output, environment, and previous-result comparison.
 - Only create queries for failures that appear backend-related or need backend evidence to confirm the likely cause.
 - Do not query for purely client-side assertion failures when there is no backend signal.
+- Treat resource provisioning timeouts, provisioningStatus/error state mismatches, API 5xx/4xx responses, trace IDs, request IDs, resource UUIDs, and cloud resource names as backend signals that justify a query.
 - Use the exact failure_ref values from the input.
 - test_name must match the input Test value for that failure_ref.
 - expected_error must be the exact error message or shortest exact error signature from the failure evidence; leave it empty when there is no exact backend-looking error.
