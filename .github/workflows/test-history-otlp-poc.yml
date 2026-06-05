@@ -16,9 +16,9 @@ on:
         required: false
         default: agent-collector
       grafana-app:
-        description: Teleport app name for the Grafana tunnel.
+        description: Teleport app name for the Grafana tunnel used to verify observability-cluster ingest.
         required: false
-        default: nks-stg-europe-west2-grafana
+        default: wo11y-grafana-dev
       loki-datasource-uid:
         description: Optional Grafana Loki datasource UID to query through MCP. Leave empty to use the first discovered Loki datasource.
         required: false
