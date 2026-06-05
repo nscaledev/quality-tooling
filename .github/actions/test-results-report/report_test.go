@@ -872,6 +872,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason",
 		"For Grafana-backed bullets, explicitly connect the test error",
 		"For CR-backed bullets, explicitly connect the test error",
+		"Keep Slack as an overall summary by suite/failure category",
 		`Do not use vague phrases like "Grafana returned related activity"`,
 		`Do not use vague phrases like "CR state looked related"`,
 		"If Grafana only returned audit/cleanup rows",
@@ -881,7 +882,7 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"keep temporary sentinel/test-validation failures short",
 		"Include only the evidence needed to justify the category",
 		"avoid selector names, file paths, and retry details",
-		"Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*'",
+		"Do not add standalone supporting bullets such as '- *Evidence:*'",
 		"For intentional or sentinel skipped tests",
 		"re-enabled",
 		"For intentional or sentinel failed tests",
@@ -892,7 +893,6 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Do not mention test-level failure reasons for skip-only runs",
 		"- *Auth / all suites* (infra/external):",
 		"| Suite / area | Representative tests | Failure reason | Count |",
-		"- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.",
 		"- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457",
 		"- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window",
 		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
@@ -1242,8 +1242,15 @@ func TestEnsureAIAnalysisEvidenceSignalsAddsMissingUnikornCRSignal(t *testing.T)
 		!strings.Contains(updated.SlackSummary, "allocation failure: vlan ids exhausted") {
 		t.Fatalf("slack summary should include CR evidence signal:\n%s", updated.SlackSummary)
 	}
+	if strings.Contains(updated.SlackSummary, "- *Evidence:*") {
+		t.Fatalf("slack summary should not add a standalone evidence bullet:\n%s", updated.SlackSummary)
+	}
+	firstLine := strings.Split(updated.SlackSummary, "\n")[0]
+	if !strings.Contains(firstLine, "Kubernetes CR signal") {
+		t.Fatalf("slack summary should keep CR signal in the suite/category bullet:\n%s", updated.SlackSummary)
+	}
 	if strings.Index(updated.SlackSummary, "Kubernetes CR signal") > strings.Index(updated.SlackSummary, "- *Action:*") {
-		t.Fatalf("slack evidence should be inserted before the final action bullet:\n%s", updated.SlackSummary)
+		t.Fatalf("slack CR signal should appear before the final action bullet:\n%s", updated.SlackSummary)
 	}
 	if strings.Contains(updated.SlackSummary, "network-123") {
 		t.Fatalf("slack summary should not need exact CR object names for the deterministic evidence bullet:\n%s", updated.SlackSummary)
@@ -1305,8 +1312,15 @@ func TestEnsureAIAnalysisEvidenceSignalsAddsConcreteGrafanaSignal(t *testing.T) 
 			t.Fatalf("summary should include concrete Grafana signal:\n%s", summary)
 		}
 	}
+	if strings.Contains(updated.SlackSummary, "- *Evidence:*") {
+		t.Fatalf("slack summary should not add a standalone evidence bullet:\n%s", updated.SlackSummary)
+	}
+	firstLine := strings.Split(updated.SlackSummary, "\n")[0]
+	if !strings.Contains(firstLine, "Grafana/Loki signal") {
+		t.Fatalf("slack summary should keep Grafana signal in the suite/category bullet:\n%s", updated.SlackSummary)
+	}
 	if strings.Index(updated.SlackSummary, "Grafana/Loki signal") > strings.Index(updated.SlackSummary, "- *Action:*") {
-		t.Fatalf("slack evidence should be inserted before the final action bullet:\n%s", updated.SlackSummary)
+		t.Fatalf("slack Grafana signal should appear before the final action bullet:\n%s", updated.SlackSummary)
 	}
 }
 

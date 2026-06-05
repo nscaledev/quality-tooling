@@ -152,12 +152,12 @@ Section 2: Plain text Slack summary.
 - Do not use vague phrases like "Grafana returned related activity" unless you also say what Grafana showed or did not show.
 - Do not use vague phrases like "CR state looked related" unless you name the CR kind/name and the status/condition/query failure signal.
 - If Grafana only returned audit/cleanup rows, say that and point the action to the resource creation or provisioning transition period; if Grafana returned error signals, name the signals.
+- Keep Slack as an overall summary by suite/failure category; include concrete Grafana or CR signals inside the relevant suite/category bullet, not as separate evidence lines.
 - Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
 - Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
 - Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
-- Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*' when it makes Slack easier to act on.
-- Do not add standalone Evidence bullets for skipped-only patterns or empty post-cleanup CR lookups; mention them only when they materially change the next action.
+- Do not add standalone supporting bullets such as '- *Evidence:*', '- *Impact:*', '- *Details:*', or '- *Confidence:*'.
 - For intentional or sentinel skipped tests, use the skipped category and one short phrase that says when the skip should be removed or re-enabled; do not mention issue alerting unless it appears in the evidence.
 - For intentional or sentinel failed tests, use one short phrase that says it is temporary and should be removed or disabled before review; do not mention issue alerting unless it appears in the evidence.
 - Do not list every failed or skipped test.
@@ -168,7 +168,6 @@ Section 2: Plain text Slack summary.
 
 Use this shape:
 - *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
-- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.
 - *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
 - *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window, so inspect controller/provisioner logs around resource creation and the pending-to-error transition.
 - *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
@@ -852,47 +851,129 @@ func ensureAIStepSummaryEvidenceSignals(summary string, analysis Analysis) strin
 }
 
 func ensureAISlackSummaryEvidenceSignals(summary string, analysis Analysis) string {
-	bullets := missingAIAnalysisEvidenceBullets(summary, analysis)
-	if len(bullets) == 0 {
+	evidence := missingAIAnalysisEvidenceTexts(summary, analysis)
+	if len(evidence) == 0 {
 		return summary
 	}
 
 	trimmed := strings.TrimSpace(summary)
 	if trimmed == "" {
-		return strings.Join(bullets, "\n")
+		return formatSlackEvidencePatternLine(evidence)
 	}
 
 	lines := strings.Split(trimmed, "\n")
+	targetIndex := -1
+	actionIndex := -1
 	for index, line := range lines {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "- *action:*") {
-			updated := append([]string{}, lines[:index]...)
-			updated = append(updated, bullets...)
-			updated = append(updated, lines[index:]...)
-			return strings.Join(updated, "\n")
+		trimmedLine := strings.TrimSpace(line)
+		lowerLine := strings.ToLower(trimmedLine)
+		if strings.HasPrefix(lowerLine, "- *action:*") {
+			if actionIndex < 0 {
+				actionIndex = index
+			}
+			continue
+		}
+		if isSlackSupportBullet(lowerLine) {
+			continue
+		}
+		if strings.HasPrefix(trimmedLine, "- *") && !strings.Contains(lowerLine, "(skipped):") {
+			targetIndex = index
+			break
 		}
 	}
+	if targetIndex < 0 {
+		fallbackLine := formatSlackEvidencePatternLine(evidence)
+		if actionIndex >= 0 {
+			updated := append([]string{}, lines[:actionIndex]...)
+			updated = append(updated, fallbackLine)
+			updated = append(updated, lines[actionIndex:]...)
+			return strings.Join(updated, "\n")
+		}
+		return trimmed + "\n" + fallbackLine
+	}
 
-	return trimmed + "\n" + strings.Join(bullets, "\n")
+	lines[targetIndex] = appendEvidenceToSlackPatternLine(lines[targetIndex], evidence)
+	return strings.Join(lines, "\n")
+}
+
+func isSlackSupportBullet(lowerLine string) bool {
+	for _, prefix := range []string{"- *evidence:*", "- *impact:*", "- *details:*", "- *confidence:*"} {
+		if strings.HasPrefix(lowerLine, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendEvidenceToSlackPatternLine(line string, evidence []string) string {
+	trimmedLine := strings.TrimRight(line, " \t")
+	var additions []string
+	for _, text := range evidence {
+		text = strings.TrimSpace(strings.TrimSuffix(text, "."))
+		if text == "" {
+			continue
+		}
+		additions = append(additions, text)
+	}
+	if len(additions) == 0 {
+		return line
+	}
+	separator := ";"
+	if strings.HasSuffix(trimmedLine, ".") {
+		separator = ""
+	}
+	return trimmedLine + separator + " " + strings.Join(additions, "; ") + "."
+}
+
+func formatSlackEvidencePatternLine(evidence []string) string {
+	text := strings.TrimSpace(strings.Join(trimEvidenceSentences(evidence), "; "))
+	if text == "" {
+		text = "No suite/category summary was available from AI analysis."
+	}
+	if !strings.HasSuffix(text, ".") {
+		text += "."
+	}
+	return "- *Backend signals* (unknown/mixed): " + text
+}
+
+func trimEvidenceSentences(evidence []string) []string {
+	var trimmed []string
+	for _, text := range evidence {
+		text = strings.TrimSpace(strings.TrimSuffix(text, "."))
+		if text != "" {
+			trimmed = append(trimmed, text)
+		}
+	}
+	return trimmed
 }
 
 func missingAIAnalysisEvidenceBullets(summary string, analysis Analysis) []string {
-	var bullets []string
-	bullets = append(bullets, missingGrafanaLogEvidenceBullets(summary, analysis.GrafanaLogs)...)
-	bullets = append(bullets, missingUnikornCREvidenceBullets(summary, analysis.UnikornCRs)...)
-	if len(bullets) > 2 {
-		return bullets[:2]
+	texts := missingAIAnalysisEvidenceTexts(summary, analysis)
+	bullets := make([]string, 0, len(texts))
+	for _, text := range texts {
+		bullets = append(bullets, "- "+text)
 	}
 	return bullets
 }
 
-func missingGrafanaLogEvidenceBullets(summary string, enrichment *GrafanaLogEnrichment) []string {
+func missingAIAnalysisEvidenceTexts(summary string, analysis Analysis) []string {
+	var texts []string
+	texts = append(texts, missingGrafanaLogEvidenceTexts(summary, analysis.GrafanaLogs)...)
+	texts = append(texts, missingUnikornCREvidenceTexts(summary, analysis.UnikornCRs)...)
+	if len(texts) > 2 {
+		return texts[:2]
+	}
+	return texts
+}
+
+func missingGrafanaLogEvidenceTexts(summary string, enrichment *GrafanaLogEnrichment) []string {
 	if enrichment == nil || len(enrichment.Contexts) == 0 {
 		return nil
 	}
 
 	lowerSummary := strings.ToLower(summary)
 	seen := map[string]bool{}
-	var bullets []string
+	var texts []string
 	for _, context := range enrichment.Contexts {
 		text, marker := compactGrafanaLogEvidenceSignal(context)
 		if text == "" || marker == "" {
@@ -903,12 +984,12 @@ func missingGrafanaLogEvidenceBullets(summary string, enrichment *GrafanaLogEnri
 			continue
 		}
 		seen[marker] = true
-		bullets = append(bullets, "- *Evidence:* "+text)
-		if len(bullets) >= 2 {
+		texts = append(texts, text)
+		if len(texts) >= 2 {
 			break
 		}
 	}
-	return bullets
+	return texts
 }
 
 func compactGrafanaLogEvidenceSignal(context GrafanaLogContext) (string, string) {
@@ -920,14 +1001,14 @@ func compactGrafanaLogEvidenceSignal(context GrafanaLogContext) (string, string)
 	return "Grafana/Loki signal: controller error includes `" + signal + "`.", signal
 }
 
-func missingUnikornCREvidenceBullets(summary string, enrichment *UnikornCREnrichment) []string {
+func missingUnikornCREvidenceTexts(summary string, enrichment *UnikornCREnrichment) []string {
 	if enrichment == nil || len(enrichment.Contexts) == 0 {
 		return nil
 	}
 
 	lowerSummary := strings.ToLower(summary)
 	seen := map[string]bool{}
-	var bullets []string
+	var texts []string
 	for _, context := range enrichment.Contexts {
 		text, marker := compactUnikornCREvidenceSignal(context)
 		if text == "" || marker == "" {
@@ -938,12 +1019,12 @@ func missingUnikornCREvidenceBullets(summary string, enrichment *UnikornCREnrich
 			continue
 		}
 		seen[marker] = true
-		bullets = append(bullets, "- *Evidence:* "+text)
-		if len(bullets) >= 2 {
+		texts = append(texts, text)
+		if len(texts) >= 2 {
 			break
 		}
 	}
-	return bullets
+	return texts
 }
 
 func compactUnikornCREvidenceSignal(context UnikornCRContext) (string, string) {
