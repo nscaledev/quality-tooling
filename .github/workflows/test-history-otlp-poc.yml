@@ -20,7 +20,7 @@ on:
         required: false
         default: wo11y-grafana-dev
       loki-datasource-uid:
-        description: Optional Grafana Loki datasource UID to query through MCP. Leave empty to use the first discovered Loki datasource.
+        description: Optional Grafana Loki datasource UID to query through MCP. Leave empty to prefer logs-all, then the default/first discovered Loki datasource.
         required: false
         default: ''
       query-timeout-seconds:
@@ -334,8 +334,9 @@ jobs:
               print(f"Configured Loki datasource UID {datasource_uid!r} was not found; falling back to discovered datasource")
               datasource_uid = ""
           if not datasource_uid:
+            logs_all_datasource = next((item for item in datasource_items if item.get("uid") == "logs-all"), None)
             default_datasource = next((item for item in datasource_items if item.get("isDefault")), None)
-            selected = default_datasource or (datasource_items[0] if datasource_items else None)
+            selected = logs_all_datasource or default_datasource or (datasource_items[0] if datasource_items else None)
             if not selected or not selected.get("uid"):
               raise RuntimeError("Grafana MCP returned no Loki datasources")
             datasource_uid = selected["uid"]
