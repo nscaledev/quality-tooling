@@ -265,9 +265,10 @@ Expected output:
 
 Rules:
 - Inspect the failed test names, suites, locations, error messages, captured output, environment, and previous-result comparison.
-- Only create CR lookups for failures where Kubernetes custom-resource state could materially improve the failure analysis.
-- Do not create CR lookups for purely client-side assertions, local test framework failures, auth/token failures with no resource name, or failures without any backend/resource signal.
-- Treat provisioning timeouts, Error/Failed CR states, deleted/missing resources, finalizers, owner references, cloud resource UUIDs, VPC/network/load balancer/instance/file storage resource names, and controller-owned custom resources as signals that can justify a lookup.
+- Do not use CRs as the default failure source. The suite report is primary; Grafana/logs and Claude should handle non-resource failures.
+- Only create CR lookups for failures where Kubernetes custom-resource state could materially improve the failure analysis and the failure evidence contains a Unikorn/Kubernetes resource lifecycle signal.
+- Do not create CR lookups for purely client-side assertions, local test framework failures, auth/token failures with no resource name, API validation errors, HTTP auth/config errors, generic 4xx/5xx responses without resource lifecycle evidence, or cleanup-only not_found errors unless the failure is about a Kubernetes-owned resource lifecycle.
+- Treat provisioning timeouts, Error/Failed CR states, deleted/missing Kubernetes-owned resources, finalizers, owner references, cloud resource UUIDs, VPC/network/load balancer/instance/file storage resource names, and controller-owned custom resources as signals that can justify a lookup.
 - Use the exact failure_ref values from the input.
 - test_name must match the input Test value for that failure_ref.
 - resource must be one kubectl resource identifier, preferably plural.group form such as networks.region.unikorn-cloud.org. Never include spaces, flags, pipes, or shell syntax.
