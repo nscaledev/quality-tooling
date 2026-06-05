@@ -354,27 +354,34 @@ jobs:
               result = result.get("labels", result.get("data", []))
             return sorted(label for label in result if isinstance(label, str) and label)
 
-          def add_query(queries, seen, label, matcher, value, line_filters, description, exclude_transport=False):
+          def add_query(queries, seen, label, matcher, value, line_filters, description, exclude_infra=False, exclude_line_filters=None):
             if not label or not value:
               return
             operator = "=" if matcher == "=" else "=~"
             matchers = [f'{label}{operator}"{logql_escape(value)}"']
-            if exclude_transport:
+            if exclude_infra:
               matchers.extend([
                 'namespace!="teleport"',
-                'job!="teleport/nks-stg-teleport-kube-agent"',
+                'namespace!="loki"',
+                'namespace!="grafana"',
+                'app!="loki"',
+                'app!="grafana"',
                 'service_name!="nks-stg-teleport-kube-agent"',
+                'service_name!="loki"',
+                'service_name!="grafana"',
               ])
             selector = "{" + ",".join(matchers) + "}"
             query = selector
             for line_filter in line_filters:
               query = f'{query} |= "{logql_escape(line_filter)}"'
+            for line_filter in exclude_line_filters or []:
+              query = f'{query} != "{logql_escape(line_filter)}"'
             if query in seen:
               return
             seen.add(query)
             queries.append((description, query))
 
-          def is_transport_match(entry):
+          def is_infra_match(entry):
             labels = entry.get("labels", {}) if isinstance(entry, dict) else {}
             joined = " ".join([
               labels.get("namespace", ""),
@@ -383,7 +390,7 @@ jobs:
               labels.get("app", ""),
               labels.get("pod", ""),
             ]).lower()
-            return "teleport" in joined
+            return any(token in joined for token in ["teleport", "loki", "grafana"])
 
           def build_queries(labels):
             label_set = set(labels)
@@ -396,6 +403,7 @@ jobs:
             run_id = os.environ.get("GITHUB_RUN_ID", "")
             repository = os.environ.get("GITHUB_REPOSITORY", "")
             body_filters = ["test_history result passed", marker]
+            query_log_filters = ["query_range", "/loki/api/v1", "logql", "query="]
 
             exact_candidates = [
               ("test_history_suite", marker, [], "suite label"),
@@ -407,7 +415,7 @@ jobs:
             ]
             for label, value, line_filters, description in exact_candidates:
               if known(label):
-                add_query(queries, seen, label, "=", value, line_filters, description)
+                add_query(queries, seen, label, "=", value, line_filters, description, exclude_line_filters=query_log_filters)
 
             broad_labels = [
               "service_name",
@@ -425,13 +433,13 @@ jobs:
             ]
             for label in broad_labels:
               if known(label):
-                add_query(queries, seen, label, "=~", ".+", body_filters, f"{label} body search", exclude_transport=True)
+                add_query(queries, seen, label, "=~", ".+", body_filters, f"{label} body search", exclude_infra=True, exclude_line_filters=query_log_filters)
 
             if label_set and len(queries) < 3:
               for label in labels:
                 if label.startswith("__"):
                   continue
-                add_query(queries, seen, label, "=~", ".+", body_filters, f"{label} body search", exclude_transport=True)
+                add_query(queries, seen, label, "=~", ".+", body_filters, f"{label} body search", exclude_infra=True, exclude_line_filters=query_log_filters)
                 if len(queries) >= 5:
                   break
 
@@ -490,10 +498,10 @@ jobs:
                 continue
 
               raw_entries = entries_from_result(result)
-              transport_entries = [entry for entry in raw_entries if is_transport_match(entry)]
-              entries = [entry for entry in raw_entries if not is_transport_match(entry)]
-              if transport_entries:
-                print(f"Ignored {len(transport_entries)} transport/proxy match(es) for {description!r}")
+              infra_entries = [entry for entry in raw_entries if is_infra_match(entry)]
+              entries = [entry for entry in raw_entries if not is_infra_match(entry)]
+              if infra_entries:
+                print(f"Ignored {len(infra_entries)} infrastructure/query match(es) for {description!r}")
               attempt_result.append(f"{description}={len(entries)}")
               if entries:
                 print("Found POC test history event in Loki.")
