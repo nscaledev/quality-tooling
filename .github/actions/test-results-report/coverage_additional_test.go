@@ -107,6 +107,50 @@ esac
 	}
 }
 
+func TestClaudeGrafanaLogQueryPlanningTimeoutIsCapped(t *testing.T) {
+	previousTimeout := grafanaLogQueryPlanningTimeout
+	grafanaLogQueryPlanningTimeout = 20 * time.Millisecond
+	defer func() {
+		grafanaLogQueryPlanningTimeout = previousTimeout
+	}()
+
+	dir := t.TempDir()
+	npxPath := filepath.Join(dir, "npx")
+	script := `#!/bin/sh
+cat >/dev/null
+sleep 5
+printf '{"queries":[]}'
+`
+	if err := os.WriteFile(npxPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake npx: %v", err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	analysis := Analysis{
+		Stats: Stats{Failed: 1, Total: 1},
+		Failures: []TestCase{{
+			Name:    "creates network",
+			Message: "network reached error instead of provisioned",
+		}},
+	}
+	started := time.Now()
+	_, err := runClaudeGrafanaLogQueryPlanning(context.Background(), Config{
+		EnableAIAnalysis:      true,
+		ClaudeToken:           "token",
+		GrafanaLogMaxFailures: 1,
+	}, analysis)
+	if err == nil {
+		t.Fatal("expected Grafana query planning timeout error")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Grafana query planning timeout took too long: %s", elapsed)
+	}
+	if !strings.Contains(err.Error(), "run claude grafana log query planning") {
+		t.Fatalf("unexpected timeout error: %v", err)
+	}
+}
+
 func TestAIPlanningInputAndExtractionBranches(t *testing.T) {
 	t.Parallel()
 

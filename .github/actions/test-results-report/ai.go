@@ -38,7 +38,10 @@ type AIInputOptions struct {
 
 const aiSlackDelimiter = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
 
-var runGrafanaLogQueryPlanning = runClaudeGrafanaLogQueryPlanning
+var (
+	runGrafanaLogQueryPlanning     = runClaudeGrafanaLogQueryPlanning
+	grafanaLogQueryPlanningTimeout = 30 * time.Second
+)
 
 func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*AIAnalysis, error) {
 	if !config.EnableAIAnalysis {
@@ -153,7 +156,7 @@ func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analys
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, grafanaLogQueryPlanningTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", grafanaLogQueryPlanningPrompt())
