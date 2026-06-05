@@ -1,37 +1,37 @@
 name: Grafana MCP Fetch POC
 
+run-name: Grafana MCP Prompt POC - ${{ github.event.inputs['grafana-app'] || 'nks-stg-europe-west2-grafana' }}
+
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/grafana-mcp-fetch-poc.yml'
   workflow_dispatch:
     inputs:
       grafana-app:
-        description: Teleport app name for the Grafana tunnel.
+        description: Teleport Grafana app name.
         required: false
         default: nks-stg-europe-west2-grafana
       loki-datasource-uid:
-        description: Grafana Loki datasource UID. Leave empty to discover by name/default.
+        description: Preferred Grafana Loki datasource UID.
         required: false
-        default: product-loki
-      loki-datasource-name:
-        description: Grafana Loki datasource name used when UID is empty.
-        required: false
-        default: Loki
+        default: loki
       logql:
-        description: LogQL query to execute through Grafana MCP.
+        description: LogQL hint for recent instance failure logs.
         required: false
-        default: '{service_name="test-results-report"}'
+        default: '{namespace=~".+"} |~ "(?i)(instance|server|vm|compute).*(fail|error|exception|timeout)|(fail|error|exception|timeout).*(instance|server|vm|compute)"'
       lookback-minutes:
         description: Query lookback window in minutes.
         required: false
         default: '60'
       limit:
-        description: Maximum Loki rows to fetch.
+        description: Maximum Loki log rows to ask Claude to fetch.
         required: false
         default: '10'
-      fail-on-empty:
-        description: Fail the workflow when Loki returns no rows.
+      prompt:
+        description: Natural-language prompt for Claude to run against Grafana MCP.
         required: false
-        type: boolean
-        default: false
+        default: 'Fetch recent instance failure logs from Loki using Grafana MCP, then print a compact table and short analysis.'
 
 permissions:
   contents: read
@@ -39,82 +39,21 @@ permissions:
 
 jobs:
   fetch:
-    name: Fetch Loki data through Grafana MCP
+    name: Prompt Grafana MCP for instance failure logs
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
+      GRAFANA_APP: ${{ github.event.inputs['grafana-app'] || 'nks-stg-europe-west2-grafana' }}
       GRAFANA_MCP_PORT: '8000'
       GRAFANA_MCP_VERSION: v0.7.10
-      GRAFANA_ORG_ID: '1'
       GRAFANA_TUNNEL_PORT: '3000'
+      LIMIT: ${{ github.event.inputs.limit || '10' }}
+      LOKI_DATASOURCE_UID: ${{ github.event.inputs['loki-datasource-uid'] || 'loki' }}
+      LOGQL: ${{ github.event.inputs.logql || '{namespace=~".+"} |~ "(?i)(instance|server|vm|compute).*(fail|error|exception|timeout)|(fail|error|exception|timeout).*(instance|server|vm|compute)"' }}
+      LOOKBACK_MINUTES: ${{ github.event.inputs['lookback-minutes'] || '60' }}
+      USER_PROMPT: ${{ github.event.inputs.prompt || 'Fetch recent instance failure logs from Loki using Grafana MCP, then print a compact table and short analysis.' }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write POC input summary
-        shell: bash
-        env:
-          INPUT_GRAFANA_APP: ${{ inputs.grafana-app }}
-          INPUT_LOKI_DATASOURCE_UID: ${{ inputs.loki-datasource-uid }}
-          INPUT_LOKI_DATASOURCE_NAME: ${{ inputs.loki-datasource-name }}
-          INPUT_LOOKBACK_MINUTES: ${{ inputs.lookback-minutes }}
-          INPUT_LIMIT: ${{ inputs.limit }}
-          INPUT_FAIL_ON_EMPTY: ${{ inputs.fail-on-empty }}
-        run: |
-          set -euo pipefail
-
-          {
-            echo "## Grafana MCP Fetch POC"
-            echo
-            echo "### Minimal CI Snippet"
-            echo
-            echo '```yaml'
-            echo 'permissions:'
-            echo '  contents: read'
-            echo '  id-token: write'
-            echo
-            echo 'steps:'
-            echo '  - uses: teleport-actions/setup@a820ebbf1bc1a496efca348ad21042d6e8df73a6'
-            echo '    with:'
-            echo '      version: auto'
-            echo '      proxy: nscale.teleport.sh:443'
-            echo
-            echo '  - uses: teleport-actions/application-tunnel@bb7a8fbfb67b85d26013554f10d71dd032c1c764'
-            echo '    with:'
-            echo '      proxy: nscale.teleport.sh:443'
-            echo '      token: github-grafana-access'
-            printf '      app: $%s inputs.grafana-app %s\n' '{{' '}}'
-            echo '      listen: tcp://127.0.0.1:3000'
-            echo
-            echo '  - name: Start mcp-grafana'
-            echo '    env:'
-            printf '      GRAFANA_SERVICE_ACCOUNT_TOKEN: $%s secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN %s\n' '{{' '}}'
-            echo '    run: |'
-            echo '      GRAFANA_URL=http://127.0.0.1:3000 \'
-            echo '      GRAFANA_SERVICE_ACCOUNT_TOKEN="$GRAFANA_SERVICE_ACCOUNT_TOKEN" \'
-            echo '      mcp-grafana -t streamable-http --address 127.0.0.1:8000 \'
-            echo '        --enabled-tools datasource,loki --disable-write &'
-            echo
-            echo '  - name: Query Loki through MCP'
-            echo '    run: |'
-            echo '      curl -sS http://127.0.0.1:8000/healthz'
-            echo '      # Call MCP tools/list_datasources or query_loki_logs from your test reporter.'
-            echo '```'
-            echo
-            echo "### Current Run Inputs"
-            echo
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Grafana app | \`${INPUT_GRAFANA_APP}\` |"
-            echo "| Loki datasource UID | \`${INPUT_LOKI_DATASOURCE_UID:-<discover>}\` |"
-            echo "| Loki datasource name | \`${INPUT_LOKI_DATASOURCE_NAME:-<default>}\` |"
-            echo "| Lookback minutes | \`${INPUT_LOOKBACK_MINUTES}\` |"
-            echo "| Limit | \`${INPUT_LIMIT}\` |"
-            echo "| Fail on empty | \`${INPUT_FAIL_ON_EMPTY}\` |"
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Install Teleport clients for Grafana tunnel
         uses: teleport-actions/setup@a820ebbf1bc1a496efca348ad21042d6e8df73a6
         with:
@@ -126,7 +65,7 @@ jobs:
         with:
           proxy: nscale.teleport.sh:443
           token: github-grafana-access
-          app: ${{ inputs.grafana-app }}
+          app: ${{ env.GRAFANA_APP }}
           listen: tcp://127.0.0.1:${{ env.GRAFANA_TUNNEL_PORT }}
           timeout-ms: '60000'
 
@@ -181,6 +120,7 @@ jobs:
       - name: Start Grafana MCP server
         shell: bash
         env:
+          GRAFANA_ORG_ID: '1'
           GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN }}
         run: |
           set -euo pipefail
@@ -216,247 +156,55 @@ jobs:
           cat "${RUNNER_TEMP}/mcp-grafana.log" || true
           exit 1
 
-      - name: Fetch Loki data through Grafana MCP
-        id: fetch
+      - name: Ask Claude to query Grafana MCP
         shell: bash
         env:
-          INPUT_LOKI_DATASOURCE_UID: ${{ inputs.loki-datasource-uid }}
-          INPUT_LOKI_DATASOURCE_NAME: ${{ inputs.loki-datasource-name }}
-          INPUT_LOGQL: ${{ inputs.logql }}
-          INPUT_LOOKBACK_MINUTES: ${{ inputs.lookback-minutes }}
-          INPUT_LIMIT: ${{ inputs.limit }}
-          INPUT_FAIL_ON_EMPTY: ${{ inputs.fail-on-empty }}
-          OUTPUT_JSON: ${{ runner.temp }}/grafana-mcp-fetch-result.json
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
 
-          python3 <<'PY'
-          import datetime as dt
-          import html
-          import json
-          import os
-          import re
-          import sys
-          import urllib.request
+          if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN}" ]]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN secret is required for the prompt-driven MCP POC"
+            exit 1
+          fi
+          echo "::add-mask::${CLAUDE_CODE_OAUTH_TOKEN}"
 
-          endpoint = f"http://127.0.0.1:{os.environ['GRAFANA_MCP_PORT']}/mcp"
-          datasource_uid_input = os.environ.get("INPUT_LOKI_DATASOURCE_UID", "").strip()
-          datasource_name_input = os.environ.get("INPUT_LOKI_DATASOURCE_NAME", "").strip()
-          logql = os.environ["INPUT_LOGQL"].strip()
-          lookback_minutes = int(os.environ["INPUT_LOOKBACK_MINUTES"])
-          limit = int(os.environ["INPUT_LIMIT"])
-          fail_on_empty = os.environ["INPUT_FAIL_ON_EMPTY"].lower() == "true"
-          output_json = os.environ["OUTPUT_JSON"]
-          protocol_version = "2024-11-05"
-          session_id = None
-          next_id = 0
-
-          if not logql:
-            raise RuntimeError("logql input must not be empty")
-          if lookback_minutes < 1 or lookback_minutes > 1440:
-            raise RuntimeError("lookback-minutes must be between 1 and 1440")
-          if limit < 1 or limit > 100:
-            raise RuntimeError("limit must be between 1 and 100")
-
-          def decode_response(content_type, body):
-            payload = body.decode("utf-8").strip()
-            if "text/event-stream" in content_type or payload.startswith(("event:", "data:")):
-              for event in payload.replace("\r\n", "\n").split("\n\n"):
-                data = "\n".join(
-                  line.removeprefix("data:").strip()
-                  for line in event.split("\n")
-                  if line.startswith("data:")
-                ).strip()
-                if data.startswith("{"):
-                  payload = data
-                  break
-            return json.loads(payload)
-
-          def post(method, params=None, expect_response=True):
-            nonlocal_vars = globals()
-            nonlocal_vars["next_id"] += 1
-            payload = {"jsonrpc": "2.0", "method": method}
-            if expect_response:
-              payload["id"] = nonlocal_vars["next_id"]
-            if params is not None:
-              payload["params"] = params
-            data = json.dumps(payload).encode("utf-8")
-            headers = {
-              "Content-Type": "application/json",
-              "Accept": "application/json, text/event-stream",
-              "MCP-Protocol-Version": protocol_version,
+          mcp_config="${RUNNER_TEMP}/grafana-mcp-config.json"
+          cat > "$mcp_config" <<JSON
+          {
+            "mcpServers": {
+              "grafana": {
+                "type": "http",
+                "url": "http://127.0.0.1:${GRAFANA_MCP_PORT}/mcp"
+              }
             }
-            if nonlocal_vars["session_id"]:
-              headers["Mcp-Session-Id"] = nonlocal_vars["session_id"]
-            request = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
-            with urllib.request.urlopen(request, timeout=30) as response:
-              if response.headers.get("Mcp-Session-Id"):
-                nonlocal_vars["session_id"] = response.headers["Mcp-Session-Id"]
-              body = response.read()
-              if not body.strip():
-                return None
-              message = decode_response(response.headers.get("Content-Type", ""), body)
-            if message.get("error"):
-              raise RuntimeError(f"MCP {method} failed: {message['error']}")
-            return message.get("result")
+          }
+          JSON
 
-          def call_tool(name, arguments):
-            result = post("tools/call", {"name": name, "arguments": arguments})
-            if not result:
-              raise RuntimeError(f"MCP tool {name} returned an empty result")
-            if result.get("isError"):
-              raise RuntimeError(f"MCP tool {name} returned error: {result}")
-            text = "\n".join(
-              item.get("text", "")
-              for item in result.get("content", [])
-              if item.get("type") == "text"
-            ).strip()
-            if text.startswith("```"):
-              text = "\n".join(text.splitlines()[1:-1]).strip()
-            return json.loads(text) if text else result
+          start_rfc3339="$(date -u -d "-${LOOKBACK_MINUTES} minutes" +"%Y-%m-%dT%H:%M:%SZ")"
+          end_rfc3339="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          def datasource_items(payload):
-            if isinstance(payload, dict):
-              return payload.get("datasources", [])
-            if isinstance(payload, list):
-              return payload
-            return []
+          prompt="${USER_PROMPT}
 
-          def choose_datasource(items):
-            if datasource_uid_input:
-              for item in items:
-                if item.get("uid") == datasource_uid_input:
-                  return item
-              raise RuntimeError(f"Loki datasource UID {datasource_uid_input!r} was not returned by Grafana MCP")
-            if datasource_name_input:
-              for item in items:
-                if item.get("name") == datasource_name_input:
-                  return item
-            for item in items:
-              if item.get("isDefault"):
-                return item
-            if items:
-              return items[0]
-            raise RuntimeError("Grafana MCP returned no Loki datasources")
+          Use Grafana MCP tools only. List Loki datasources, then query datasource UID '${LOKI_DATASOURCE_UID}' with LogQL '${LOGQL}' from ${start_rfc3339} to ${end_rfc3339}, limit ${LIMIT}, direction backward.
 
-          def parse_timestamp(value):
-            if not value:
-              return "<unknown>"
-            text = str(value)
-            if text.isdigit():
-              number = int(text)
-              seconds = number / 1_000_000_000 if number > 10_000_000_000 else number
-              return dt.datetime.fromtimestamp(seconds, dt.timezone.utc).isoformat().replace("+00:00", "Z")
-            return text
+          Print the datasource, row count, a compact table of fetched log rows, and a short analysis of recent instance failure signals. Do not print secrets."
 
-          def compact_labels(labels):
-            if not isinstance(labels, dict):
-              return ""
-            keys = ["service_name", "namespace", "pod", "container", "app", "job"]
-            parts = [f"{key}={labels[key]}" for key in keys if labels.get(key)]
-            return ", ".join(parts[:4])
+          echo "=== Grafana MCP prompt ==="
+          printf '%s\n' "$prompt"
+          echo
+          echo "=== Grafana MCP result ==="
 
-          def component(labels):
-            if not isinstance(labels, dict):
-              return "<unknown>"
-            for key in ("service_name", "app", "pod", "container", "namespace", "job"):
-              if labels.get(key):
-                return labels[key]
-            return "<unknown>"
+          npx --yes @anthropic-ai/claude-code \
+            -p "$prompt" \
+            --mcp-config "$mcp_config" \
+            --allowedTools "mcp__grafana__list_datasources,mcp__grafana__query_loki_logs"
 
-          def table_cell(value, max_len=220):
-            text = str(value or "")
-            text = re.sub(r"\s+", " ", text).strip()
-            if len(text) > max_len:
-              text = text[: max_len - 1] + "..."
-            return html.escape(text.replace("|", "\\|"))
-
-          post("initialize", {
-            "protocolVersion": protocol_version,
-            "capabilities": {},
-            "clientInfo": {"name": "quality-tooling-grafana-mcp-fetch-poc", "version": "0.1.0"},
-          })
-          post("notifications/initialized", {}, expect_response=False)
-
-          datasources = datasource_items(call_tool("list_datasources", {"type": "loki", "limit": 100}))
-          datasource = choose_datasource(datasources)
-          datasource_uid = datasource.get("uid", "")
-          datasource_name = datasource.get("name", datasource_uid)
-
-          end = dt.datetime.now(dt.timezone.utc)
-          start = end - dt.timedelta(minutes=lookback_minutes)
-          result = call_tool("query_loki_logs", {
-            "datasourceUid": datasource_uid,
-            "logql": logql,
-            "startRfc3339": start.isoformat().replace("+00:00", "Z"),
-            "endRfc3339": end.isoformat().replace("+00:00", "Z"),
-            "limit": limit,
-            "direction": "backward",
-          })
-
-          entries = result.get("data", []) if isinstance(result, dict) else result
-          metadata = result.get("metadata", {}) if isinstance(result, dict) else {}
-          if not isinstance(entries, list):
-            entries = []
-
-          with open(output_json, "w", encoding="utf-8") as handle:
-            json.dump({
-              "datasource": datasource,
-              "startRfc3339": start.isoformat().replace("+00:00", "Z"),
-              "endRfc3339": end.isoformat().replace("+00:00", "Z"),
-              "limit": limit,
-              "lineCount": len(entries),
-              "metadata": metadata,
-              "entries": entries,
-            }, handle, indent=2, sort_keys=True)
-
-          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
-          with open(summary_path, "a", encoding="utf-8") as summary:
-            summary.write("### Grafana MCP Fetch Result\n\n")
-            summary.write("| Field | Value |\n")
-            summary.write("| --- | --- |\n")
-            summary.write(f"| Datasource | `{table_cell(datasource_name, 80)}` (`{table_cell(datasource_uid, 80)}`) |\n")
-            summary.write(f"| Time range | `{start.isoformat().replace('+00:00', 'Z')}` to `{end.isoformat().replace('+00:00', 'Z')}` |\n")
-            summary.write(f"| Rows returned | `{len(entries)}` |\n")
-            summary.write(f"| Truncated by MCP | `{str(bool(metadata.get('resultsTruncated'))).lower()}` |\n")
-            summary.write("\n")
-
-            if entries:
-              summary.write("### Fetched Rows\n\n")
-              summary.write("| # | Timestamp | Component | Labels | Message |\n")
-              summary.write("| ---: | --- | --- | --- | --- |\n")
-              for index, entry in enumerate(entries[:limit], start=1):
-                labels = entry.get("labels", {}) if isinstance(entry, dict) else {}
-                line = entry.get("line", "") if isinstance(entry, dict) else str(entry)
-                summary.write(
-                  f"| {index} | `{table_cell(parse_timestamp(entry.get('timestamp')), 80)}` "
-                  f"| `{table_cell(component(labels), 80)}` "
-                  f"| {table_cell(compact_labels(labels), 160)} "
-                  f"| {table_cell(line)} |\n"
-                )
-              summary.write("\n")
-            else:
-              summary.write("No rows were returned for the selected time range.\n\n")
-
-            summary.write(f"Raw MCP response JSON was written to `{output_json}` and uploaded as an artifact.\n")
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-            output.write(f"row-count={len(entries)}\n")
-            output.write(f"datasource-uid={datasource_uid}\n")
-            output.write(f"result-json={output_json}\n")
-
-          print(f"Fetched {len(entries)} Loki row(s) from datasource {datasource_uid}")
-          if fail_on_empty and not entries:
-            raise RuntimeError("Loki query returned no rows and fail-on-empty is true")
-          PY
-
-      - name: Upload Grafana MCP fetch result
-        if: always() && steps.fetch.outputs.result-json != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: grafana-mcp-fetch-result
-          path: ${{ steps.fetch.outputs.result-json }}
-          if-no-files-found: warn
+          {
+            echo "## Grafana MCP Prompt POC"
+            echo
+            echo "The build log prints the prompt and the Claude Code result from Grafana MCP."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dump Grafana MCP logs
         if: always()
