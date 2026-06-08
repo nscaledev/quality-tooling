@@ -469,7 +469,7 @@ func normalizeStatus(value string) TestStatus {
 	switch strings.ToLower(value) {
 	case "passed", "pass", "success", "expected", "flaky":
 		return StatusPassed
-	case "failed", "failure", "error", "unexpected", "timedout", "interrupted":
+	case "failed", "failure", "error", "unexpected", "timedout", "interrupted", "panicked", "aborted":
 		return StatusFailed
 	case "skipped", "skip", "pending":
 		return StatusSkipped

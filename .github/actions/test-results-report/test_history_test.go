@@ -92,6 +92,83 @@ func TestBuildTestHistoryEventsFromJUnitUsesAPIContractFields(t *testing.T) {
 	}
 }
 
+func TestBuildTestHistoryEventsFromGinkgoTreatsAbortAndPanicAsFailures(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	resultsPath := filepath.Join(tempDir, "ginkgo.json")
+	if err := os.WriteFile(resultsPath, []byte(`[
+  {
+    "SuiteDescription": "Ginkgo API",
+    "StartTime": "2026-06-02T10:00:00Z",
+    "SpecReports": [
+      {
+        "ContainerHierarchyTexts": ["Network Management"],
+        "LeafNodeText": "panics during setup",
+        "State": "panicked",
+        "StartTime": "2026-06-02T10:00:01Z",
+        "RunTime": 1000000000,
+        "Failure": {
+          "Message": "panic: nil pointer",
+          "Location": {"FileName": "network_test.go", "LineNumber": 42}
+        }
+      },
+      {
+        "ContainerHierarchyTexts": ["Network Management"],
+        "LeafNodeText": "aborts before cleanup",
+        "State": "aborted",
+        "StartTime": "2026-06-02T10:00:02Z",
+        "RunTime": 2000000000,
+        "Failure": {
+          "Message": "suite aborted",
+          "Location": {"FileName": "network_test.go", "LineNumber": 55}
+        }
+      }
+    ]
+  }
+]`), 0o600); err != nil {
+		t.Fatalf("write results: %v", err)
+	}
+	current, err := readAndParse(resultsPath, formatGinkgoJSON)
+	if err != nil {
+		t.Fatalf("readAndParse returned error: %v", err)
+	}
+	stats := calculateStats(current.Tests)
+	if stats.Failed != 2 || stats.Skipped != 0 || stats.Other != 0 {
+		t.Fatalf("Ginkgo panic/abort states should be failures, got %+v", stats)
+	}
+
+	events, err := buildTestHistoryEvents(Config{
+		TestResultsPath:       resultsPath,
+		Format:                formatGinkgoJSON,
+		TestHistoryRepo:       "nscaledev/uni-region",
+		TestHistorySuite:      "region-api",
+		TestHistoryEnv:        "stage",
+		TestHistoryRunID:      "run-1",
+		TestHistoryRunAttempt: 1,
+	}, current, time.Date(2026, 6, 2, 10, 0, 5, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("buildTestHistoryEvents returned error: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2", len(events))
+	}
+	for _, event := range events {
+		if event.Status != string(StatusFailed) {
+			t.Fatalf("panic/abort event should publish as failed: %+v", event)
+		}
+		if event.FailureMessageExcerpt == "" || event.FailureFingerprint == "" {
+			t.Fatalf("failed event should keep failure fields: %+v", event)
+		}
+	}
+	if events[0].FailureMessageExcerpt != "panic: nil pointer" {
+		t.Fatalf("unexpected panic failure excerpt: %+v", events[0])
+	}
+	if events[1].FailureMessageExcerpt != "suite aborted" {
+		t.Fatalf("unexpected abort failure excerpt: %+v", events[1])
+	}
+}
+
 func TestBuildTestHistoryEventsFromPlaywrightExpandsRetries(t *testing.T) {
 	t.Parallel()
 
