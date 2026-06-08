@@ -108,14 +108,20 @@ func TestBuildTestHistoryEventsFromPlaywrightExpandsRetries(t *testing.T) {
       "tests": [{
         "projectName": "chromium",
         "status": "flaky",
-        "results": [
-          {"status": "failed", "duration": 1000, "startTime": "2026-06-02T10:00:00Z", "error": {"message": "first attempt failed"}},
-          {"status": "passed", "duration": 500, "startTime": "2026-06-02T10:00:02Z"}
-        ]
-      }]
-    }]
-  }]
-}`), 0o600); err != nil {
+	        "results": [
+	          {"status": "failed", "duration": 1000, "startTime": "2026-06-02T10:00:00Z", "error": {"message": "first attempt failed"}},
+	          {"status": "passed", "duration": 500, "startTime": "2026-06-02T10:00:02Z"}
+	        ]
+	      }, {
+	        "projectName": "chromium",
+	        "status": "expected",
+	        "results": [
+	          {"status": "passed", "duration": 300, "startTime": "2026-06-02T10:00:04Z"}
+	        ]
+	      }]
+	    }]
+	  }]
+	}`), 0o600); err != nil {
 		t.Fatalf("write results: %v", err)
 	}
 	current, err := readAndParse(resultsPath, formatPlaywrightJSON)
@@ -123,7 +129,7 @@ func TestBuildTestHistoryEventsFromPlaywrightExpandsRetries(t *testing.T) {
 		t.Fatalf("readAndParse returned error: %v", err)
 	}
 	stats := calculateStats(current.Tests)
-	if stats.Passed != 1 || stats.Failed != 0 {
+	if stats.Passed != 2 || stats.Failed != 0 {
 		t.Fatalf("summary parser should still treat flaky final status as passed, got %+v", stats)
 	}
 
@@ -139,8 +145,8 @@ func TestBuildTestHistoryEventsFromPlaywrightExpandsRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildTestHistoryEvents returned error: %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("event count = %d, want 2", len(events))
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3", len(events))
 	}
 	testID := "spec/settings.spec.ts::saves settings::chromium"
 	if events[0].TestID != testID || events[0].Status != "failed" || events[0].AttemptIndex != 0 || events[0].DurationMS != 1000 {
@@ -152,8 +158,15 @@ func TestBuildTestHistoryEventsFromPlaywrightExpandsRetries(t *testing.T) {
 	if events[1].TestID != testID || events[1].Status != "passed" || events[1].AttemptIndex != 1 || events[1].DurationMS != 500 {
 		t.Fatalf("unexpected retry attempt: %+v", events[1])
 	}
-	if events[0].EventID == events[1].EventID {
-		t.Fatalf("retry attempts must have distinct deterministic ids: %+v", events)
+	if events[2].TestID != testID || events[2].Status != "passed" || events[2].AttemptIndex != 2 || events[2].DurationMS != 300 {
+		t.Fatalf("repeated Playwright test entry should keep incrementing attempt index: %+v", events[2])
+	}
+	eventIDs := map[string]bool{}
+	for _, event := range events {
+		if eventIDs[event.EventID] {
+			t.Fatalf("Playwright attempts must have distinct deterministic ids: %+v", events)
+		}
+		eventIDs[event.EventID] = true
 	}
 }
 

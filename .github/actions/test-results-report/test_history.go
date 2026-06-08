@@ -239,8 +239,9 @@ func testHistoryEventsFromPlaywright(data []byte, context testHistoryContext, no
 		return nil, fmt.Errorf("parse playwright json for test history: %w", err)
 	}
 	var events []TestHistoryEvent
+	attemptIndexes := map[string]int{}
 	for _, suite := range report.Suites {
-		collectPlaywrightHistorySuite(suite, nil, context, now, &events)
+		collectPlaywrightHistorySuite(suite, nil, context, now, &events, attemptIndexes)
 	}
 	if len(events) == 0 {
 		return nil, fmt.Errorf("parse playwright json for test history: no test attempts found")
@@ -248,12 +249,12 @@ func testHistoryEventsFromPlaywright(data []byte, context testHistoryContext, no
 	return events, nil
 }
 
-func collectPlaywrightHistorySuite(suite playwrightSuite, parents []string, context testHistoryContext, now time.Time, events *[]TestHistoryEvent) {
+func collectPlaywrightHistorySuite(suite playwrightSuite, parents []string, context testHistoryContext, now time.Time, events *[]TestHistoryEvent, attemptIndexes map[string]int) {
 	path := append(append([]string{}, parents...), suite.Title)
 	path = nonEmpty(path)
 
 	for _, child := range suite.Suites {
-		collectPlaywrightHistorySuite(child, path, context, now, events)
+		collectPlaywrightHistorySuite(child, path, context, now, events, attemptIndexes)
 	}
 
 	for _, spec := range suite.Specs {
@@ -265,10 +266,14 @@ func collectPlaywrightHistorySuite(suite playwrightSuite, parents []string, cont
 			if len(test.Results) == 0 {
 				duration := time.Duration(0)
 				startedAt := firstNonZeroTime(context.StartedAt, now).UTC()
-				*events = append(*events, newTestHistoryEvent(context, testID, spec.Title, playwrightStatus(test), test.Status, duration, 0, playwrightMessage(test), startedAt))
+				attemptIndex := attemptIndexes[testID]
+				attemptIndexes[testID] = attemptIndex + 1
+				*events = append(*events, newTestHistoryEvent(context, testID, spec.Title, playwrightStatus(test), test.Status, duration, attemptIndex, playwrightMessage(test), startedAt))
 				continue
 			}
-			for attemptIndex, result := range test.Results {
+			for _, result := range test.Results {
+				attemptIndex := attemptIndexes[testID]
+				attemptIndexes[testID] = attemptIndex + 1
 				status := testHistoryPlaywrightResultStatus(result.Status)
 				startedAt := firstNonZeroTime(parseRFC3339NanoTime(result.StartTime), context.StartedAt, now).UTC()
 				duration := time.Duration(result.Duration) * time.Millisecond
