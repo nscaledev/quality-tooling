@@ -53,7 +53,10 @@ type AIInputOptions struct {
 	MaxSkips    int
 }
 
-const aiSlackDelimiter = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
+const (
+	aiSlackDelimiter       = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
+	claudeCommandWaitDelay = time.Second
+)
 
 var (
 	runGrafanaLogQueryPlanning     = runClaudeGrafanaLogQueryPlanning
@@ -75,9 +78,7 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", claudePrompt())
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
-	cmd.Stdin = strings.NewReader(renderAIInputWithOptions(analysis, AIInputOptions{
+	cmd := newClaudeCommand(ctx, config.ClaudeToken, claudePrompt(), renderAIInputWithOptions(analysis, AIInputOptions{
 		MaxFailures: config.MaxFailures,
 		MaxSkips:    config.MaxSkips,
 	}))
@@ -184,9 +185,7 @@ func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analys
 	ctx, cancel := context.WithTimeout(ctx, grafanaLogQueryPlanningTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", grafanaLogQueryPlanningPrompt())
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
-	cmd.Stdin = strings.NewReader(renderGrafanaLogQueryPlanningInput(analysis, config))
+	cmd := newClaudeCommand(ctx, config.ClaudeToken, grafanaLogQueryPlanningPrompt(), renderGrafanaLogQueryPlanningInput(analysis, config))
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -211,9 +210,7 @@ func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysi
 	ctx, cancel := context.WithTimeout(ctx, grafanaLogQueryPlanningTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", unikornCRQueryPlanningPrompt())
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
-	cmd.Stdin = strings.NewReader(renderUnikornCRQueryPlanningInput(analysis, config))
+	cmd := newClaudeCommand(ctx, config.ClaudeToken, unikornCRQueryPlanningPrompt(), renderUnikornCRQueryPlanningInput(analysis, config))
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -225,6 +222,14 @@ func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysi
 	}
 
 	return parseUnikornCRQueryPlan(stdout.String())
+}
+
+func newClaudeCommand(ctx context.Context, token, prompt, input string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", prompt)
+	cmd.WaitDelay = claudeCommandWaitDelay
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+token)
+	cmd.Stdin = strings.NewReader(input)
+	return cmd
 }
 
 func grafanaLogQueryPlanningPrompt() string {
