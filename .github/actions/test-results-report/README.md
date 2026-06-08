@@ -128,6 +128,7 @@ This section is the operating contract for maintainers and coding agents changin
 Test history publishing is opt-in. Set `publish-test-history: true` to post OTLP log records through the `github-test-history-otlp-writer` Teleport bot into the observability collector. Leave it at `auto` to publish only when a caller provides an existing OTLP endpoint or the legacy API URL. When enabled, the action:
 
 - normalizes parsed test results into test attempt events and writes each event as an OTLP HTTP log record to `/v1/logs`;
+- enriches failed OTLP records with compact AI category, likely reason, and next check fields when AI failure analysis is available;
 - opens a Teleport-backed Kubernetes port-forward to `telemetry/svc/agent-collector` when no `test-history-otlp-endpoint` is supplied;
 - writes `.test-history/events.ndjson` by default for artifact upload and later replay;
 - uses deterministic SHA-256 `event_id` values from `repo:run_id:run_attempt:test_id:attempt_index`;

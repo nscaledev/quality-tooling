@@ -324,7 +324,7 @@ func TestPublishTestHistoryPostsOTLPLogs(t *testing.T) {
 		t.Fatalf("severityText = %v, want ERROR", record["severityText"])
 	}
 	body, _ := record["body"].(map[string]any)
-	if body["stringValue"] != "test_history result failed: fails" {
+	if body["stringValue"] != "test_history result failed run_id=run-1: fails" {
 		t.Fatalf("unexpected OTLP body: %+v", body)
 	}
 	attributes := otlpAttributeMap(t, record["attributes"])
@@ -342,6 +342,95 @@ func TestPublishTestHistoryPostsOTLPLogs(t *testing.T) {
 		"test.history.failure_fingerprint": testHistoryFailureFingerprint("POST /instances returned 500\nbackend timeout"),
 		"github.repository":                "nscale/repo",
 		"github.sha":                       "abc123",
+	} {
+		if got := attributes[key]; got != want {
+			t.Fatalf("attribute %s = %q, want %q; all attributes: %+v", key, got, want, attributes)
+		}
+	}
+}
+
+func TestPublishTestHistoryEnrichesFailedOTLPLogWithAIReason(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	resultsPath := filepath.Join(tempDir, "results.xml")
+	if err := os.WriteFile(resultsPath, []byte(`<testsuite name="unit"><testcase classname="pkg" name="fails" time="0.25"><failure message="POST /storage returned 404">cleanup raced after network deletion</failure></testcase></testsuite>`), 0o600); err != nil {
+		t.Fatalf("write results: %v", err)
+	}
+	current, err := readAndParse(resultsPath, formatJUnit)
+	if err != nil {
+		t.Fatalf("readAndParse returned error: %v", err)
+	}
+
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		capturedBody = body
+		writer.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	result := publishTestHistoryWithAI(context.Background(), Config{
+		TestResultsPath:         resultsPath,
+		Format:                  formatJUnit,
+		PublishTestHistory:      true,
+		TestHistoryPublishMode:  "otlp",
+		TestHistoryOTLPEndpoint: server.URL + "/v1/logs",
+		TestHistoryRepo:         "nscale/repo",
+		TestHistorySuite:        "unit",
+		TestHistoryEnv:          "dev",
+		TestHistoryRunID:        "run-1",
+		TestHistoryRunAttempt:   1,
+		TestHistoryTimeout:      2 * time.Second,
+		TestHistoryRetries:      0,
+	}, current, &AIAnalysis{
+		StepSummary: `## Test Failure Analysis
+
+### Patterns
+| Category | What failed | Why it failed | Likely reason | Impact | Next check |
+| --- | --- | --- | --- | ---: | --- |
+| infra/external | File storage cleanup | Delete returned 404 | File storage cleanup raced after network deletion | 1 failed | Check file-storage API/controller cleanup handling. |`,
+	})
+
+	if !result.Posted || result.EventCount != 1 {
+		t.Fatalf("unexpected publish result: %+v", result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(capturedBody, &payload); err != nil {
+		t.Fatalf("decode OTLP body: %v\n%s", err, string(capturedBody))
+	}
+	records := otlpLogRecordsFromPayload(t, payload)
+	if len(records) != 1 {
+		t.Fatalf("log record count = %d, want 1", len(records))
+	}
+	record, ok := records[0].(map[string]any)
+	if !ok {
+		t.Fatalf("log record = %#v", records[0])
+	}
+	body, _ := record["body"].(map[string]any)
+	bodyText, _ := body["stringValue"].(string)
+	for _, expected := range []string{
+		"test_history result failed run_id=run-1: fails",
+		"ai_likely_reason=File storage cleanup raced after network deletion",
+		"ai_next_check=Check file-storage API/controller cleanup handling.",
+	} {
+		if !strings.Contains(bodyText, expected) {
+			t.Fatalf("OTLP body missing %q: %s", expected, bodyText)
+		}
+	}
+	attributes := otlpAttributeMap(t, record["attributes"])
+	for key, want := range map[string]string{
+		"test.history.failure_category":    "infra/external",
+		"test.history.ai.category":         "infra/external",
+		"test.history.ai.what_failed":      "File storage cleanup",
+		"test.history.ai.why_failed":       "Delete returned 404",
+		"test.history.ai.likely_reason":    "File storage cleanup raced after network deletion",
+		"test.history.ai.next_check":       "Check file-storage API/controller cleanup handling.",
+		"test.history.ai.match_strategy":   "single_pattern",
+		"test.history.failure_fingerprint": testHistoryFailureFingerprint("POST /storage returned 404\ncleanup raced after network deletion"),
 	} {
 		if got := attributes[key]; got != want {
 			t.Fatalf("attribute %s = %q, want %q; all attributes: %+v", key, got, want, attributes)

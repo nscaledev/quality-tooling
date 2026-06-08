@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type TestHistoryEvent struct {
@@ -68,6 +69,10 @@ type TestHistoryPublishResult struct {
 }
 
 func publishTestHistory(ctx context.Context, config Config, current TestRun) TestHistoryPublishResult {
+	return publishTestHistoryWithAI(ctx, config, current, nil)
+}
+
+func publishTestHistoryWithAI(ctx context.Context, config Config, current TestRun, aiAnalysis *AIAnalysis) TestHistoryPublishResult {
 	result := TestHistoryPublishResult{
 		Enabled:        config.PublishTestHistory,
 		Mode:           firstNonEmpty(config.TestHistoryPublishMode, "otlp"),
@@ -113,7 +118,7 @@ func publishTestHistory(ctx context.Context, config Config, current TestRun) Tes
 			markTestHistoryShippingFailure(&result, "test-history OTLP endpoint is required for OTLP ingest; wrote spool only")
 			return result
 		}
-		if err := postTestHistoryEventsToOTLP(ctx, config, events); err != nil {
+		if err := postTestHistoryEventsToOTLP(ctx, config, events, aiAnalysis); err != nil {
 			markTestHistoryShippingFailure(&result, fmt.Sprintf("OTLP ingest failed: %v", err))
 			return result
 		}
@@ -384,8 +389,8 @@ func postTestHistoryEventsToAPI(ctx context.Context, config Config, events []Tes
 	return lastErr
 }
 
-func postTestHistoryEventsToOTLP(ctx context.Context, config Config, events []TestHistoryEvent) error {
-	body, err := json.Marshal(testHistoryOTLPLogsPayload(events))
+func postTestHistoryEventsToOTLP(ctx context.Context, config Config, events []TestHistoryEvent, aiAnalysis *AIAnalysis) error {
+	body, err := json.Marshal(testHistoryOTLPLogsPayload(events, aiAnalysis))
 	if err != nil {
 		return fmt.Errorf("marshal OTLP logs: %w", err)
 	}
@@ -484,7 +489,7 @@ func writeTestHistoryOutputs(path string, result TestHistoryPublishResult) error
 	return nil
 }
 
-func testHistoryOTLPLogsPayload(events []TestHistoryEvent) map[string]any {
+func testHistoryOTLPLogsPayload(events []TestHistoryEvent, aiAnalysis *AIAnalysis) map[string]any {
 	resourceAttributes := []map[string]any{
 		otlpStringAttribute("service.name", "test-results-report"),
 		otlpStringAttribute("service.namespace", "qa-tooling"),
@@ -504,8 +509,9 @@ func testHistoryOTLPLogsPayload(events []TestHistoryEvent) map[string]any {
 	}
 
 	logRecords := make([]map[string]any, 0, len(events))
+	aiAnnotations := testHistoryAIAnnotations(aiAnalysis)
 	for _, event := range events {
-		logRecords = append(logRecords, testHistoryOTLPLogRecord(event))
+		logRecords = append(logRecords, testHistoryOTLPLogRecord(event, testHistoryAIAnnotationForEvent(event, aiAnnotations)))
 	}
 
 	return map[string]any{
@@ -524,8 +530,22 @@ func testHistoryOTLPLogsPayload(events []TestHistoryEvent) map[string]any {
 	}
 }
 
-func testHistoryOTLPLogRecord(event TestHistoryEvent) map[string]any {
+type testHistoryAIAnnotation struct {
+	Category      string
+	WhatFailed    string
+	WhyFailed     string
+	LikelyReason  string
+	Impact        string
+	NextCheck     string
+	MatchStrategy string
+}
+
+func testHistoryOTLPLogRecord(event TestHistoryEvent, aiAnnotation *testHistoryAIAnnotation) map[string]any {
 	severityNumber, severityText := testHistoryOTLPSeverity(event.Status)
+	failureCategory := event.FailureCategory
+	if failureCategory == "" && aiAnnotation != nil {
+		failureCategory = aiAnnotation.Category
+	}
 	attributes := []map[string]any{
 		otlpStringAttribute("test.history.event_id", event.EventID),
 		otlpStringAttribute("test.history.repo", event.Repo),
@@ -541,9 +561,15 @@ func testHistoryOTLPLogRecord(event TestHistoryEvent) map[string]any {
 		otlpStringAttribute("test.history.status", event.Status),
 		otlpIntAttribute("test.history.duration_ms", event.DurationMS),
 		otlpIntAttribute("test.history.attempt_index", event.AttemptIndex),
-		otlpStringAttribute("test.history.failure_category", event.FailureCategory),
+		otlpStringAttribute("test.history.failure_category", failureCategory),
 		otlpStringAttribute("test.history.failure_fingerprint", event.FailureFingerprint),
 		otlpStringAttribute("test.history.failure_message_excerpt", event.FailureMessageExcerpt),
+		otlpStringAttribute("test.history.ai.category", otlpAIAttributeValue(aiAnnotationValue(aiAnnotation, "category"), 80)),
+		otlpStringAttribute("test.history.ai.what_failed", otlpAIAttributeValue(aiAnnotationValue(aiAnnotation, "what_failed"), 220)),
+		otlpStringAttribute("test.history.ai.why_failed", otlpAIAttributeValue(aiAnnotationValue(aiAnnotation, "why_failed"), 300)),
+		otlpStringAttribute("test.history.ai.likely_reason", otlpAIAttributeValue(aiAnnotationValue(aiAnnotation, "likely_reason"), 300)),
+		otlpStringAttribute("test.history.ai.next_check", otlpAIAttributeValue(aiAnnotationValue(aiAnnotation, "next_check"), 300)),
+		otlpStringAttribute("test.history.ai.match_strategy", aiAnnotationValue(aiAnnotation, "match_strategy")),
 		otlpStringAttribute("test.history.artifact_url", event.ArtifactURL),
 		otlpStringAttribute("github.repository", event.Repo),
 		otlpStringAttribute("github.ref_name", event.Branch),
@@ -556,21 +582,305 @@ func testHistoryOTLPLogRecord(event TestHistoryEvent) map[string]any {
 		"timeUnixNano":         fmt.Sprintf("%d", event.StartedAt.UnixNano()),
 		"severityNumber":       severityNumber,
 		"severityText":         severityText,
-		"body":                 map[string]any{"stringValue": testHistoryOTLPBody(event)},
+		"body":                 map[string]any{"stringValue": testHistoryOTLPBody(event, aiAnnotation)},
 		"attributes":           compactOTLPAttributes(attributes),
 		"observedTimeUnixNano": fmt.Sprintf("%d", time.Now().UTC().UnixNano()),
 	}
 }
 
-func testHistoryOTLPBody(event TestHistoryEvent) string {
-	switch event.Status {
-	case string(StatusFailed):
-		return fmt.Sprintf("test_history result failed: %s", firstNonEmpty(event.TestName, event.TestID))
-	case string(StatusSkipped):
-		return fmt.Sprintf("test_history result skipped: %s", firstNonEmpty(event.TestName, event.TestID))
-	default:
-		return fmt.Sprintf("test_history result passed: %s", firstNonEmpty(event.TestName, event.TestID))
+func aiAnnotationValue(annotation *testHistoryAIAnnotation, field string) string {
+	if annotation == nil {
+		return ""
 	}
+	switch field {
+	case "category":
+		return annotation.Category
+	case "what_failed":
+		return annotation.WhatFailed
+	case "why_failed":
+		return annotation.WhyFailed
+	case "likely_reason":
+		return annotation.LikelyReason
+	case "next_check":
+		return annotation.NextCheck
+	case "match_strategy":
+		return annotation.MatchStrategy
+	default:
+		return ""
+	}
+}
+
+func otlpAIAttributeValue(value string, limit int) string {
+	return truncate(cleanOneLine(stripInlineMarkdown(value)), limit)
+}
+
+func testHistoryOTLPBody(event TestHistoryEvent, aiAnnotation *testHistoryAIAnnotation) string {
+	name := firstNonEmpty(event.TestName, event.TestID)
+	base := fmt.Sprintf("test_history result %s run_id=%s: %s", event.Status, event.RunID, name)
+	if event.Status != string(StatusFailed) || aiAnnotation == nil {
+		return base
+	}
+	if reason := otlpAIAttributeValue(firstNonEmpty(aiAnnotation.LikelyReason, aiAnnotation.WhyFailed), 220); reason != "" {
+		base += "; ai_likely_reason=" + reason
+	}
+	if nextCheck := otlpAIAttributeValue(aiAnnotation.NextCheck, 220); nextCheck != "" {
+		base += "; ai_next_check=" + nextCheck
+	}
+	return base
+}
+
+func testHistoryAIAnnotations(aiAnalysis *AIAnalysis) []testHistoryAIAnnotation {
+	if aiAnalysis == nil {
+		return nil
+	}
+	if annotations := testHistoryAIPatternAnnotations(aiAnalysis.StepSummary); len(annotations) > 0 {
+		return annotations
+	}
+	return testHistoryAISlackAnnotations(aiAnalysis.SlackSummary)
+}
+
+func testHistoryAIPatternAnnotations(summary string) []testHistoryAIAnnotation {
+	lines := strings.Split(summary, "\n")
+	for index, line := range lines {
+		headers := parseMarkdownTableRow(line)
+		headerIndexes := testHistoryAIPatternHeaderIndexes(headers)
+		if len(headerIndexes) == 0 {
+			continue
+		}
+		var annotations []testHistoryAIAnnotation
+		for _, row := range lines[index+1:] {
+			cells := parseMarkdownTableRow(row)
+			if len(cells) == 0 {
+				if len(annotations) > 0 {
+					break
+				}
+				continue
+			}
+			if isMarkdownSeparatorRow(cells) {
+				continue
+			}
+			annotation := testHistoryAIAnnotation{
+				Category:     testHistoryAIPatternCell(cells, headerIndexes, "category"),
+				WhatFailed:   testHistoryAIPatternCell(cells, headerIndexes, "what failed"),
+				WhyFailed:    testHistoryAIPatternCell(cells, headerIndexes, "why it failed"),
+				LikelyReason: testHistoryAIPatternCell(cells, headerIndexes, "likely reason"),
+				Impact:       testHistoryAIPatternCell(cells, headerIndexes, "impact"),
+				NextCheck:    testHistoryAIPatternCell(cells, headerIndexes, "next check"),
+			}
+			if !testHistoryAIAnnotationIsUsable(annotation) {
+				continue
+			}
+			if strings.EqualFold(annotation.Category, "skipped") {
+				continue
+			}
+			annotations = append(annotations, annotation)
+		}
+		if len(annotations) > 0 {
+			return annotations
+		}
+	}
+	return nil
+}
+
+func testHistoryAIPatternHeaderIndexes(headers []string) map[string]int {
+	indexes := map[string]int{}
+	for index, header := range headers {
+		normalized := strings.ToLower(stripInlineMarkdown(cleanOneLine(header)))
+		switch normalized {
+		case "category", "what failed", "why it failed", "likely reason", "impact", "next check":
+			indexes[normalized] = index
+		}
+	}
+	if _, ok := indexes["category"]; !ok {
+		return nil
+	}
+	if _, ok := indexes["likely reason"]; !ok {
+		return nil
+	}
+	return indexes
+}
+
+func testHistoryAIPatternCell(cells []string, indexes map[string]int, key string) string {
+	index, ok := indexes[key]
+	if !ok || index >= len(cells) {
+		return ""
+	}
+	return stripInlineMarkdown(cells[index])
+}
+
+func testHistoryAISlackAnnotations(summary string) []testHistoryAIAnnotation {
+	var annotations []testHistoryAIAnnotation
+	for _, line := range strings.Split(summary, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+		if line == "" || strings.HasPrefix(strings.ToLower(line), "*action:*") {
+			continue
+		}
+		category := ""
+		if start := strings.LastIndex(line, "("); start >= 0 {
+			if end := strings.Index(line[start:], ")"); end > 0 {
+				category = stripInlineMarkdown(line[start+1 : start+end])
+			}
+		}
+		if strings.EqualFold(category, "skipped") {
+			continue
+		}
+		reason := line
+		if colon := strings.Index(line, ":"); colon >= 0 {
+			reason = line[colon+1:]
+		}
+		annotation := testHistoryAIAnnotation{
+			Category:     category,
+			LikelyReason: stripInlineMarkdown(reason),
+		}
+		if testHistoryAIAnnotationIsUsable(annotation) {
+			annotations = append(annotations, annotation)
+		}
+	}
+	return annotations
+}
+
+func testHistoryAIAnnotationIsUsable(annotation testHistoryAIAnnotation) bool {
+	return cleanOneLine(firstNonEmpty(annotation.LikelyReason, annotation.WhyFailed, annotation.WhatFailed, annotation.NextCheck)) != ""
+}
+
+func testHistoryAIAnnotationForEvent(event TestHistoryEvent, annotations []testHistoryAIAnnotation) *testHistoryAIAnnotation {
+	if event.Status != string(StatusFailed) || len(annotations) == 0 {
+		return nil
+	}
+	if len(annotations) == 1 {
+		annotation := annotations[0]
+		annotation.MatchStrategy = "single_pattern"
+		return &annotation
+	}
+	bestIndex := -1
+	bestScore := 0
+	for index, annotation := range annotations {
+		score := testHistoryAIAnnotationMatchScore(event, annotation)
+		if score > bestScore {
+			bestIndex = index
+			bestScore = score
+		}
+	}
+	if bestIndex >= 0 {
+		annotation := annotations[bestIndex]
+		annotation.MatchStrategy = "text_match"
+		return &annotation
+	}
+	return nil
+}
+
+func testHistoryAIAnnotationMatchScore(event TestHistoryEvent, annotation testHistoryAIAnnotation) int {
+	annotationText := strings.ToLower(cleanOneLine(testHistoryAIAnnotationText(annotation)))
+	eventText := strings.ToLower(cleanOneLine(strings.Join([]string{
+		event.Suite,
+		event.TestID,
+		event.TestName,
+		event.FailureMessageExcerpt,
+	}, " ")))
+	score := 0
+	for _, candidate := range []string{event.TestName, event.TestID, event.Suite} {
+		candidate = strings.ToLower(cleanOneLine(candidate))
+		if len(candidate) >= 4 && strings.Contains(annotationText, candidate) {
+			score += 8
+		}
+	}
+	eventTokens := significantTestHistoryAITokens(eventText)
+	for token := range significantTestHistoryAITokens(annotationText) {
+		if eventTokens[token] {
+			score++
+		}
+	}
+	return score
+}
+
+func testHistoryAIAnnotationText(annotation testHistoryAIAnnotation) string {
+	return strings.Join([]string{
+		annotation.Category,
+		annotation.WhatFailed,
+		annotation.WhyFailed,
+		annotation.LikelyReason,
+		annotation.Impact,
+		annotation.NextCheck,
+	}, " ")
+}
+
+func significantTestHistoryAITokens(value string) map[string]bool {
+	words := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	tokens := map[string]bool{}
+	for _, word := range words {
+		if len(word) < 4 || testHistoryAIStopWords[word] {
+			continue
+		}
+		tokens[word] = true
+	}
+	return tokens
+}
+
+var testHistoryAIStopWords = map[string]bool{
+	"action": true, "because": true, "check": true, "error": true, "failed": true, "failure": true,
+	"from": true, "http": true, "likely": true, "next": true, "reason": true, "returned": true,
+	"returns": true, "test": true, "tests": true, "with": true,
+}
+
+func parseMarkdownTableRow(line string) []string {
+	line = strings.TrimSpace(line)
+	if !strings.Contains(line, "|") {
+		return nil
+	}
+	line = strings.TrimPrefix(line, "|")
+	line = strings.TrimSuffix(line, "|")
+	var cells []string
+	var cell strings.Builder
+	escaped := false
+	for _, r := range line {
+		if escaped {
+			if r != '|' {
+				cell.WriteRune('\\')
+			}
+			cell.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if r == '|' {
+			cells = append(cells, strings.TrimSpace(cell.String()))
+			cell.Reset()
+			continue
+		}
+		cell.WriteRune(r)
+	}
+	if escaped {
+		cell.WriteRune('\\')
+	}
+	cells = append(cells, strings.TrimSpace(cell.String()))
+	return cells
+}
+
+func isMarkdownSeparatorRow(cells []string) bool {
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		trimmed := strings.Trim(cell, " :-")
+		if trimmed != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func stripInlineMarkdown(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, "**", "")
+	value = strings.ReplaceAll(value, "__", "")
+	value = strings.ReplaceAll(value, "`", "")
+	value = strings.ReplaceAll(value, "*", "")
+	return strings.TrimSpace(value)
 }
 
 func testHistoryOTLPSeverity(status string) (int, string) {

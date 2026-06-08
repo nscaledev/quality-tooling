@@ -140,7 +140,7 @@ func run(ctx context.Context, config Config) error {
 	}
 
 	stageStarted = time.Now()
-	testHistoryResult := publishTestHistory(ctx, config, current)
+	testHistoryResult := publishTestHistoryWithAI(ctx, config, current, aiAnalysis)
 	for _, warning := range testHistoryResult.Warnings {
 		fmt.Fprintf(os.Stderr, "Warning: test history publishing: %s\n", warning)
 	}
