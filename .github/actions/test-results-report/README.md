@@ -61,12 +61,12 @@ At a high level, the action keeps orchestration inside the GitHub workflow runne
 1. Read the current test report from `test-results-path`.
 2. Optionally read the previous report when `compare-with-previous` is enabled or auto-detected.
 3. Analyze current failures, skips, deltas, and representative failures.
-4. Optionally write normalized test-history events to `.test-history/events.ndjson` and post them to the observability OTLP collector.
-5. Optionally ask Claude which failures, if any, need backend log lookup.
-6. Resolve or start Grafana MCP only when Claude planned backend queries, then query Loki in parallel.
-7. Optionally run Claude to consolidate the final failure analysis.
-8. Write the GitHub step summary.
-9. Optionally send Slack.
+4. Optionally ask Claude which failures, if any, need backend log lookup.
+5. Resolve or start Grafana MCP only when Claude planned backend queries, then query Loki in parallel.
+6. Optionally run Claude to consolidate the final failure analysis.
+7. Write the GitHub step summary.
+8. Optionally send Slack.
+9. Optionally write normalized test-history events to `.test-history/events.ndjson` and post them to the observability OTLP collector.
 10. Emit GitHub action outputs.
 
 ```mermaid
@@ -76,10 +76,7 @@ flowchart TD
   C -- yes --> D[Parse previous report]
   C -- no --> E[Analyze current results]
   D --> E
-  E --> V{Publish test history enabled?}
-  V -- yes --> W[Write NDJSON spool and post OTLP logs to the observability collector]
-  V -- no --> F{Grafana enrichment enabled and failures exist?}
-  W --> F
+  E --> F{Grafana enrichment enabled and failures exist?}
   F -- no --> K{AI analysis enabled?}
   F -- yes --> H{AI analysis and Claude token available?}
   H -- yes --> I[Claude inspects failures and plans backend LogQL only when needed]
@@ -97,8 +94,11 @@ flowchart TD
   P --> Q
   Q --> R{Slack enabled?}
   R -- yes --> S[Send Slack payload]
-  R -- no --> T[Write action outputs]
-  S --> T
+  R -- no --> V{Publish test history enabled?}
+  S --> V
+  V -- yes --> W[Write NDJSON spool and post OTLP logs to the observability collector]
+  V -- no --> T[Write action outputs]
+  W --> T
   T --> U[End action]
 ```
 
@@ -133,6 +133,7 @@ Test history publishing is opt-in. Set `publish-test-history: true` to post OTLP
 - uses deterministic SHA-256 `event_id` values from `repo:run_id:run_attempt:test_id:attempt_index`;
 - expands Playwright retry attempts into separate events while preserving the existing summary counts;
 - treats collector, API, token, storage, and network failures as warnings so test history cannot fail the test job;
+- runs after summary rendering and Slack notification so OTLP collector failures cannot block the report analysis or notification path;
 - emits `test-history-shipping-status=failed`, `test-history-failure-reason`, and a GitHub warning annotation when OTLP logs do not reach the agent collector.
 - uploads the NDJSON retry spool as a `test-history-events` artifact on shipping failure by default.
 
