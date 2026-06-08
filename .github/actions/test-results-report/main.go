@@ -64,14 +64,6 @@ func run(ctx context.Context, config Config) error {
 	logReportTiming("analyze-results", stageStarted)
 
 	stageStarted = time.Now()
-	testHistoryResult := publishTestHistory(ctx, config, current)
-	for _, warning := range testHistoryResult.Warnings {
-		fmt.Fprintf(os.Stderr, "Warning: test history publishing: %s\n", warning)
-	}
-	emitTestHistoryShippingWarning(testHistoryResult)
-	logReportTiming("test-history-publish", stageStarted)
-
-	stageStarted = time.Now()
 	grafanaLogs, err := runGrafanaLogEnrichment(ctx, config, analysis)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Grafana log enrichment skipped: %v\n", err)
@@ -146,6 +138,14 @@ func run(ctx context.Context, config Config) error {
 		}
 		logReportTiming("send-slack", stageStarted)
 	}
+
+	stageStarted = time.Now()
+	testHistoryResult := publishTestHistory(ctx, config, current)
+	for _, warning := range testHistoryResult.Warnings {
+		fmt.Fprintf(os.Stderr, "Warning: test history publishing: %s\n", warning)
+	}
+	emitTestHistoryShippingWarning(testHistoryResult)
+	logReportTiming("test-history-publish", stageStarted)
 
 	stageStarted = time.Now()
 	if err := writeOutputs(os.Getenv("GITHUB_OUTPUT"), analysis, slackSent); err != nil {

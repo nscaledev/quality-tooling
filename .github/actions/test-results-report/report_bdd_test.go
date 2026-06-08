@@ -286,6 +286,70 @@ var _ = Describe("Test Results Report", func() {
 				Expect(outputs).To(HaveKeyWithValue("slack-sent", "true"))
 			})
 
+			It("should run AI analysis and Slack before test history OTLP shipping", func() {
+				var aiCalled atomic.Bool
+				var slackCalled atomic.Bool
+				var otlpSawAI atomic.Bool
+				var otlpSawSlack atomic.Bool
+				var slackPayload SlackPayload
+
+				slackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+					Expect(json.NewDecoder(request.Body).Decode(&slackPayload)).To(Succeed())
+					slackCalled.Store(true)
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer slackServer.Close()
+
+				otlpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					otlpSawAI.Store(aiCalled.Load())
+					otlpSawSlack.Store(slackCalled.Load())
+					http.Error(w, "collector unavailable", http.StatusServiceUnavailable)
+				}))
+				defer otlpServer.Close()
+
+				previousRunner := runAIAnalysis
+				runAIAnalysis = func(_ context.Context, receivedConfig Config, analysis Analysis) (*AIAnalysis, error) {
+					Expect(receivedConfig.EnableAIAnalysis).To(BeTrue())
+					Expect(analysis.Failures).To(HaveLen(1))
+					aiCalled.Store(true)
+					return &AIAnalysis{
+						StepSummary:  "## Test Failure Analysis\n\nAI analysis completed before OTLP shipping.",
+						SlackSummary: "- *Compute* (infra/external): AI Slack summary was ready before OTLP shipping.",
+					}, nil
+				}
+				DeferCleanup(func() {
+					runAIAnalysis = previousRunner
+				})
+
+				config.EnableAIAnalysis = true
+				config.ClaudeToken = "test-claude-token"
+				config.SendSlack = true
+				config.SlackWebhookURL = slackServer.URL
+				config.PublishTestHistory = true
+				config.TestHistoryPublishMode = "otlp"
+				config.TestHistoryOTLPEndpoint = otlpServer.URL + "/v1/logs"
+				config.TestHistoryOutputPath = filepath.Join(dir, ".test-history", "events.ndjson")
+				config.TestHistoryTimeout = time.Second
+				config.TestHistoryRetries = 0
+
+				err := run(context.Background(), config)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(aiCalled.Load()).To(BeTrue())
+				Expect(slackCalled.Load()).To(BeTrue())
+				Expect(otlpSawAI.Load()).To(BeTrue())
+				Expect(otlpSawSlack.Load()).To(BeTrue())
+				Expect(slackPayloadText(slackPayload)).To(ContainSubstring("AI Slack summary was ready before OTLP shipping."))
+
+				summary := readTestFile(summaryPath)
+				Expect(summary).To(ContainSubstring("AI analysis completed before OTLP shipping."))
+
+				outputs := readOutputFile(outputPath)
+				Expect(outputs).To(HaveKeyWithValue("slack-sent", "true"))
+				Expect(outputs).To(HaveKeyWithValue("test-history-shipping-status", "failed"))
+				Expect(outputs).To(HaveKeyWithValue("test-history-posted", "false"))
+			})
+
 			It("should plan backend Grafana queries, fetch MCP logs, and pass them into the final AI report", func() {
 				writeTestFile(currentPath, `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="Console E2E" tests="2" failures="2" skipped="0" time="18">
@@ -745,6 +809,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring(`--address 127.0.0.1`))
 				Expect(action).To(ContainSubstring(`"svc/${service}"`))
 				Expect(action).To(ContainSubstring(`"${local_port}:${collector_port}"`))
+				Expect(action).To(ContainSubstring("continue-on-error: true\n      shell: bash"))
 				Expect(action).To(ContainSubstring(`INPUT_TEST_HISTORY_PUBLISH_MODE: ${{ steps.test-history-resolve.outputs.mode }}`))
 				Expect(action).To(ContainSubstring(`INPUT_TEST_HISTORY_OTLP_ENDPOINT: ${{ steps.test-history-resolve.outputs.otlp-endpoint }}`))
 				Expect(action).To(ContainSubstring("test-history-publish-mode"))
