@@ -3,9 +3,6 @@ name: Grafana MCP Fetch POC
 run-name: Grafana MCP Prompt POC - ${{ github.event.inputs['grafana-app'] || 'nks-stg-europe-west2-grafana' }}
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/grafana-mcp-fetch-poc.yml'
   workflow_dispatch:
     inputs:
       grafana-app:
