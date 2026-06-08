@@ -1427,11 +1427,10 @@ runs:
           if failure_reason:
             summary.write(f"- Failure reason: `{failure_reason}`\n")
           if artifact_url:
-            summary.write(f"- Retry spool: [{artifact_name}]({artifact_url})\n")
+            summary.write(f"- Test history data: [{artifact_name}]({artifact_url})\n")
           else:
-            summary.write(f"- Retry spool: `{artifact_name}`\n")
-          summary.write(f"- wo11y Grafana: [open `{env_name}` test-history logs]({grafana_url})\n")
-          summary.write(f"- LogQL: `{expr}`\n")
+            summary.write(f"- Test history data: `{artifact_name}`\n")
+          summary.write(f"- Test-history diagnostics: [open reporter logs for `{env_name}`]({grafana_url})\n")
         PY
 
     - name: Dump test history OTLP port-forward logs
