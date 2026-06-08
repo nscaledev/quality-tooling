@@ -836,6 +836,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("Test history data"))
 				Expect(action).To(ContainSubstring("Test-history diagnostics"))
 				Expect(action).To(ContainSubstring("open reporter logs for"))
+				Expect(action).To(ContainSubstring("- Logs query:"))
 				Expect(action).NotTo(ContainSubstring("- Retry spool:"))
 				Expect(action).NotTo(ContainSubstring("- wo11y Grafana:"))
 				Expect(action).NotTo(ContainSubstring("- LogQL:"))
