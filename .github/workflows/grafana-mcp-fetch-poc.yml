@@ -13,9 +13,9 @@ on:
         required: false
         default: nks-stg-europe-west2-grafana
       loki-datasource-uid:
-        description: Preferred Grafana Loki datasource UID.
+        description: Optional Grafana Loki datasource UID. Leave empty to prefer logs-all, then the default/first discovered Loki datasource.
         required: false
-        default: loki
+        default: ''
       logql:
         description: LogQL hint for recent instance failure logs.
         required: false
@@ -48,7 +48,7 @@ jobs:
       GRAFANA_MCP_VERSION: v0.7.10
       GRAFANA_TUNNEL_PORT: '3000'
       LIMIT: ${{ github.event.inputs.limit || '10' }}
-      LOKI_DATASOURCE_UID: ${{ github.event.inputs['loki-datasource-uid'] || 'loki' }}
+      LOKI_DATASOURCE_UID: ${{ github.event.inputs['loki-datasource-uid'] || '' }}
       LOGQL: ${{ github.event.inputs.logql || '{namespace=~".+"} |~ "(?i)(instance|server|vm|compute).*(fail|error|exception|timeout)|(fail|error|exception|timeout).*(instance|server|vm|compute)"' }}
       LOOKBACK_MINUTES: ${{ github.event.inputs['lookback-minutes'] || '60' }}
       USER_PROMPT: ${{ github.event.inputs.prompt || 'Fetch recent instance failure logs from Loki using Grafana MCP, then print a compact table and short analysis.' }}
@@ -197,9 +197,15 @@ jobs:
             LIMIT=100
           fi
 
+          if [[ -n "${LOKI_DATASOURCE_UID}" ]]; then
+            datasource_instruction="Use configured Loki datasource UID '${LOKI_DATASOURCE_UID}'. If list_datasources does not return it, report the available UIDs and stop."
+          else
+            datasource_instruction="Select the Loki datasource from list_datasources by preferring UID 'logs-all', then a datasource marked as default/isDefault, then the first discovered Loki datasource. State the selected UID before querying."
+          fi
+
           prompt="${USER_PROMPT}
 
-          Use Grafana MCP tools only. List Loki datasources, then query datasource UID '${LOKI_DATASOURCE_UID}' with LogQL '${LOGQL}' from ${start_rfc3339} to ${end_rfc3339}, limit ${LIMIT}, direction backward.
+          Use Grafana MCP tools only. List Loki datasources. ${datasource_instruction} Query the selected datasource with LogQL '${LOGQL}' from ${start_rfc3339} to ${end_rfc3339}, limit ${LIMIT}, direction backward.
 
           Print the datasource, row count, a compact table of fetched log rows, and a short analysis of recent instance failure signals. Do not print secrets."
 
