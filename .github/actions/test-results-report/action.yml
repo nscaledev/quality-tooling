@@ -71,13 +71,13 @@ inputs:
     required: false
     default: ''
   publish-test-history:
-    description: 'Publish normalized test attempt events: auto, true, or false. Explicit true defaults to OTLP over the github-test-history-otlp-writer Teleport bot.'
+    description: 'Publish normalized test attempt events: true, false, or auto. Defaults to OTLP over the github-test-history-otlp-writer Teleport bot.'
     required: false
-    default: 'auto'
+    default: 'true'
   test-history-publish-mode:
-    description: 'Test history publishing mode: auto, otlp, or api. Auto uses OTLP for explicit publishing and API only for legacy API-url auto publishing.'
+    description: 'Test history publishing mode: otlp, api, or auto. OTLP uses the Teleport-backed observability collector by default.'
     required: false
-    default: 'auto'
+    default: 'otlp'
   test-history-otlp-endpoint:
     description: 'Existing OTLP HTTP logs endpoint. If omitted in OTLP mode, the action opens a Teleport-backed port-forward to the observability collector.'
     required: false
@@ -137,11 +137,11 @@ inputs:
   test-history-upload-spool:
     description: 'Upload the NDJSON retry spool artifact: on-failure, always, or false.'
     required: false
-    default: 'on-failure'
+    default: 'always'
   test-history-spool-artifact-name:
-    description: 'Artifact name used when uploading the test history retry spool.'
+    description: 'Artifact name used when uploading the test history retry spool. Defaults to test-history-events-${test-history-env || environment}.'
     required: false
-    default: 'test-history-events'
+    default: ''
   test-history-artifact-url:
     description: 'Artifact or workflow URL stored with each test event. Defaults to report-url, then the GitHub workflow run URL.'
     required: false
@@ -355,6 +355,9 @@ runs:
         INPUT_TEST_HISTORY_OTLP_ENDPOINT: ${{ inputs.test-history-otlp-endpoint }}
         INPUT_TEST_HISTORY_OTLP_LOCAL_PORT: ${{ inputs.test-history-otlp-local-port }}
         INPUT_TEST_HISTORY_UPLOAD_SPOOL: ${{ inputs.test-history-upload-spool }}
+        INPUT_TEST_HISTORY_SPOOL_ARTIFACT_NAME: ${{ inputs.test-history-spool-artifact-name }}
+        INPUT_TEST_HISTORY_ENV: ${{ inputs.test-history-env }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
         TEST_HISTORY_API_URL: ${{ env.TEST_HISTORY_API_URL }}
         TEST_HISTORY_OTLP_ENDPOINT: ${{ env.TEST_HISTORY_OTLP_ENDPOINT }}
       run: |
@@ -395,13 +398,25 @@ runs:
         api_url="${INPUT_TEST_HISTORY_API_URL:-${TEST_HISTORY_API_URL:-}}"
         otlp_endpoint="${INPUT_TEST_HISTORY_OTLP_ENDPOINT:-${TEST_HISTORY_OTLP_ENDPOINT:-}}"
         local_port="${INPUT_TEST_HISTORY_OTLP_LOCAL_PORT}"
-        upload_spool="$(lower "${INPUT_TEST_HISTORY_UPLOAD_SPOOL:-on-failure}")"
+        upload_spool="$(lower "${INPUT_TEST_HISTORY_UPLOAD_SPOOL:-always}")"
+        spool_artifact_name="${INPUT_TEST_HISTORY_SPOOL_ARTIFACT_NAME:-}"
+        artifact_env="${INPUT_TEST_HISTORY_ENV:-${INPUT_ENVIRONMENT:-}}"
 
         require_single_line "publish-test-history" "$publish_setting"
         require_single_line "test-history-publish-mode" "$mode_setting"
         require_single_line "test-history-api-url" "$api_url"
         require_single_line "test-history-otlp-endpoint" "$otlp_endpoint"
         require_single_line "test-history-upload-spool" "$upload_spool"
+        require_single_line "test-history-spool-artifact-name" "$spool_artifact_name"
+        require_single_line "test-history-env" "$artifact_env"
+
+        if [[ -z "$spool_artifact_name" ]]; then
+          if [[ -n "$artifact_env" ]]; then
+            spool_artifact_name="test-history-events-${artifact_env}"
+          else
+            spool_artifact_name="test-history-events"
+          fi
+        fi
 
         case "$upload_spool" in
           always|on-failure|false)
@@ -456,12 +471,14 @@ runs:
         echo "Test history publishing enabled: ${enabled}"
         echo "Test history publish mode: ${mode}"
         echo "Test history needs OTLP collector tunnel: ${needs_tunnel}"
+        echo "Test history spool artifact name: ${spool_artifact_name}"
 
         write_output "enabled" "$enabled"
         write_output "mode" "$mode"
         write_output "otlp-endpoint" "$otlp_endpoint"
         write_output "needs-otlp-tunnel" "$needs_tunnel"
         write_output "upload-spool" "$upload_spool"
+        write_output "spool-artifact-name" "$spool_artifact_name"
 
     - name: Resolve Grafana MCP inputs
       id: grafana-resolve
@@ -1342,11 +1359,80 @@ runs:
       if: ${{ always() && steps.report.outputs.test-history-enabled == 'true' && steps.report.outputs.test-history-events != '0' && steps.report.outputs.test-history-spool-path != '' && (steps.test-history-resolve.outputs.upload-spool == 'always' || (steps.test-history-resolve.outputs.upload-spool == 'on-failure' && steps.report.outputs.test-history-shipping-status == 'failed')) }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ inputs.test-history-spool-artifact-name }}
+        name: ${{ steps.test-history-resolve.outputs.spool-artifact-name }}
         path: ${{ steps.report.outputs.test-history-spool-path }}
         if-no-files-found: warn
         include-hidden-files: true
         retention-days: 14
+
+    - name: Append test history step summary
+      if: ${{ always() && inputs.write-step-summary == 'true' && steps.report.outputs.test-history-enabled == 'true' }}
+      shell: bash
+      env:
+        INPUT_TEST_HISTORY_ENV: ${{ inputs.test-history-env }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        TEST_HISTORY_SHIPPING_STATUS: ${{ steps.report.outputs.test-history-shipping-status }}
+        TEST_HISTORY_EVENTS: ${{ steps.report.outputs.test-history-events }}
+        TEST_HISTORY_POSTED: ${{ steps.report.outputs.test-history-posted }}
+        TEST_HISTORY_FAILURE_REASON: ${{ steps.report.outputs.test-history-failure-reason }}
+        TEST_HISTORY_SPOOL_ARTIFACT_NAME: ${{ steps.test-history-resolve.outputs.spool-artifact-name }}
+        TEST_HISTORY_SPOOL_ARTIFACT_URL: ${{ steps.test-history-upload-spool.outputs.artifact-url }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${GITHUB_STEP_SUMMARY:-}" ]]; then
+          exit 0
+        fi
+
+        python3 <<'PY'
+        import json
+        import os
+        import urllib.parse
+
+        env_name = os.environ.get("INPUT_TEST_HISTORY_ENV") or os.environ.get("INPUT_ENVIRONMENT") or "unknown"
+        build_id = os.environ["GITHUB_RUN_ID"]
+        status = os.environ.get("TEST_HISTORY_SHIPPING_STATUS") or "unknown"
+        events = os.environ.get("TEST_HISTORY_EVENTS") or "0"
+        posted = os.environ.get("TEST_HISTORY_POSTED") or "false"
+        failure_reason = os.environ.get("TEST_HISTORY_FAILURE_REASON") or ""
+        artifact_name = os.environ.get("TEST_HISTORY_SPOOL_ARTIFACT_NAME") or "test-history-events"
+        artifact_url = os.environ.get("TEST_HISTORY_SPOOL_ARTIFACT_URL") or ""
+
+        expr = f'{{service_name="test-results-report"}} |= "{build_id}"'
+        panes = {
+          "test-history": {
+            "datasource": "logs-all",
+            "queries": [{
+              "refId": "A",
+              "expr": expr,
+              "queryType": "range",
+              "datasource": {"type": "loki", "uid": "logs-all"},
+            }],
+            "range": {"from": "now-6h", "to": "now"},
+          },
+        }
+        query = urllib.parse.urlencode({
+          "orgId": "1",
+          "schemaVersion": "1",
+          "panes": json.dumps(panes, separators=(",", ":")),
+        })
+        grafana_url = f"https://wo11y-grafana-dev.nscale.teleport.sh/explore?{query}"
+
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+          summary.write("\n### Test History\n\n")
+          summary.write(f"- Shipping status: `{status}`\n")
+          summary.write(f"- Posted: `{posted}`\n")
+          summary.write(f"- Events: `{events}`\n")
+          summary.write(f"- GitHub build id: `{build_id}`\n")
+          if failure_reason:
+            summary.write(f"- Failure reason: `{failure_reason}`\n")
+          if artifact_url:
+            summary.write(f"- Retry spool: [{artifact_name}]({artifact_url})\n")
+          else:
+            summary.write(f"- Retry spool: `{artifact_name}`\n")
+          summary.write(f"- wo11y Grafana: [open `{env_name}` test-history logs]({grafana_url})\n")
+          summary.write(f"- LogQL: `{expr}`\n")
+        PY
 
     - name: Dump test history OTLP port-forward logs
       if: ${{ always() && steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}

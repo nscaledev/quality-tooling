@@ -125,7 +125,7 @@ This section is the operating contract for maintainers and coding agents changin
 
 ### Test History Publishing
 
-Test history publishing is opt-in. Set `publish-test-history: true` to post OTLP log records through the `github-test-history-otlp-writer` Teleport bot into the observability collector. Leave it at `auto` to publish only when a caller provides an existing OTLP endpoint or the legacy API URL. When enabled, the action:
+Test history publishing is enabled by default. The action posts OTLP log records through the `github-test-history-otlp-writer` Teleport bot into the observability collector unless `publish-test-history: false` is set. Set `publish-test-history: auto` to publish only when a caller provides an existing OTLP endpoint or the legacy API URL. When enabled, the action:
 
 - normalizes parsed test results into test attempt events and writes each event as an OTLP HTTP log record to `/v1/logs`;
 - enriches failed OTLP records with compact AI category, likely reason, and next check fields when AI failure analysis is available;
@@ -136,7 +136,7 @@ Test history publishing is opt-in. Set `publish-test-history: true` to post OTLP
 - treats collector, API, token, storage, and network failures as warnings so test history cannot fail the test job;
 - runs after summary rendering and Slack notification so OTLP collector failures cannot block the report analysis or notification path;
 - emits `test-history-shipping-status=failed`, `test-history-failure-reason`, and a GitHub warning annotation when OTLP logs do not reach the agent collector.
-- uploads the NDJSON retry spool as a `test-history-events` artifact on shipping failure by default.
+- uploads the NDJSON retry spool as a `test-history-events-${test-history-env || environment}` artifact by default.
 
 The workflow job that calls this action must grant GitHub OIDC when using the default bot path:
 
@@ -155,11 +155,10 @@ jobs:
           format: junit
           title: API Test Results
           environment: dev
-          publish-test-history: 'true'
           test-history-suite: uni-region-api
 ```
 
-The default spool path is `$GITHUB_WORKSPACE/.test-history/events.ndjson`. By default the action uploads that file as the `test-history-events` artifact only when shipping fails. Set `test-history-upload-spool: always` to attach it for every published run, or `false` to disable artifact upload.
+The default spool path is `$GITHUB_WORKSPACE/.test-history/events.ndjson`. By default the action uploads that file for every published run as `test-history-events-${test-history-env || environment}`. Set `test-history-upload-spool: on-failure` to attach it only when shipping fails, or `false` to disable artifact upload.
 
 Legacy API posting remains available for compatibility by setting `test-history-publish-mode: api` with `test-history-api-url` and `test-history-token`, or by leaving `publish-test-history: auto` while providing `TEST_HISTORY_API_URL`.
 
@@ -340,8 +339,8 @@ When enabled, the report includes:
 | `title` | No | `Test Results` | Report title |
 | `workflow-url` | No | inferred | GitHub Actions workflow URL |
 | `report-url` | No | empty | Published report URL, e.g. Allure |
-| `publish-test-history` | No | `auto` | Publish normalized events: `auto`, `true`, or `false`; explicit `true` uses OTLP through the Teleport writer bot |
-| `test-history-publish-mode` | No | `auto` | `auto`, `otlp`, or `api`; auto uses OTLP for explicit publishing and API only for legacy API URL auto publishing |
+| `publish-test-history` | No | `true` | Publish normalized events: `true`, `false`, or `auto`; default `true` uses OTLP through the Teleport writer bot |
+| `test-history-publish-mode` | No | `otlp` | `otlp`, `api`, or `auto`; OTLP uses the Teleport-backed observability collector by default |
 | `test-history-otlp-endpoint` | No | `TEST_HISTORY_OTLP_ENDPOINT` | Existing OTLP HTTP logs endpoint; when omitted in OTLP mode, the action opens a collector port-forward |
 | `test-history-teleport-proxy` | No | `nscale.teleport.sh:443` | Teleport proxy for the test history OTLP writer bot |
 | `test-history-teleport-token` | No | `github-test-history-otlp-writer` | Teleport GitHub join token for OTLP test history shipping |
@@ -356,8 +355,8 @@ When enabled, the report includes:
 | `test-history-framework` | No | inferred from format | Framework stored in test history |
 | `test-history-env` | No | `environment` | Environment stored in test history |
 | `test-history-output-path` | No | `$GITHUB_WORKSPACE/.test-history/events.ndjson` | NDJSON spool path for replay |
-| `test-history-upload-spool` | No | `on-failure` | Upload retry spool artifact: `on-failure`, `always`, or `false` |
-| `test-history-spool-artifact-name` | No | `test-history-events` | Artifact name used for the uploaded retry spool |
+| `test-history-upload-spool` | No | `always` | Upload retry spool artifact: `always`, `on-failure`, or `false` |
+| `test-history-spool-artifact-name` | No | `test-history-events-${test-history-env || environment}` | Artifact name used for the uploaded retry spool |
 | `test-history-artifact-url` | No | `report-url`, then workflow URL | Artifact or workflow URL stored with each event |
 | `max-failures` | No | `10` | Failure detail limit |
 | `max-skips` | No | `10` | Skip detail limit |

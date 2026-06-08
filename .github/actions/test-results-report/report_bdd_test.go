@@ -818,16 +818,23 @@ var _ = Describe("Test Results Report", func() {
 
 			It("should attach the test history retry spool when collector shipping fails", func() {
 				Expect(action).To(ContainSubstring("test-history-upload-spool"))
-				Expect(action).To(ContainSubstring("default: 'on-failure'"))
+				Expect(action).To(ContainSubstring("default: 'always'"))
 				Expect(action).To(ContainSubstring("Upload test history retry spool"))
 				Expect(action).To(ContainSubstring("actions/upload-artifact@v4"))
 				Expect(action).To(ContainSubstring("test-history-upload-spool must be one of: on-failure, always, false"))
 				Expect(action).To(ContainSubstring("write_output \"upload-spool\" \"$upload_spool\""))
+				Expect(action).To(ContainSubstring("write_output \"spool-artifact-name\" \"$spool_artifact_name\""))
 				Expect(action).To(ContainSubstring("steps.test-history-resolve.outputs.upload-spool == 'on-failure'"))
 				Expect(action).To(ContainSubstring("steps.report.outputs.test-history-shipping-status == 'failed'"))
+				Expect(action).To(ContainSubstring("name: ${{ steps.test-history-resolve.outputs.spool-artifact-name }}"))
 				Expect(action).To(ContainSubstring("steps.report.outputs.test-history-spool-path"))
 				Expect(action).To(ContainSubstring("include-hidden-files: true"))
 				Expect(action).To(ContainSubstring("test-history-spool-artifact-url"))
+				Expect(action).To(ContainSubstring("Append test history step summary"))
+				Expect(action).To(ContainSubstring("### Test History"))
+				Expect(action).To(ContainSubstring("wo11y-grafana-dev.nscale.teleport.sh/explore"))
+				Expect(action).To(ContainSubstring(`expr = f'{{service_name="test-results-report"}} |= "{build_id}"'`))
+				Expect(action).To(ContainSubstring("TEST_HISTORY_SPOOL_ARTIFACT_URL: ${{ steps.test-history-upload-spool.outputs.artifact-url }}"))
 			})
 
 			It("should log Grafana MCP preflight decisions without exposing the service account token", func() {
