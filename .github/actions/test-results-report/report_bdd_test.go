@@ -738,7 +738,7 @@ var _ = Describe("Test Results Report", func() {
 			It("should use the test history OTLP writer bot when publishing needs the observability collector", func() {
 				Expect(action).To(ContainSubstring("Resolve Test History publishing"))
 				Expect(action).To(ContainSubstring("github-test-history-otlp-writer"))
-				Expect(action).To(ContainSubstring("teleport-actions/auth-k8s@v2"))
+				Expect(action).To(ContainSubstring("teleport-actions/auth-k8s@0f46164469ae4fcd4d359d40e06bab17d4be17c9"))
 				Expect(action).To(ContainSubstring("token: ${{ inputs.test-history-teleport-token }}"))
 				Expect(action).To(ContainSubstring("kubernetes-cluster: ${{ inputs.test-history-kube-cluster }}"))
 				Expect(action).To(ContainSubstring(`kubectl port-forward`))
@@ -793,7 +793,7 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("Plan Unikorn CR queries"))
 				Expect(action).To(ContainSubstring("go run . --unikorn-cr-plan-only"))
 				Expect(action).To(ContainSubstring("steps.unikorn-cr-plan.outputs.needs-kube == 'true'"))
-				Expect(action).To(ContainSubstring("teleport-actions/auth-k8s@v2"))
+				Expect(action).To(ContainSubstring("teleport-actions/auth-k8s@0f46164469ae4fcd4d359d40e06bab17d4be17c9"))
 				Expect(action).To(ContainSubstring("token: ${{ inputs.unikorn-cr-teleport-token }}"))
 				Expect(action).To(ContainSubstring("kubernetes-cluster: ${{ steps.unikorn-cr-resolve.outputs.kube-cluster }}"))
 				Expect(action).To(ContainSubstring("go run . --unikorn-cr-collect-only"))

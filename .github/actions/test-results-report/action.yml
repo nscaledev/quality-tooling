@@ -831,7 +831,7 @@ runs:
     - name: Install kubectl for Unikorn CR reader
       if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' && steps.unikorn-cr-plan.outputs.needs-kube == 'true' && steps.unikorn-cr-resolve.outputs.token-configured == 'true' && steps.unikorn-cr-resolve.outputs.kube-cluster != '' }}
       continue-on-error: true
-      uses: azure/setup-kubectl@v4
+      uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede
 
     - name: Install Teleport clients for Unikorn CR reader
       if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' && steps.unikorn-cr-plan.outputs.needs-kube == 'true' && steps.unikorn-cr-resolve.outputs.token-configured == 'true' && steps.unikorn-cr-resolve.outputs.kube-cluster != '' }}
@@ -844,7 +844,7 @@ runs:
     - name: Authenticate Unikorn CR reader
       if: ${{ inputs.enable-unikorn-cr-enrichment == 'true' && steps.unikorn-cr-plan.outputs.needs-kube == 'true' && steps.unikorn-cr-resolve.outputs.token-configured == 'true' && steps.unikorn-cr-resolve.outputs.kube-cluster != '' }}
       continue-on-error: true
-      uses: teleport-actions/auth-k8s@v2
+      uses: teleport-actions/auth-k8s@0f46164469ae4fcd4d359d40e06bab17d4be17c9
       with:
         proxy: ${{ inputs.unikorn-cr-teleport-proxy }}
         token: ${{ inputs.unikorn-cr-teleport-token }}
@@ -1103,7 +1103,7 @@ runs:
     - name: Install kubectl for test history OTLP writer
       if: ${{ steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
       continue-on-error: true
-      uses: azure/setup-kubectl@v4
+      uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede
 
     - name: Install Teleport clients for test history OTLP writer
       if: ${{ steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
@@ -1116,7 +1116,7 @@ runs:
     - name: Authenticate test history OTLP writer
       if: ${{ steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
       continue-on-error: true
-      uses: teleport-actions/auth-k8s@v2
+      uses: teleport-actions/auth-k8s@0f46164469ae4fcd4d359d40e06bab17d4be17c9
       with:
         proxy: ${{ inputs.test-history-teleport-proxy }}
         token: ${{ inputs.test-history-teleport-token }}
