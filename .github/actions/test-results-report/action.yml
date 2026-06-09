@@ -1239,6 +1239,7 @@ runs:
         app: ${{ steps.test-history-grafana-resolve.outputs.grafana-app }}
         listen: tcp://127.0.0.1:${{ inputs.test-history-log-grafana-tunnel-port }}
         timeout-ms: '60000'
+        diag-port: '57264'
 
     - name: Warn test-history Grafana Teleport setup failed
       if: ${{ inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && (steps.grafana-teleport-setup.outcome == 'failure' || steps.test-history-grafana-tunnel.outcome == 'failure') }}
@@ -1247,7 +1248,9 @@ runs:
         echo "::warning::Test-history Grafana Teleport tunnel setup failed; continuing without previous failed test-history lookup"
 
     - name: Verify test-history Grafana tunnel
+      id: test-history-grafana-verify
       if: ${{ inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.test-history-log-grafana-url == '' && steps.test-history-grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure' && steps.test-history-grafana-tunnel.outcome != 'failure' }}
+      continue-on-error: true
       shell: bash
       env:
         INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT: ${{ inputs.test-history-log-grafana-tunnel-port }}
@@ -1271,10 +1274,11 @@ runs:
         done
 
         echo "::warning::Test-history Grafana tunnel did not become reachable; previous failed test-history lookup will likely be skipped"
+        exit 1
 
     - name: Start test-history Grafana MCP server
       id: test-history-grafana-start
-      if: ${{ inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.test-history-log-grafana-url != '' || (steps.test-history-grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure' && steps.test-history-grafana-tunnel.outcome != 'failure')) }}
+      if: ${{ inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.test-history-log-grafana-url != '' || (steps.test-history-grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure' && steps.test-history-grafana-tunnel.outcome != 'failure' && steps.test-history-grafana-verify.outcome != 'failure')) }}
       shell: bash
       env:
         INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ inputs.grafana-service-account-token }}
