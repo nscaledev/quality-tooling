@@ -118,6 +118,9 @@ Failure interpretation requirements:
 - Do not quote source code or add raw source snippets to the report.
 - Use Grafana observations and CR observations only as supporting evidence inside existing pattern rows or next-check bullets.
 - Combine suite evidence, Grafana observations, and CR observations into a single interpretation.
+- Keep environment, region, resource ID, and evidence signals scoped to the matching failure and time window.
+- When grouped failures have different concrete Grafana or CR signals, split the row or explicitly qualify each signal by environment/resource.
+- Do not carry VLAN IDs, physical networks, controller errors, or CR states from one failure, resource, region, or environment to another.
 - Do not add a separate Grafana section.
 - Do not add a separate Kubernetes section.
 - Do not produce separate Grafana sections.
@@ -135,6 +138,8 @@ Grafana evidence rules:
   - Grafana showed connection refused.
   - Grafana showed vlan ids exhausted.
   - Grafana showed VlanIdInUse: VLAN 1101 on physical network physnet1 is in use.
+- Mention a specific VLAN ID or physical network only when the matched evidence for that exact resource and time window contains it.
+- Treat "allocation failure: vlan ids exhausted" as allocation-pool exhaustion, not proof that a specific VLAN ID is in use.
 - Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs.
 - Do not overstate certainty when Grafana returned empty results, cleanup-only logs, or loosely related activity.
 - Do not promote weak, time-disjoint, or identifier-unmatched Grafana observations into root cause.
@@ -569,6 +574,8 @@ Unikorn/Kubernetes resource lifecycle signals include:
 - File storage resource names
 - Kubernetes cluster resource names
 
+For load balancer provisioning failures, do not request loadbalancers.region.unikorn-cloud.org. If the failure evidence includes dependency IDs such as status.networkId or POST /networks UUIDs, CR lookups for dependency resources such as networks.region.unikorn-cloud.org or vlanallocations.region.unikorn-cloud.org are allowed when they materially improve the analysis.
+
 Do not create CR lookups for:
 
 - Purely client-side assertions
@@ -578,7 +585,7 @@ Do not create CR lookups for:
 - HTTP auth/config errors
 - Generic 4xx/5xx responses without resource lifecycle evidence
 - Cleanup-only not_found errors unless the failure is about a Kubernetes-owned resource lifecycle
-- Load balancer failures; use Grafana/API evidence instead of loadbalancers.region.unikorn-cloud.org because the CR reader path does not currently expose that resource
+- Direct load balancer CR lookups; use Grafana/API evidence for the load balancer itself because the CR reader path does not currently expose loadbalancers.region.unikorn-cloud.org
 - Non-resource failures that are better handled by Grafana/logs or summary analysis
 
 Do not infer Kubernetes CR involvement from suite names, product areas, test locations, or filenames alone.
