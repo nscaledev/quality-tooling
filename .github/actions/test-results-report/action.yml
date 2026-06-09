@@ -1430,6 +1430,7 @@ runs:
             summary.write(f"- Test history data: [{artifact_name}]({artifact_url})\n")
           else:
             summary.write(f"- Test history data: `{artifact_name}`\n")
+          summary.write(f"- Logs query: `github_run_id={build_id}`\n")
           summary.write(f"- Test-history diagnostics: [open reporter logs for `{env_name}`]({grafana_url})\n")
         PY
 

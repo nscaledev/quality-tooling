@@ -125,10 +125,13 @@ Grafana evidence rules:
 
 - Use Grafana observations only when directly relevant and concrete.
 - Mention Grafana only when it supports the failure interpretation or changes the next action.
+- When Grafana signal includes a concrete controller error, put that exact signal in the Likely reason or Next check instead of generic wording like "controller issue" or "provisioning problem".
+- For provisioning timeouts, connect dependency logs to the blocked resource when the evidence shows a dependency relationship, for example a load balancer stuck because its network dependency failed.
 - Examples:
   - Grafana showed INTERNAL_ERROR.
   - Grafana showed connection refused.
   - Grafana showed vlan ids exhausted.
+  - Grafana showed VlanIdInUse: VLAN 1101 on physical network physnet1 is in use.
 - Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs.
 - Do not overstate certainty when Grafana returned empty results, cleanup-only logs, or loosely related activity.
 - Do not promote weak, time-disjoint, or identifier-unmatched Grafana observations into root cause.
@@ -380,6 +383,7 @@ Backend evidence includes:
 - state mismatches
 - Infrastructure error states
 - Cloud resource identifiers
+- Dependent resource identifiers from API output or status fields, such as status.networkId for a load balancer
 - Explicit service or component failures
 - Timeout failures involving provisioning, orchestration, or backend APIs
 
@@ -450,6 +454,13 @@ Prefer identifiers in the following order:
 8. Component names
 
 Use the strongest identifiers available.
+
+Dependency-aware lookup rules:
+
+- For provisioning failures, include dependency IDs copied from captured output when they are part of the failed resource state.
+- For load balancer provisioning timeouts, prefer a query that can see both the load balancer UUID and any status.networkId or POST /networks UUID from the same failure evidence.
+- If the failed resource is waiting on a dependency, the useful backend error may be in the dependency controller logs, not only in the failed resource controller logs.
+- Do not invent dependency IDs or component names; use only dependency identifiers present in the failure evidence or failure keyword regex.
 
 reason must be a single sentence explaining why backend log evidence is or is not needed for this failure.
 

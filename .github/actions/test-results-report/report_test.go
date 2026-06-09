@@ -863,8 +863,11 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Combine suite evidence, Grafana observations, and CR observations",
 		"Keep the report close to the existing production format",
 		"Do not add a separate Grafana section",
+		"put that exact signal in the Likely reason or Next check",
+		"load balancer stuck because its network dependency failed",
 		"Grafana showed INTERNAL_ERROR",
 		"Network CR status phase=Error reason=VLANExhausted",
+		"Grafana showed VlanIdInUse: VLAN 1101 on physical network physnet1 is in use",
 		"Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs",
 		"Do not promote weak, time-disjoint, or identifier-unmatched Grafana observations",
 		"Do not overstate certainty when CR lookup returned no objects",
@@ -930,6 +933,10 @@ func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
 		"Create queries only when backend evidence would materially help confirm or explain the failure",
 		"Do not infer backend involvement from suite names, product areas, test locations, or filenames alone",
 		"Pure UI assertion failures",
+		"Dependent resource identifiers from API output or status fields",
+		"status.networkId for a load balancer",
+		"Dependency-aware lookup rules",
+		"the useful backend error may be in the dependency controller logs",
 		"search_terms must contain only values copied from the failure evidence",
 		"Do not invent search terms",
 		"Generate one query per distinct backend failure signature",
@@ -1473,6 +1480,21 @@ func TestGrafanaLogSignalSummaryIncludesVLANExhaustion(t *testing.T) {
 
 	if summary != "controller error: allocation failure: vlan ids exhausted" {
 		t.Fatalf("signal summary should preserve concrete controller error: %s", summary)
+	}
+}
+
+func TestGrafanaLogSignalSummaryIncludesNeutronVlanInUse(t *testing.T) {
+	t.Parallel()
+
+	summary := grafanaLogSignalSummary(GrafanaLogContext{
+		Entries: []GrafanaLogEntry{{
+			Line: `{"level":"error","msg":"provisioning failed unexpectedly","error":"Expected HTTP response code [201 202] when accessing [POST https://compute.glo1.dev.nscale.com:9696/v2.0/networks], but got 409 instead: {\"NeutronError\": {\"type\": \"VlanIdInUse\", \"message\": \"Unable to create the network. The VLAN 1101 on physical network physnet1 is in use.\", \"detail\": \"\"}}","stacktrace":"truncated`,
+		}},
+	})
+
+	expected := "controller error: VlanIdInUse: VLAN 1101 on physical network physnet1 is in use"
+	if summary != expected {
+		t.Fatalf("signal summary should preserve concrete Neutron VLAN error:\nwant: %s\n got: %s", expected, summary)
 	}
 }
 

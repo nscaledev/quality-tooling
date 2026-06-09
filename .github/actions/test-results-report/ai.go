@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -597,23 +598,151 @@ func grafanaLogConcreteErrorSignals(entries []GrafanaLogEntry) []string {
 	seen := map[string]bool{}
 	var signals []string
 	for _, entry := range entries {
-		line := strings.ToLower(cleanOneLine(entry.Line))
-		if strings.Contains(line, "allocation failure: vlan ids exhausted") {
-			if !seen["vlan ids exhausted"] {
-				seen["vlan ids exhausted"] = true
-				signals = append(signals, "allocation failure: vlan ids exhausted")
+		for _, text := range grafanaLogSignalTexts(entry) {
+			signal := grafanaLogConcreteSignalFromText(text)
+			if signal == "" || seen[strings.ToLower(signal)] {
+				continue
 			}
-			continue
-		}
-		if strings.Contains(line, "vlan ids exhausted") && !seen["vlan ids exhausted"] {
-			seen["vlan ids exhausted"] = true
-			signals = append(signals, "vlan ids exhausted")
-		}
-		if len(signals) >= 2 {
-			return signals
+			seen[strings.ToLower(signal)] = true
+			signals = append(signals, signal)
+			if len(signals) >= 3 {
+				return signals
+			}
 		}
 	}
 	return signals
+}
+
+func grafanaLogSignalTexts(entry GrafanaLogEntry) []string {
+	seen := map[string]bool{}
+	var texts []string
+	add := func(value string) {
+		value = cleanOneLine(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		texts = append(texts, value)
+	}
+
+	for _, key := range []string{"error", "message", "msg", "reason", "type"} {
+		add(entry.Parsed[key])
+	}
+	for _, key := range []string{"error", "message", "msg", "reason", "type"} {
+		add(extractJSONStringField(entry.Line, key))
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(entry.Line), &parsed); err == nil {
+		for _, key := range []string{"error", "message", "msg", "reason", "type"} {
+			if value, ok := parsed[key].(string); ok {
+				add(value)
+			}
+		}
+	}
+
+	add(entry.Line)
+	return texts
+}
+
+func grafanaLogConcreteSignalFromText(text string) string {
+	text = cleanOneLine(text)
+	lower := strings.ToLower(text)
+	if lower == "" {
+		return ""
+	}
+	if strings.Contains(lower, "allocation failure: vlan ids exhausted") {
+		return "allocation failure: vlan ids exhausted"
+	}
+	if strings.Contains(lower, "vlan ids exhausted") {
+		return "vlan ids exhausted"
+	}
+	if signal := grafanaLogNeutronVLANSignal(text); signal != "" {
+		return signal
+	}
+	return ""
+}
+
+func grafanaLogNeutronVLANSignal(text string) string {
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "vlanidinuse") && !(strings.Contains(lower, "vlan ") && strings.Contains(lower, " is in use")) {
+		return ""
+	}
+
+	for _, candidate := range []string{
+		extractJSONStringField(text, "message"),
+		extractJSONStringField(text, "error_description"),
+		text,
+	} {
+		if message := grafanaLogVLANInUseMessage(candidate); message != "" {
+			return "VlanIdInUse: " + message
+		}
+	}
+	return "VlanIdInUse"
+}
+
+func grafanaLogVLANInUseMessage(text string) string {
+	text = cleanOneLine(text)
+	if text == "" {
+		return ""
+	}
+	match := regexp.MustCompile(`(?i)(?:unable to create the network\. )?(?:the )?VLAN\s+\d+\s+on physical network\s+[^".]+?\s+is in use`).FindString(text)
+	if match == "" {
+		return ""
+	}
+	match = strings.TrimSpace(match)
+	match = regexp.MustCompile(`(?i)^unable to create the network\.\s+`).ReplaceAllString(match, "")
+	match = regexp.MustCompile(`(?i)^the\s+`).ReplaceAllString(match, "")
+	match = regexp.MustCompile(`(?i)^vlan`).ReplaceAllString(match, "VLAN")
+	return match
+}
+
+func extractJSONStringField(text, field string) string {
+	if text == "" || field == "" {
+		return ""
+	}
+	marker := `"` + field + `"`
+	searchFrom := 0
+	for {
+		index := strings.Index(text[searchFrom:], marker)
+		if index < 0 {
+			return ""
+		}
+		index += searchFrom
+		cursor := index + len(marker)
+		for cursor < len(text) && (text[cursor] == ' ' || text[cursor] == '\t' || text[cursor] == '\n' || text[cursor] == '\r') {
+			cursor++
+		}
+		if cursor >= len(text) || text[cursor] != ':' {
+			searchFrom = index + len(marker)
+			continue
+		}
+		cursor++
+		for cursor < len(text) && (text[cursor] == ' ' || text[cursor] == '\t' || text[cursor] == '\n' || text[cursor] == '\r') {
+			cursor++
+		}
+		if cursor >= len(text) || text[cursor] != '"' {
+			searchFrom = index + len(marker)
+			continue
+		}
+		valueStart := cursor
+		escaped := false
+		for cursor = valueStart + 1; cursor < len(text); cursor++ {
+			switch {
+			case escaped:
+				escaped = false
+			case text[cursor] == '\\':
+				escaped = true
+			case text[cursor] == '"':
+				var value string
+				if err := json.Unmarshal([]byte(text[valueStart:cursor+1]), &value); err == nil {
+					return value
+				}
+				return ""
+			}
+		}
+		return ""
+	}
 }
 
 func grafanaLogErrorSignals(entries []GrafanaLogEntry) []string {
