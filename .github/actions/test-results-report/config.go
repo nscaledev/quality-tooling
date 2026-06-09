@@ -46,6 +46,9 @@ type Config struct {
 	GrafanaLogConcurrency     int
 	GrafanaQueryPlanPath      string
 	EnableTestHistoryLogs     bool
+	TestHistoryLogSelector    string
+	TestHistoryLogLokiUID     string
+	TestHistoryLogLokiName    string
 	TestHistoryLogLookback    string
 	TestHistoryLogLimit       int
 	TestHistoryLogMaxFailures int
@@ -144,6 +147,9 @@ func configFromEnv(env map[string]string) Config {
 		GrafanaLogConcurrency:     parseIntDefault(env["INPUT_GRAFANA_LOG_CONCURRENCY"], 4),
 		GrafanaQueryPlanPath:      env["INPUT_GRAFANA_QUERY_PLAN_PATH"],
 		EnableTestHistoryLogs:     parseBoolDefault(env["INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP"], false),
+		TestHistoryLogSelector:    firstNonEmpty(env["INPUT_TEST_HISTORY_LOG_SELECTOR"], `{service_name="test-results-report"}`),
+		TestHistoryLogLokiUID:     env["INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_UID"],
+		TestHistoryLogLokiName:    firstNonEmpty(env["INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_NAME"], "product-loki"),
 		TestHistoryLogLookback:    firstNonEmpty(env["INPUT_TEST_HISTORY_LOG_LOOKBACK"], "336h"),
 		TestHistoryLogLimit:       parseIntDefault(env["INPUT_TEST_HISTORY_LOG_LIMIT"], 10),
 		TestHistoryLogMaxFailures: parseIntDefault(env["INPUT_TEST_HISTORY_LOG_MAX_FAILURES"], 3),

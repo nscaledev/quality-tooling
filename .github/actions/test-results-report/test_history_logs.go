@@ -38,10 +38,14 @@ func runTestHistoryLogEnrichment(ctx context.Context, config Config, analysis An
 	defer fmt.Println("::endgroup::")
 
 	jobs := buildTestHistoryLogQueryJobs(config, analysis)
-	logGrafana("test history lookup enabled; failures=%d selected=%d endpoint_configured=%t lookback=%s limit=%d",
+	historyConfig := testHistoryLogGrafanaConfig(config)
+	logGrafana("test history lookup enabled; failures=%d selected=%d endpoint_configured=%t datasource_uid=%s datasource_name=%s selector=%s lookback=%s limit=%d",
 		len(analysis.Failures),
 		len(jobs),
-		config.GrafanaMCPEndpoint != "",
+		historyConfig.GrafanaMCPEndpoint != "",
+		firstNonEmpty(historyConfig.GrafanaLokiUID, "<empty>"),
+		firstNonEmpty(historyConfig.GrafanaLokiName, "<empty>"),
+		firstNonEmpty(config.TestHistoryLogSelector, "<empty>"),
 		firstNonEmpty(config.TestHistoryLogLookback, "336h"),
 		normalizedTestHistoryLogLimit(config.TestHistoryLogLimit),
 	)
@@ -49,7 +53,7 @@ func runTestHistoryLogEnrichment(ctx context.Context, config Config, analysis An
 		logGrafana("skipping test history lookup because no failed tests were selected")
 		return nil, nil
 	}
-	if config.GrafanaMCPEndpoint == "" {
+	if historyConfig.GrafanaMCPEndpoint == "" {
 		logGrafana("cannot run test history lookup because no grafana-mcp-endpoint/GRAFANA_MCP_ENDPOINT is available")
 		return nil, fmt.Errorf("test history log lookup requires grafana-mcp-endpoint/GRAFANA_MCP_ENDPOINT")
 	}
@@ -57,13 +61,13 @@ func runTestHistoryLogEnrichment(ctx context.Context, config Config, analysis An
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	logGrafana("connecting to mcp-grafana endpoint %s for test history lookup", safeURLForLog(config.GrafanaMCPEndpoint))
-	client := newMCPHTTPClient(config.GrafanaMCPEndpoint)
+	logGrafana("connecting to mcp-grafana endpoint %s for test history lookup", safeURLForLog(historyConfig.GrafanaMCPEndpoint))
+	client := newMCPHTTPClient(historyConfig.GrafanaMCPEndpoint)
 	if err := client.initialize(ctx); err != nil {
 		return nil, err
 	}
 
-	uid, name, err := resolveLokiDatasource(ctx, client, config)
+	uid, name, err := resolveLokiDatasourceStrict(ctx, client, historyConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +95,7 @@ func shouldRunTestHistoryLogLookup(config Config, analysis Analysis) bool {
 func buildTestHistoryLogQueryJobs(config Config, analysis Analysis) []testHistoryLogQueryJob {
 	failures := selectFailuresForGrafanaLogs(analysis, config.TestHistoryLogMaxFailures)
 	jobs := make([]testHistoryLogQueryJob, 0, len(failures))
+	selector := firstNonEmpty(config.TestHistoryLogSelector, `{service_name="test-results-report"}`)
 	for _, failure := range failures {
 		testID := firstNonEmpty(failure.ID, stableID(failure.Suite, failure.Name), failure.Name)
 		testName := firstNonEmpty(failure.Name, testID)
@@ -99,7 +104,7 @@ func buildTestHistoryLogQueryJobs(config Config, analysis Analysis) []testHistor
 			continue
 		}
 		fingerprint := testHistoryFailureFingerprint(failureExcerpt(failure))
-		logql := buildTestHistoryLogQL(searchTerm, config.TestHistoryRunID)
+		logql := buildTestHistoryLogQL(selector, searchTerm, config.TestHistoryRunID)
 		jobs = append(jobs, testHistoryLogQueryJob{
 			Test:               testCasePointer(failure),
 			TestName:           testName,
@@ -111,6 +116,13 @@ func buildTestHistoryLogQueryJobs(config Config, analysis Analysis) []testHistor
 		})
 	}
 	return jobs
+}
+
+func testHistoryLogGrafanaConfig(config Config) Config {
+	historyConfig := config
+	historyConfig.GrafanaLokiUID = config.TestHistoryLogLokiUID
+	historyConfig.GrafanaLokiName = firstNonEmpty(config.TestHistoryLogLokiName, "product-loki")
+	return historyConfig
 }
 
 func testHistoryLogSearchTerm(testName, testID string) string {
@@ -125,9 +137,10 @@ func testHistoryLogSearchTerm(testName, testID string) string {
 	return candidate
 }
 
-func buildTestHistoryLogQL(searchTerm, currentRunID string) string {
+func buildTestHistoryLogQL(selector, searchTerm, currentRunID string) string {
+	selector = firstNonEmpty(strings.TrimSpace(selector), `{service_name="test-results-report"}`)
 	parts := []string{
-		`{service_name="test-results-report"}`,
+		selector,
 		"|= " + logqlStringLiteral("test_history result failed"),
 		"|= " + logqlStringLiteral(searchTerm),
 	}

@@ -150,6 +150,18 @@ inputs:
     description: 'Fetch previous failed test-history records from O11y through Grafana MCP and pass compact recurrence context into AI analysis.'
     required: false
     default: 'false'
+  test-history-log-selector:
+    description: 'Loki stream selector for previous failed test-history record lookups.'
+    required: false
+    default: '{service_name="test-results-report"}'
+  test-history-log-loki-datasource-uid:
+    description: 'Loki datasource UID for previous failed test-history record lookups. Overrides test-history-log-loki-datasource-name when set.'
+    required: false
+    default: ''
+  test-history-log-loki-datasource-name:
+    description: 'Loki datasource name for previous failed test-history record lookups.'
+    required: false
+    default: 'product-loki'
   test-history-log-lookback:
     description: 'Lookback duration for previous failed test-history record lookups.'
     required: false
@@ -586,6 +598,9 @@ runs:
         INPUT_GRAFANA_LOG_CONCURRENCY: ${{ inputs.grafana-log-concurrency }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
         INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP: ${{ inputs.enable-test-history-log-lookup }}
+        INPUT_TEST_HISTORY_LOG_SELECTOR: ${{ inputs.test-history-log-selector }}
+        INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_UID: ${{ inputs.test-history-log-loki-datasource-uid }}
+        INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_NAME: ${{ inputs.test-history-log-loki-datasource-name }}
         INPUT_TEST_HISTORY_LOG_LOOKBACK: ${{ inputs.test-history-log-lookback }}
         INPUT_TEST_HISTORY_LOG_LIMIT: ${{ inputs.test-history-log-limit }}
         INPUT_TEST_HISTORY_LOG_MAX_FAILURES: ${{ inputs.test-history-log-max-failures }}
@@ -644,7 +659,7 @@ runs:
         echo "Loki datasource UID configured: $(bool "${INPUT_GRAFANA_LOKI_DATASOURCE_UID:-}")"
         echo "Loki datasource name: ${INPUT_GRAFANA_LOKI_DATASOURCE_NAME:-<empty>}"
         echo "lookback: ${INPUT_GRAFANA_LOG_LOOKBACK}; limit: ${INPUT_GRAFANA_LOG_LIMIT}; max failures: ${INPUT_GRAFANA_LOG_MAX_FAILURES}; concurrency: ${INPUT_GRAFANA_LOG_CONCURRENCY}"
-        echo "test history lookup enabled: ${INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP}; lookback: ${INPUT_TEST_HISTORY_LOG_LOOKBACK}; limit: ${INPUT_TEST_HISTORY_LOG_LIMIT}; max failures: ${INPUT_TEST_HISTORY_LOG_MAX_FAILURES}"
+        echo "test history lookup enabled: ${INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP}; datasource uid configured: $(bool "${INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_UID:-}"); datasource name: ${INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_NAME:-<empty>}; selector: ${INPUT_TEST_HISTORY_LOG_SELECTOR:-<empty>}; lookback: ${INPUT_TEST_HISTORY_LOG_LOOKBACK}; limit: ${INPUT_TEST_HISTORY_LOG_LIMIT}; max failures: ${INPUT_TEST_HISTORY_LOG_MAX_FAILURES}"
         echo "MCP setup is deferred until Claude selects at least one backend-related Loki query or test-history lookup needs previous failed records."
 
         if [[ -n "${INPUT_GRAFANA_MCP_ENDPOINT:-}" ]]; then
@@ -1304,6 +1319,9 @@ runs:
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
         INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ steps.grafana-plan.outputs.plan-path }}
         INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP: ${{ inputs.enable-test-history-log-lookup }}
+        INPUT_TEST_HISTORY_LOG_SELECTOR: ${{ inputs.test-history-log-selector }}
+        INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_UID: ${{ inputs.test-history-log-loki-datasource-uid }}
+        INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_NAME: ${{ inputs.test-history-log-loki-datasource-name }}
         INPUT_TEST_HISTORY_LOG_LOOKBACK: ${{ inputs.test-history-log-lookback }}
         INPUT_TEST_HISTORY_LOG_LIMIT: ${{ inputs.test-history-log-limit }}
         INPUT_TEST_HISTORY_LOG_MAX_FAILURES: ${{ inputs.test-history-log-max-failures }}

@@ -532,6 +532,14 @@ func extractJSONText(text string) string {
 }
 
 func resolveLokiDatasource(ctx context.Context, client *mcpHTTPClient, config Config) (string, string, error) {
+	return resolveLokiDatasourceWithOptions(ctx, client, config, false)
+}
+
+func resolveLokiDatasourceStrict(ctx context.Context, client *mcpHTTPClient, config Config) (string, string, error) {
+	return resolveLokiDatasourceWithOptions(ctx, client, config, true)
+}
+
+func resolveLokiDatasourceWithOptions(ctx context.Context, client *mcpHTTPClient, config Config, strictName bool) (string, string, error) {
 	if config.GrafanaLokiUID != "" {
 		logGrafana("using caller-provided Loki datasource uid=%s name=%s", config.GrafanaLokiUID, firstNonEmpty(config.GrafanaLokiName, "<empty>"))
 		return config.GrafanaLokiUID, config.GrafanaLokiName, nil
@@ -563,6 +571,9 @@ func resolveLokiDatasource(ctx context.Context, client *mcpHTTPClient, config Co
 		}
 	}
 
+	if strictName && config.GrafanaLokiName != "" {
+		return "", "", fmt.Errorf("Loki datasource named %q was not returned by Grafana MCP list_datasources", config.GrafanaLokiName)
+	}
 	if fallbackUID == "" {
 		return "", "", fmt.Errorf("no Loki datasource was returned by Grafana MCP list_datasources")
 	}

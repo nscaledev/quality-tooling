@@ -812,6 +812,12 @@ func TestConfigDefaults(t *testing.T) {
 	if config.GrafanaLokiName != "Loki" {
 		t.Fatalf("grafana Loki datasource name default = %q", config.GrafanaLokiName)
 	}
+	if config.TestHistoryLogSelector != `{service_name="test-results-report"}` {
+		t.Fatalf("test history log selector default = %q", config.TestHistoryLogSelector)
+	}
+	if config.TestHistoryLogLokiName != "product-loki" {
+		t.Fatalf("test history Loki datasource name default = %q", config.TestHistoryLogLokiName)
+	}
 	if config.GrafanaLogLookback != "2h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 6 || config.GrafanaLogConcurrency != 4 {
 		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d concurrency %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures, config.GrafanaLogConcurrency)
 	}

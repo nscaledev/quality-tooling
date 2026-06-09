@@ -304,7 +304,7 @@ For `nscale-ui` and other cross-component suites, the planner does not assume a 
 
 ### Test History O11y Lookup
 
-`enable-test-history-log-lookup` is a separate opt-in that reuses Grafana MCP to fetch previous failed `test_history` records from O11y. It does not fetch all test runs. The reporter builds one targeted Loki query per selected current failed test, scoped to `service_name="test-results-report"`, `test_history result failed`, the current test name, and excluding the current GitHub run ID when available. Returned records are filtered by repo, environment, suite, test ID/name, and failure fingerprint when those fields are present.
+`enable-test-history-log-lookup` is a separate opt-in that reuses Grafana MCP to fetch previous failed `test_history` records from O11y. It does not fetch all test runs. The reporter builds one targeted Loki query per selected current failed test, scoped by `test-history-log-selector` (default `service_name="test-results-report"`), `test_history result failed`, the current test name, and excluding the current GitHub run ID when available. By default these lookups use the `product-loki` datasource instead of the environment `Loki` datasource used for backend/controller log enrichment. Returned records are filtered by repo, environment, suite, test ID/name, and failure fingerprint when those fields are present.
 
 The final Claude analysis receives only compact recurrence context: previous failed record count, latest run ID/attempt/timestamp, matching failure fingerprint, previous AI likely reason, and previous next check. Raw historical Loki rows and LogQL stay out of the GitHub summary and Claude input.
 
@@ -370,6 +370,9 @@ When enabled, the report includes:
 | `test-history-spool-artifact-name` | No | `test-history-events-${test-history-env || environment}` | Artifact name used for the uploaded retry spool |
 | `test-history-artifact-url` | No | `report-url`, then workflow URL | Artifact or workflow URL stored with each event |
 | `enable-test-history-log-lookup` | No | `false` | Fetch previous failed test-history records from O11y through Grafana MCP |
+| `test-history-log-selector` | No | `{service_name="test-results-report"}` | Loki stream selector for previous failed test-history record lookups |
+| `test-history-log-loki-datasource-uid` | No | empty | Loki datasource UID for previous failed test-history record lookups |
+| `test-history-log-loki-datasource-name` | No | `product-loki` | Loki datasource name for previous failed test-history record lookups |
 | `test-history-log-lookback` | No | `336h` | Lookback for previous failed test-history records |
 | `test-history-log-limit` | No | `10` | Maximum previous failed records returned per failed test lookup |
 | `test-history-log-max-failures` | No | `3` | Maximum current failed tests looked up in test-history records |
