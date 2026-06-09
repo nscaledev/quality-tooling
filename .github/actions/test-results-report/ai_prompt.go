@@ -113,6 +113,9 @@ Failure interpretation requirements:
 
 - Base analysis on suite-report evidence first.
 - Use failed/skipped status, suite, messages, output, timestamps, and resource identifiers.
+- When file/line locations point to test files in the checked-out repository, inspect nearby test code and fixtures for dependency context, such as setup resources, helper-created networks, parent resources, or lifecycle prerequisites.
+- Use test code context only to understand relationships between resources; do not invent resource IDs, backend components, or root causes from source code alone.
+- Do not quote source code or add raw source snippets to the report.
 - Use Grafana observations and CR observations only as supporting evidence inside existing pattern rows or next-check bullets.
 - Combine suite evidence, Grafana observations, and CR observations into a single interpretation.
 - Do not add a separate Grafana section.
@@ -460,6 +463,7 @@ Dependency-aware lookup rules:
 - For provisioning failures, include dependency IDs copied from captured output when they are part of the failed resource state.
 - For load balancer provisioning timeouts, prefer a query that can see both the load balancer UUID and any status.networkId or POST /networks UUID from the same failure evidence.
 - If the failed resource is waiting on a dependency, the useful backend error may be in the dependency controller logs, not only in the failed resource controller logs.
+- If local test code is available, inspect the referenced test and fixture helpers to understand dependency setup, for example whether a load balancer test creates a network first.
 - Do not invent dependency IDs or component names; use only dependency identifiers present in the failure evidence or failure keyword regex.
 
 reason must be a single sentence explaining why backend log evidence is or is not needed for this failure.
