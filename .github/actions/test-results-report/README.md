@@ -302,6 +302,12 @@ The reporter executes each planned query through Grafana MCP's `query_loki_logs`
 
 For `nscale-ui` and other cross-component suites, the planner does not assume a single backend component. A single UI run can have unrelated failures caused by different backend components, such as Uni, identity, file storage, or console APIs. Claude chooses backend lookups per failure and may use a broad selector when the failure evidence does not identify one namespace or service. If `grafana-loki-datasource-uid` is omitted, the reporter uses Grafana MCP to discover the default or first Loki datasource, optionally filtered by `grafana-loki-datasource-name`.
 
+### Test History O11y Lookup
+
+`enable-test-history-log-lookup` is a separate opt-in that reuses Grafana MCP to fetch previous failed `test_history` records from O11y. It does not fetch all test runs. The reporter builds one targeted Loki query per selected current failed test, scoped to `service_name="test-results-report"`, `test_history result failed`, the current test name, and excluding the current GitHub run ID when available. Returned records are filtered by repo, environment, suite, test ID/name, and failure fingerprint when those fields are present.
+
+The final Claude analysis receives only compact recurrence context: previous failed record count, latest run ID/attempt/timestamp, matching failure fingerprint, previous AI likely reason, and previous next check. Raw historical Loki rows and LogQL stay out of the GitHub summary and Claude input.
+
 ## Previous Result Comparison
 
 For MVP, previous results are read from a local path. The path can be a file or a directory. Directory mode recursively picks the newest supported result file named `results.xml`, `junit.xml`, `results.json`, or `test-results.json`.
@@ -363,6 +369,10 @@ When enabled, the report includes:
 | `test-history-upload-spool` | No | `always` | Upload retry spool artifact: `always`, `on-failure`, or `false` |
 | `test-history-spool-artifact-name` | No | `test-history-events-${test-history-env || environment}` | Artifact name used for the uploaded retry spool |
 | `test-history-artifact-url` | No | `report-url`, then workflow URL | Artifact or workflow URL stored with each event |
+| `enable-test-history-log-lookup` | No | `false` | Fetch previous failed test-history records from O11y through Grafana MCP |
+| `test-history-log-lookback` | No | `336h` | Lookback for previous failed test-history records |
+| `test-history-log-limit` | No | `10` | Maximum previous failed records returned per failed test lookup |
+| `test-history-log-max-failures` | No | `3` | Maximum current failed tests looked up in test-history records |
 | `max-failures` | No | `10` | Failure detail limit |
 | `max-skips` | No | `10` | Skip detail limit |
 | `include-skips` | No | `true` | Include skipped test details in summary |

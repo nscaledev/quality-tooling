@@ -118,6 +118,8 @@ Failure interpretation requirements:
 - Do not quote source code or add raw source snippets to the report.
 - Use Grafana observations and CR observations only as supporting evidence inside existing pattern rows or next-check bullets.
 - Combine suite evidence, Grafana observations, and CR observations into a single interpretation.
+- Use test history observations only as recurrence context. A previous failed test-history record is not proof of the current root cause unless current suite, Grafana, or CR evidence supports the same reason.
+- When test history shows the same test or failure fingerprint failed before, mention it only if it changes the likelihood or next check for the current failure.
 - Keep environment, region, resource ID, and evidence signals scoped to the matching failure and time window.
 - When grouped failures have different concrete Grafana or CR signals, split the row or explicitly qualify each signal by environment/resource.
 - Do not carry VLAN IDs, physical networks, controller errors, or CR states from one failure, resource, region, or environment to another.

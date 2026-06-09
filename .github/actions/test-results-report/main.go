@@ -82,6 +82,15 @@ func run(ctx context.Context, config Config) error {
 	logReportTiming("unikorn-cr-enrichment", stageStarted)
 
 	stageStarted = time.Now()
+	historyLogs, err := runTestHistoryLogEnrichment(ctx, config, analysis)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: test history O11y lookup skipped: %v\n", err)
+	} else if historyLogs != nil {
+		analysis.HistoryLogs = historyLogs
+	}
+	logReportTiming("test-history-log-lookup", stageStarted)
+
+	stageStarted = time.Now()
 	aiAnalysis, err := runAIAnalysis(ctx, config, analysis)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: AI failure analysis skipped: %v\n", err)
@@ -189,18 +198,19 @@ func runGrafanaQueryPlanningMode(ctx context.Context, config Config) error {
 			fmt.Fprintf(os.Stderr, "Warning: Grafana query planning failed; MCP setup will be skipped: %v\n", err)
 			plannedQueries = []GrafanaLogPlannedQuery{}
 		}
-	} else {
+	} else if config.EnableGrafanaLogs {
 		logGrafanaPlanningSkip(config, analysis)
 	}
 
 	if err := writeGrafanaLogQueryPlan(planPath, plannedQueries); err != nil {
 		return err
 	}
-	if err := writeGrafanaPlanOutputs(os.Getenv("GITHUB_OUTPUT"), planPath, len(plannedQueries)); err != nil {
+	needsMCP := len(plannedQueries) > 0 || shouldRunTestHistoryLogLookup(config, analysis)
+	if err := writeGrafanaPlanOutputs(os.Getenv("GITHUB_OUTPUT"), planPath, len(plannedQueries), needsMCP); err != nil {
 		return err
 	}
 	logGrafana("query plan file: %s", planPath)
-	logGrafana("query planning output: queries=%d needs_mcp=%t", len(plannedQueries), len(plannedQueries) > 0)
+	logGrafana("query planning output: queries=%d needs_mcp=%t", len(plannedQueries), needsMCP)
 	logReportTiming("grafana-query-planning-total", totalStarted)
 	return nil
 }
@@ -396,7 +406,7 @@ func writeOutputs(path string, analysis Analysis, slackSent bool) error {
 	return nil
 }
 
-func writeGrafanaPlanOutputs(path string, planPath string, queryCount int) error {
+func writeGrafanaPlanOutputs(path string, planPath string, queryCount int, needsMCP bool) error {
 	if path == "" {
 		return nil
 	}
@@ -407,7 +417,7 @@ func writeGrafanaPlanOutputs(path string, planPath string, queryCount int) error
 	}{
 		{"plan-path", planPath},
 		{"query-count", fmt.Sprint(queryCount)},
-		{"needs-mcp", fmt.Sprint(queryCount > 0)},
+		{"needs-mcp", fmt.Sprint(needsMCP)},
 	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)

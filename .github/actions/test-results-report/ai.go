@@ -340,6 +340,7 @@ func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string 
 
 	renderAIGrafanaLogs(&sb, analysis.GrafanaLogs)
 	renderAIUnikornCRs(&sb, analysis.UnikornCRs)
+	renderAITestHistoryLogs(&sb, analysis.HistoryLogs)
 
 	if len(analysis.Failures) > 0 {
 		renderAITestListHeader(&sb, "Failed tests", len(analysis.Failures), options.MaxFailures)
@@ -500,6 +501,98 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 		}
 	}
 	sb.WriteString("\n")
+}
+
+func renderAITestHistoryLogs(sb *strings.Builder, enrichment *TestHistoryLogEnrichment) {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return
+	}
+
+	sb.WriteString("Test history observations for final analysis:\n")
+	var scope []string
+	if enrichment.StartRFC3339 != "" || enrichment.EndRFC3339 != "" {
+		scope = append(scope, fmt.Sprintf("previous failed test-history records from %s to %s", enrichment.StartRFC3339, enrichment.EndRFC3339))
+	}
+	if enrichment.DatasourceName != "" && enrichment.DatasourceUID != "" {
+		scope = append(scope, fmt.Sprintf("Grafana datasource %s (%s)", enrichment.DatasourceName, enrichment.DatasourceUID))
+	} else if enrichment.DatasourceName != "" {
+		scope = append(scope, fmt.Sprintf("Grafana datasource %s", enrichment.DatasourceName))
+	} else if enrichment.DatasourceUID != "" {
+		scope = append(scope, fmt.Sprintf("Grafana datasource %s", enrichment.DatasourceUID))
+	}
+	if len(scope) > 0 {
+		sb.WriteString(fmt.Sprintf("Scope: %s.\n", strings.Join(scope, "; ")))
+	}
+	for _, context := range enrichment.Contexts {
+		testName := firstNonEmpty(context.TestName, "Unknown test")
+		if context.Test != nil {
+			testName = firstNonEmpty(context.Test.Name, context.Test.ID, testName)
+		}
+		sb.WriteString(fmt.Sprintf("- Test: %s", truncate(cleanOneLine(testName), 220)))
+		if context.Error != "" {
+			sb.WriteString(fmt.Sprintf("; test-history lookup failed: %s\n", truncate(cleanOneLine(context.Error), 220)))
+			continue
+		}
+		if context.LineCount == 0 {
+			sb.WriteString("; no previous failed test-history records found")
+		} else if context.LineCount == 1 {
+			sb.WriteString("; previous failed test-history records: 1")
+		} else {
+			sb.WriteString(fmt.Sprintf("; previous failed test-history records: %d", context.LineCount))
+		}
+		if context.FailureFingerprint != "" && testHistoryContextHasSameFingerprint(context) {
+			sb.WriteString("; at least one previous record has the same failure fingerprint")
+		}
+		if context.Truncated {
+			sb.WriteString("; results were truncated by the MCP limit")
+		}
+		if latest := latestTestHistoryObservation(context.Observations); latest != nil {
+			if latest.RunID != "" {
+				sb.WriteString(fmt.Sprintf("; latest run_id: %s", truncate(cleanOneLine(latest.RunID), 80)))
+			}
+			if latest.RunAttempt != "" {
+				sb.WriteString(fmt.Sprintf("; attempt: %s", truncate(cleanOneLine(latest.RunAttempt), 20)))
+			}
+			if latest.Timestamp != "" {
+				sb.WriteString(fmt.Sprintf("; latest timestamp: %s", truncate(cleanOneLine(latest.Timestamp), 80)))
+			}
+			if latest.FailureCategory != "" {
+				sb.WriteString(fmt.Sprintf("; previous category: %s", truncate(cleanOneLine(latest.FailureCategory), 80)))
+			}
+		}
+		sb.WriteString("\n")
+		if latest := latestTestHistoryObservation(context.Observations); latest != nil {
+			if latest.AILikelyReason != "" {
+				sb.WriteString(fmt.Sprintf("  Previous AI likely reason: %s\n", truncate(cleanOneLine(latest.AILikelyReason), 220)))
+			}
+			if latest.AINextCheck != "" {
+				sb.WriteString(fmt.Sprintf("  Previous AI next check: %s\n", truncate(cleanOneLine(latest.AINextCheck), 220)))
+			}
+		}
+		if context.Reason != "" {
+			sb.WriteString(fmt.Sprintf("  Lookup reason: %s\n", truncate(cleanOneLine(context.Reason), 220)))
+		}
+	}
+	sb.WriteString("\n")
+}
+
+func latestTestHistoryObservation(observations []TestHistoryLogObservation) *TestHistoryLogObservation {
+	if len(observations) == 0 {
+		return nil
+	}
+	return &observations[0]
+}
+
+func testHistoryContextHasSameFingerprint(context TestHistoryLogContext) bool {
+	if context.FailureFingerprint == "" {
+		return false
+	}
+	for _, observation := range context.Observations {
+		if observation.FailureFingerprint == context.FailureFingerprint {
+			return true
+		}
+	}
+	return false
 }
 
 func renderAIUnikornCRs(sb *strings.Builder, enrichment *UnikornCREnrichment) {

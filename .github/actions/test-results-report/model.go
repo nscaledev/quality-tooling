@@ -50,6 +50,7 @@ type Analysis struct {
 	Skipped     []TestCase
 	Compare     *Comparison
 	GrafanaLogs *GrafanaLogEnrichment
+	HistoryLogs *TestHistoryLogEnrichment
 	UnikornCRs  *UnikornCREnrichment
 }
 
@@ -100,6 +101,47 @@ type GrafanaLogEntry struct {
 	Labels             map[string]string
 	StructuredMetadata map[string]string
 	Parsed             map[string]string
+}
+
+type TestHistoryLogEnrichment struct {
+	DatasourceUID  string
+	DatasourceName string
+	StartRFC3339   string
+	EndRFC3339     string
+	Contexts       []TestHistoryLogContext
+}
+
+type TestHistoryLogContext struct {
+	Test               *TestCase
+	TestName           string
+	TestID             string
+	FailureFingerprint string
+	Query              string
+	SearchTerm         string
+	Reason             string
+	RawLineCount       int
+	LineCount          int
+	FilteredLineCount  int
+	Truncated          bool
+	Error              string
+	Observations       []TestHistoryLogObservation
+}
+
+type TestHistoryLogObservation struct {
+	Timestamp          string
+	Repo               string
+	Suite              string
+	Env                string
+	RunID              string
+	RunAttempt         string
+	TestID             string
+	TestName           string
+	FailureCategory    string
+	FailureFingerprint string
+	AILikelyReason     string
+	AINextCheck        string
+	AIMatchStrategy    string
+	ArtifactURL        string
 }
 
 type UnikornCREnrichment struct {

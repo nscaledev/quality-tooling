@@ -75,6 +75,60 @@ func TestRunGrafanaQueryPlanningModeWritesPlanOutputsWithoutMCP(t *testing.T) {
 	}
 }
 
+func TestRunGrafanaQueryPlanningModeNeedsMCPForTestHistoryLookup(t *testing.T) {
+	previousPlanner := runGrafanaLogQueryPlanning
+	runGrafanaLogQueryPlanning = func(context.Context, Config, Analysis) ([]GrafanaLogPlannedQuery, error) {
+		t.Fatal("Grafana backend query planner should not run when only test-history lookup is enabled")
+		return nil, nil
+	}
+	defer func() {
+		runGrafanaLogQueryPlanning = previousPlanner
+	}()
+
+	tempDir := t.TempDir()
+	resultsPath := filepath.Join(tempDir, "results.xml")
+	if err := os.WriteFile(resultsPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="API" tests="1" failures="1">
+  <testsuite name="region" tests="1" failures="1">
+    <testcase classname="network" name="creates network">
+      <failure message="network entered error state">backend-shaped failure</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`), 0o600); err != nil {
+		t.Fatalf("write results: %v", err)
+	}
+
+	planPath := filepath.Join(tempDir, "grafana-plan.json")
+	outputPath := filepath.Join(tempDir, "github-output")
+	t.Setenv("GITHUB_OUTPUT", outputPath)
+
+	err := runGrafanaQueryPlanningMode(context.Background(), Config{
+		TestResultsPath:           resultsPath,
+		Format:                    formatJUnit,
+		EnableTestHistoryLogs:     true,
+		TestHistoryLogMaxFailures: 1,
+		GrafanaQueryPlanPath:      planPath,
+	})
+	if err != nil {
+		t.Fatalf("runGrafanaQueryPlanningMode returned error: %v", err)
+	}
+
+	plan := readPlainTestFile(t, planPath)
+	if !strings.Contains(plan, `"queries": []`) {
+		t.Fatalf("expected empty query plan, got:\n%s", plan)
+	}
+	outputs := readPlainTestFile(t, outputPath)
+	for _, expected := range []string{
+		"plan-path=" + planPath,
+		"query-count=0",
+		"needs-mcp=true",
+	} {
+		if !strings.Contains(outputs, expected) {
+			t.Fatalf("outputs missing %q:\n%s", expected, outputs)
+		}
+	}
+}
+
 func TestRunGrafanaQueryPlanningModeFailsOpenOnPlannerError(t *testing.T) {
 	previousPlanner := runGrafanaLogQueryPlanning
 	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
