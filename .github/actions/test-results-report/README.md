@@ -188,7 +188,7 @@ If any gate fails, the action continues without Grafana log context. Non-backend
 - If `grafana-log-start` is omitted, the reporter uses `grafana-log-lookback` ending at report time.
 - The final AI input includes the Grafana query window and, for Ginkgo reports, the test run/spec time ranges.
 - Do not claim an error happened before the Grafana capture window unless the failed test actually began before that window.
-- When a failed test is inside the Grafana window but Grafana returns only cleanup, audit, or activity rows, report that the provisioning/error signal was not present in the returned Grafana lines. The next check should point to resource creation or the pending-to-error transition inside the test window.
+- When a failed test is inside the Grafana window but Grafana returns only cleanup, audit, or activity rows, mention that only when the rows directly match the failed resource and change the next action.
 
 ### Report Formatting
 
@@ -196,7 +196,8 @@ If any gate fails, the action continues without Grafana log context. Non-backend
 - Do not render raw Loki rows, LogQL, search terms, exact failure metadata, Grafana debug output, or query-bearing URLs in the GitHub-facing summary.
 - Grafana observations must stay compact: test, backend area, line count, components, and a neutral Grafana link when available.
 - Final Claude analysis must merge Grafana evidence into the normal pattern table or next-check bullets. It must not add a separate Grafana/Loki section.
-- Slack should remain short and actionable: grouped bullets plus one `Action` bullet. It should explicitly connect test error, AI interpretation, and Grafana signal when Grafana evidence is used.
+- Slack should remain short and actionable: grouped bullets plus one `Action` bullet. It should explicitly connect test error, AI interpretation, and Grafana signal only when Grafana evidence directly supports the failure or changes the next action.
+- Slack should omit weak, time-disjoint, identifier-unmatched, or likely unrelated Grafana observations instead of explaining that they are probably unrelated.
 
 ### Fail-Open And Safety
 

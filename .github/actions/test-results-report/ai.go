@@ -114,9 +114,10 @@ Section 1: Markdown for the GitHub step summary.
 - If Unikorn/Kubernetes CR observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
 - Combine suite report evidence, Grafana MCP observations, and kubectl CR observations into one failure interpretation; do not produce separate source-by-source analyses.
 - Keep the report close to the existing production format; do not add a separate Grafana section or a separate Kubernetes CR section, raw log tables, raw CR YAML/JSON, LogQL, search terms, kubectl commands, or Grafana URL lists.
-- When a Grafana signal is present, mention the concrete signal in the Likely reason or Next check, such as "Grafana showed INTERNAL_ERROR/connection refused" or "Grafana only returned audit/cleanup rows and no explicit error".
+- When a Grafana signal is directly relevant and concrete, mention it in the Likely reason or Next check, such as "Grafana showed INTERNAL_ERROR/connection refused" or "Grafana showed vlan ids exhausted".
 - When a CR signal is present, mention the concrete signal in the Likely reason or Next check, such as "Network CR status phase=Error reason=VLANExhausted", "CR lookup found no matching Network", or "CR query failed with forbidden".
 - Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs.
+- Do not promote weak, time-disjoint, or identifier-unmatched Grafana observations into the root cause. If they are not actionable, omit them from the analysis instead of explaining why they are probably unrelated.
 - Do not overstate certainty when CR lookup returned no objects, missing fields, weak matches, or query failures.
 - If a failed test time range and Grafana query time range are both present, compare them before making timing claims.
 - Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window.
@@ -148,11 +149,13 @@ Section 2: Plain text Slack summary.
 - Do not use tables in the Slack summary; Slack should stay short bullet lines.
 - Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
 - Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason.
+- Use Grafana-backed Slack bullets only when the Grafana observation directly supports the failure interpretation or changes the next action.
 - For Grafana-backed bullets, explicitly connect the test error, your interpretation, and the Grafana signal in the same bullet.
 - For CR-backed bullets, explicitly connect the test error, your interpretation, and the Kubernetes CR signal in the same bullet.
 - Do not use vague phrases like "Grafana returned related activity" unless you also say what Grafana showed or did not show.
 - Do not use vague phrases like "CR state looked related" unless you name the CR kind/name and the status/condition/query failure signal.
-- If Grafana only returned audit/cleanup rows, say that and point the action to the resource creation or provisioning transition period; if Grafana returned error signals, name the signals.
+- Do not mention Grafana in Slack just to say a match was weak, time-disjoint, identifier-unmatched, or likely unrelated; omit that Grafana detail instead.
+- If Grafana only returned audit/cleanup rows, mention it in Slack only when those rows directly match the failed resource and change the next action; if Grafana returned relevant error signals, name the signals.
 - Keep Slack as an overall summary by suite/failure category; include concrete Grafana or CR signals inside the relevant suite/category bullet, not as separate evidence lines.
 - Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window.
 - Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
@@ -170,7 +173,7 @@ Section 2: Plain text Slack summary.
 Use this shape:
 - *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
 - *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
-- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window, so inspect controller/provisioner logs around resource creation and the pending-to-error transition.
+- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana showed vlan ids exhausted for the same resource during the test window, so inspect network capacity before rerunning.
 - *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
 }
 
