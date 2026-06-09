@@ -47,6 +47,9 @@ type Config struct {
 	GrafanaQueryPlanPath      string
 	EnableTestHistoryLogs     bool
 	TestHistoryLogSelector    string
+	TestHistoryLogGrafanaApp  string
+	TestHistoryLogGrafanaURL  string
+	TestHistoryLogMCPEndpoint string
 	TestHistoryLogLokiUID     string
 	TestHistoryLogLokiName    string
 	TestHistoryLogLookback    string
@@ -148,6 +151,9 @@ func configFromEnv(env map[string]string) Config {
 		GrafanaQueryPlanPath:      env["INPUT_GRAFANA_QUERY_PLAN_PATH"],
 		EnableTestHistoryLogs:     parseBoolDefault(env["INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP"], false),
 		TestHistoryLogSelector:    firstNonEmpty(env["INPUT_TEST_HISTORY_LOG_SELECTOR"], `{service_name="test-results-report"}`),
+		TestHistoryLogGrafanaApp:  env["INPUT_TEST_HISTORY_LOG_GRAFANA_APP"],
+		TestHistoryLogGrafanaURL:  env["INPUT_TEST_HISTORY_LOG_GRAFANA_URL"],
+		TestHistoryLogMCPEndpoint: firstNonEmpty(env["INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_ENDPOINT"], env["TEST_HISTORY_LOG_GRAFANA_MCP_ENDPOINT"]),
 		TestHistoryLogLokiUID:     env["INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_UID"],
 		TestHistoryLogLokiName:    firstNonEmpty(env["INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_NAME"], "product-loki"),
 		TestHistoryLogLookback:    firstNonEmpty(env["INPUT_TEST_HISTORY_LOG_LOOKBACK"], "336h"),

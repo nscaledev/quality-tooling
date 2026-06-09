@@ -132,3 +132,34 @@ func TestBuildTestHistoryLogQLUsesCustomSelector(t *testing.T) {
 		t.Fatalf("LogQL should not exclude a run when current run ID is empty: %s", logql)
 	}
 }
+
+func TestTestHistoryLogGrafanaConfigUsesDedicatedEndpoint(t *testing.T) {
+	t.Parallel()
+
+	config := testHistoryLogGrafanaConfig(Config{
+		GrafanaMCPEndpoint:        "http://main-grafana/mcp",
+		TestHistoryLogMCPEndpoint: "http://history-grafana/mcp",
+		TestHistoryLogLokiName:    "product-loki",
+	})
+	if config.GrafanaMCPEndpoint != "http://history-grafana/mcp" {
+		t.Fatalf("history MCP endpoint = %q", config.GrafanaMCPEndpoint)
+	}
+	if config.GrafanaLokiName != "product-loki" {
+		t.Fatalf("history Loki name = %q", config.GrafanaLokiName)
+	}
+}
+
+func TestTestHistoryLogGrafanaConfigDoesNotFallbackWhenDedicatedGrafanaConfigured(t *testing.T) {
+	t.Parallel()
+
+	config := testHistoryLogGrafanaConfig(Config{
+		GrafanaMCPEndpoint:       "http://main-grafana/mcp",
+		TestHistoryLogGrafanaApp: "wo11y-grafana-dev",
+	})
+	if config.GrafanaMCPEndpoint != "" {
+		t.Fatalf("history MCP endpoint should not fall back to main endpoint when dedicated Grafana app is configured, got %q", config.GrafanaMCPEndpoint)
+	}
+	if config.GrafanaLokiName != "product-loki" {
+		t.Fatalf("history Loki name default = %q", config.GrafanaLokiName)
+	}
+}

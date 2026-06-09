@@ -120,6 +120,11 @@ func buildTestHistoryLogQueryJobs(config Config, analysis Analysis) []testHistor
 
 func testHistoryLogGrafanaConfig(config Config) Config {
 	historyConfig := config
+	if config.TestHistoryLogMCPEndpoint != "" {
+		historyConfig.GrafanaMCPEndpoint = config.TestHistoryLogMCPEndpoint
+	} else if config.TestHistoryLogGrafanaApp != "" || config.TestHistoryLogGrafanaURL != "" {
+		historyConfig.GrafanaMCPEndpoint = ""
+	}
 	historyConfig.GrafanaLokiUID = config.TestHistoryLogLokiUID
 	historyConfig.GrafanaLokiName = firstNonEmpty(config.TestHistoryLogLokiName, "product-loki")
 	return historyConfig
