@@ -96,35 +96,195 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 }
 
 func claudePrompt() string {
-	return fmt.Sprintf(`Analyze these test failures and skips. The GitHub step summary already includes run totals, links, and any previous-result comparison before your output, so do not repeat those basics, do not add separate "Failed Tests" or "Skipped Tests" sections, and do not list every test.
+	return fmt.Sprintf(`Analyze these test failures and skips.
 
-Output exactly two sections separated by a line containing only %q. Do not write this delimiter anywhere else.
+The GitHub step summary already includes run totals, links, environment details, actor information, and previous-result comparisons. Do not repeat that information.
 
-Section 1: Markdown for the GitHub step summary.
-- Start with '## Test Failure Analysis'.
-- Keep it concise: one compact pattern table plus up to 4 bullets.
-- Group failures and skips by likely area or pattern, not by individual test.
-- Base the analysis on the suite report evidence first: failed/skipped status, suite, message, output, time window, and resource identifiers from the JSON/XML artifacts.
-- Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
-- Use skipped for patterns where all affected tests are skipped, including known-bug, intentional, disabled, pending, or sentinel skips.
-- Use test/false failure only for failed tests caused by test code, invalid assertions, sentinel failures, or false failures; do not use it for skipped tests.
-- Use unknown/mixed when there is not enough evidence to choose a category confidently.
-- Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
-- If Grafana observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
-- If Unikorn/Kubernetes CR observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
-- Combine suite report evidence, Grafana MCP observations, and kubectl CR observations into one failure interpretation; do not produce separate source-by-source analyses.
-- Keep the report close to the existing production format; do not add a separate Grafana section or a separate Kubernetes CR section, raw log tables, raw CR YAML/JSON, LogQL, search terms, kubectl commands, or Grafana URL lists.
-- When a Grafana signal is directly relevant and concrete, mention it in the Likely reason or Next check, such as "Grafana showed INTERNAL_ERROR/connection refused" or "Grafana showed vlan ids exhausted".
-- When a CR signal is present, mention the concrete signal in the Likely reason or Next check, such as "Network CR status phase=Error reason=VLANExhausted", "CR lookup found no matching Network", or "CR query failed with forbidden".
+Evidence priority:
+
+1. Suite report evidence (JUnit/XML/JSON): status, failure message, output, suite, timestamps, resource identifiers.
+2. Matching Kubernetes/Unikorn CR evidence for the same resource and time window.
+3. Matching Grafana observations for the same resource and time window.
+4. Other correlated environmental observations.
+
+Prefer higher-priority evidence whenever it sufficiently explains a failure. Do not override suite-report evidence with lower-priority observations.
+
+Confidence guidance:
+
+- High confidence: suite report evidence plus matching CR or Grafana evidence.
+- Medium confidence: suite report evidence alone clearly explains the failure.
+- Low confidence: incomplete, conflicting, missing, or weakly correlated evidence.
+- Reflect confidence through wording but do not add a confidence column.
+
+Output exactly two sections separated by a line containing only:
+
+%s
+
+Do not output this delimiter anywhere else.
+
+==================================================
+SECTION 1: GitHub Step Summary (Markdown)
+==================================================
+
+Start with:
+
+## Test Failure Analysis
+
+Keep the report concise.
+Keep the report close to the existing production format.
+
+Include:
+
+### Patterns
+
+| Category | What failed | Why it failed | Likely reason | Impact | Next check |
+| --- | --- | --- | --- | ---: | --- |
+
+Classification must be one of:
+
+- infra/external
+- configuration
+- code/core logic
+- test/false failure
+- skipped
+- unknown/mixed
+
+Classification rules:
+
+- skipped
+  - All affected tests are skipped.
+  - Includes known-bug skips, disabled tests, pending tests, intentional skips, and sentinel skips.
+
+- test/false failure
+  - Test code bugs.
+  - Invalid assertions.
+  - Sentinel failures.
+  - Harness issues.
+  - False failures.
+  - Other failures caused by test logic rather than product behavior.
+
+- code/core logic
+  - Product behavior contradicts expected behavior.
+  - Functional regressions.
+  - Core workflow failures caused by product logic.
+
+- configuration
+  - Credentials.
+  - Permissions.
+  - Feature flags.
+  - Environment configuration.
+  - Provisioning configuration.
+  - Quota configuration.
+  - Misconfiguration before product behavior is exercised.
+
+- infra/external
+  - Infrastructure.
+  - Platform failures.
+  - Network failures.
+  - External service dependency failures.
+  - Capacity issues.
+  - Availability issues.
+  - Provisioning failures caused by underlying systems.
+
+- unknown/mixed
+  - Evidence is insufficient.
+  - Evidence conflicts.
+  - Root cause cannot be confidently determined.
+
+Pattern requirements:
+
+- Group failures and skips by likely area or pattern.
+- Do not group by individual test.
+- Order patterns by operational significance before count.
+- A single infrastructure blocker may be more important than many skipped tests.
+- Use representative tests only when they help explain the pattern.
+- Limit representative examples to at most two test names per pattern.
+- Include affected counts only for that pattern.
+- Do not restate overall run totals.
+
+Failure interpretation requirements:
+
+- Base analysis on suite-report evidence first.
+- Use failed/skipped status, suite, messages, output, timestamps, and resource identifiers.
+- Use Grafana observations and CR observations only as supporting evidence inside existing pattern rows or next-check bullets.
+- Combine suite evidence, Grafana observations, and CR observations into a single interpretation.
+- Do not add a separate Grafana section.
+- Do not add a separate Kubernetes section.
+- Do not produce separate Grafana sections.
+- Do not produce separate Kubernetes sections.
+- Do not produce source-by-source analysis.
+
+Grafana evidence rules:
+
+- Use Grafana observations only when directly relevant and concrete.
+- Mention Grafana only when it supports the failure interpretation or changes the next action.
+- Examples:
+  - Grafana showed INTERNAL_ERROR.
+  - Grafana showed connection refused.
+  - Grafana showed vlan ids exhausted.
 - Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs.
-- Do not promote weak, time-disjoint, or identifier-unmatched Grafana observations into the root cause. If they are not actionable, omit them from the analysis instead of explaining why they are probably unrelated.
-- Do not overstate certainty when CR lookup returned no objects, missing fields, weak matches, or query failures.
+- Do not overstate certainty when Grafana returned empty results, cleanup-only logs, or loosely related activity.
+- Do not promote weak, time-disjoint, or identifier-unmatched Grafana observations into root cause.
 - If a failed test time range and Grafana query time range are both present, compare them before making timing claims.
-- Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window.
-- When the failed test is inside the Grafana window but Grafana only returned cleanup/audit/activity rows, say the provisioning error was not present in the returned Grafana lines and point the next check to the resource creation/provisioning transition period inside the test window.
-- The pattern table must make clear what failed, why it failed, the likely reason, impact, and the next check.
-- When test-level detail is useful, add a "### Representative Failed Tests" table capped at 10 rows.
-- In the representative tests table, group tests with the same failure reason into one row instead of listing duplicate failures separately.
+- Do not claim an error occurred before the Grafana capture window unless the failed test began before that window.
+- If the failed test is inside the Grafana window but Grafana only returned cleanup, audit, or activity rows, state that the provisioning/error signal was not present in the returned Grafana lines only when those rows directly match the failed resource and change the next action.
+- Point the next check toward the resource creation or provisioning transition period within the test window when cleanup/audit/activity rows directly match the failed resource.
+- If Grafana evidence is not actionable, omit it rather than explaining why it is weak.
+
+CR evidence rules:
+
+- Use CR observations only when directly relevant and concrete.
+- Mention CR observations only when they support the failure interpretation or change the next action.
+- Examples:
+  - Network CR status phase=Error reason=VLANExhausted.
+  - CR lookup found no matching Network.
+  - CR query failed with forbidden.
+- Do not overstate certainty when CR lookup returned no objects, CR fields are missing, matches are weak, query results are incomplete, or queries failed.
+- If CR evidence is weak or non-actionable, omit it.
+
+The pattern table must clearly communicate:
+
+- What failed.
+- Why it failed.
+- Likely reason.
+- Impact.
+- Next check.
+
+Optional:
+
+### Representative Failed Tests
+
+Include only when test-level detail materially helps explain a pattern. Maximum 10 rows. Group duplicate failure reasons into a single row.
+
+Format:
+
+| Suite / area | Representative tests | Failure reason | Count |
+| --- | --- | --- | ---: |
+
+### Suggested Next Checks
+
+Provide 2-4 actionable bullets.
+
+Examples:
+
+- Confirm whether failures share the same status or error before opening individual issues.
+- Validate credentials before rerunning representative suites.
+- Inspect provisioning transitions for affected resources.
+- Verify infrastructure capacity before rerunning.
+
+Do not include:
+
+- Separate Failed Tests sections.
+- Separate Skipped Tests sections.
+- Raw logs.
+- Raw CR YAML.
+- Raw CR JSON.
+- Grafana URLs.
+- LogQL.
+- Search terms.
+- kubectl commands.
+- Resource dumps.
+- Full lists of tests.
 
 Use this shape:
 ## Test Failure Analysis
@@ -132,7 +292,7 @@ Use this shape:
 ### Patterns
 | Category | What failed | Why it failed | Likely reason | Impact | Next check |
 | --- | --- | --- | --- | ---: | --- |
-| infra/external | Auth-dependent setup across suites | API calls returned 401 before product assertions | Expired or invalid API token | 23 failed, 37 skipped | Validate the API token, then rerun one representative suite |
+| configuration | Auth-dependent setup across suites | API calls returned 401 before product assertions | Expired or invalid API token | 23 failed, 37 skipped | Validate the API token, then rerun one representative suite |
 
 ### Representative Failed Tests
 | Suite / area | Representative tests | Failure reason | Count |
@@ -141,40 +301,120 @@ Use this shape:
 
 ### Suggested Next Checks
 - Confirm whether the failures share the same status/error before opening individual test issues.
-- Rerun one representative failing suite after credentials or environment config are refreshed.
+- Validate credentials before rerunning representative suites.
+- Inspect provisioning transitions for affected resources.
 
-%s
-Section 2: Plain text Slack summary.
-- 4-6 high-signal Slack mrkdwn bullet lines.
-- Do not use tables in the Slack summary; Slack should stay short bullet lines.
-- Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
-- Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason.
-- Use Grafana-backed Slack bullets only when the Grafana observation directly supports the failure interpretation or changes the next action.
-- For Grafana-backed bullets, explicitly connect the test error, your interpretation, and the Grafana signal in the same bullet.
-- For CR-backed bullets, explicitly connect the test error, your interpretation, and the Kubernetes CR signal in the same bullet.
-- Do not use vague phrases like "Grafana returned related activity" unless you also say what Grafana showed or did not show.
-- Do not use vague phrases like "CR state looked related" unless you name the CR kind/name and the status/condition/query failure signal.
-- Do not mention Grafana in Slack just to say a match was weak, time-disjoint, identifier-unmatched, or likely unrelated; omit that Grafana detail instead.
-- If Grafana only returned audit/cleanup rows, mention it in Slack only when those rows directly match the failed resource and change the next action; if Grafana returned relevant error signals, name the signals.
-- Keep Slack as an overall summary by suite/failure category; include concrete Grafana or CR signals inside the relevant suite/category bullet, not as separate evidence lines.
+==================================================
+SECTION 2: Slack Summary (plain text)
+==================================================
+
+Output 4-6 high-signal Slack mrkdwn bullet lines. Do not use tables.
+Keep Slack as an overall summary by suite/failure category.
+
+Pattern bullet format:
+
+- *<suite/category>* (<category>): ...
+
+Where category is one of:
+
+- infra/external
+- configuration
+- code/core logic
+- test/false failure
+- skipped
+- unknown/mixed
+
+Each pattern bullet must explain:
+
+- Which suite or area failed.
+- What failed.
+- Why it failed.
+- Likely reason.
+
+Slack evidence rules:
+
+Grafana-backed bullets:
+
+- Include Grafana only when it directly supports the failure interpretation or changes the next action.
+- Explicitly connect the test error, interpretation, and Grafana signal in the same bullet.
+
+CR-backed bullets:
+
+- Include CR observations only when they directly support the failure interpretation or change the next action.
+- Explicitly connect the test error, interpretation, and CR signal in the same bullet.
+
+Do not:
+
+- Do not use vague phrases like "Grafana returned related activity".
+- Do not use vague phrases like "CR state looked related".
+- Do not mention Grafana merely to say correlation was weak.
+- Do not mention Grafana merely to say evidence was time-disjoint.
+- Do not mention Grafana merely to say evidence was identifier-unmatched.
+- Do not mention Grafana merely to say evidence was probably unrelated.
 - Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window.
-- Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
-- Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
-- Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
-- Do not add standalone supporting bullets such as '- *Evidence:*', '- *Impact:*', '- *Details:*', or '- *Confidence:*'.
-- For intentional or sentinel skipped tests, use the skipped category and one short phrase that says when the skip should be removed or re-enabled; do not mention issue alerting unless it appears in the evidence.
-- For intentional or sentinel failed tests, use one short phrase that says it is temporary and should be removed or disabled before review; do not mention issue alerting unless it appears in the evidence.
+- Do not mention CR merely to say it looked related.
+- Do not mention vague CR state observations.
+- Do not mention weak CR matches without a concrete signal.
+
+Cleanup-only Grafana handling:
+
+- Mention cleanup/audit/activity rows only when they directly match the failed resource and change the next action.
+- If Grafana returned relevant errors, name the signals, such as INTERNAL_ERROR, connection refused, or vlan ids exhausted.
+
+Grouping rules:
+
+- Group by suite when one suite is affected.
+- Group by shared root cause when multiple suites share the same cause.
+
+Ordering rules:
+
+- Lead with the highest-attention product, infra, configuration, or environment blocker.
+- Do not prioritize by count alone.
+- Keep temporary sentinel/test-validation failures short unless they are the only issue.
+- Include only the evidence needed to justify the category.
+
+Skip handling:
+
+- For intentional skips, known-bug skips, disabled tests, pending tests, and sentinel skips, use category "skipped" and briefly state when the skip should be removed or re-enabled.
+
+Sentinel failure handling:
+
+- For intentional sentinel failures, use category "test/false failure" and briefly state that the failure is temporary and should be removed or disabled before review.
+
+Do not:
+
+- Do not list every failed test.
+- Do not list every skipped test.
 - Do not list every failed or skipped test.
-- Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
-- End with exactly one '- *Action:*' bullet.
-- When failed tests are present, the Action bullet must mention that test-level failure reasons are available in the GitHub build summary before the next action.
+- Do not restate the test run title, environment, branch, actor, or full totals line.
+- Do not restate run totals.
+- Do not restate run title.
+- Do not restate environment.
+- Do not restate branch.
+- Do not restate actor.
+- Do not include selector names, file paths, or retry details unless they materially change the next action.
+- Do not add Evidence bullets.
+- Do not add Impact bullets.
+- Do not add Details bullets.
+- Do not add Confidence bullets.
+- Do not mention issue alerting unless it appears in the evidence.
+
+Finish with exactly one action bullet:
+
+- *Action:* Use the GitHub build summary for detailed test-level failure reasons, then perform the highest-priority validation or focused rerun identified above.
+- When failed tests are present, the action bullet must mention that detailed test-level failure reasons are available in the GitHub build summary.
+
+If the run contains only skipped tests and no failures:
+
+- *Action:* Mention only the highest-priority skip review or re-enable action.
+- Do not mention test-level failure reasons.
 - Do not mention test-level failure reasons for skip-only runs.
 
 Use this shape:
-- *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
+- *Auth / all suites* (configuration): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
 - *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
 - *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana showed vlan ids exhausted for the same resource during the test window, so inspect network capacity before rerunning.
-- *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
+- *Action:* Use the GitHub build summary for detailed test-level failure reasons, then validate credentials and rerun one focused smoke suite.`, aiSlackDelimiter)
 }
 
 func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analysis Analysis) ([]GrafanaLogPlannedQuery, error) {
