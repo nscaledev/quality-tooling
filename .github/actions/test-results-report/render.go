@@ -258,10 +258,24 @@ func formatSignedDuration(duration time.Duration) string {
 
 func tableCell(value string) string {
 	value = cleanOneLine(value)
+	// Test names/messages are untrusted. GitHub renders step summaries as
+	// (HTML-permitting) Markdown, so neutralize HTML before the Markdown-level
+	// pipe escaping to stop tag/image-beacon injection from attacker-controlled
+	// test output.
+	value = escapeHTML(value)
 	value = strings.ReplaceAll(value, "|", "\\|")
 	if value == "" {
 		return "-"
 	}
+	return value
+}
+
+// escapeHTML renders the three HTML-significant characters inert so untrusted
+// content cannot inject tags (e.g. <img>) into the GitHub step summary.
+func escapeHTML(value string) string {
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	value = strings.ReplaceAll(value, ">", "&gt;")
 	return value
 }
 

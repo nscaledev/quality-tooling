@@ -56,7 +56,30 @@ type AIInputOptions struct {
 const (
 	aiSlackDelimiter       = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
 	claudeCommandWaitDelay = time.Second
+	// claudeCodePackage pins the Claude Code CLI to an exact published version.
+	// The reporter feeds untrusted test output to this CLI, so an unpinned
+	// "@anthropic-ai/claude-code" (resolved by npx at runtime) would let a
+	// compromised release run with our token. Bump deliberately after review.
+	claudeCodePackage = "@anthropic-ai/claude-code@2.1.153"
 )
+
+// claudeEnvAllowlist is the set of environment variables propagated to the
+// Claude Code subprocess. Everything else in the runner environment
+// (GRAFANA_SERVICE_ACCOUNT_TOKEN, GH_TOKEN/GITHUB_TOKEN, the Slack webhook,
+// kube credentials, INPUT_* values, etc.) is deliberately withheld so that a
+// prompt injection in the untrusted test data cannot exfiltrate it even if it
+// somehow reached a tool. CLAUDE_CODE_OAUTH_TOKEN is added separately.
+var claudeEnvAllowlist = []string{
+	"PATH",
+	"HOME",
+	"TMPDIR",
+	"LANG",
+	"LC_ALL",
+	"NODE_PATH",
+	"NPM_CONFIG_CACHE",
+	"NPM_CONFIG_PREFIX",
+	"NPM_CONFIG_USERCONFIG",
+}
 
 var (
 	runGrafanaLogQueryPlanning     = runClaudeGrafanaLogQueryPlanning
@@ -146,11 +169,38 @@ func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysi
 }
 
 func newClaudeCommand(ctx context.Context, token, prompt, input string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", prompt)
+	// The reporter sends untrusted test names/output to this CLI. Lock the
+	// session down so a prompt injection cannot do anything but return text:
+	//   --tools ""              disable every built-in tool (no Bash/file/web)
+	//   --permission-mode dontAsk  auto-deny any tool call that slips through
+	//   --bare                  skip CLAUDE.md, plugins, settings, agents, MCP
+	//   --strict-mcp-config     ignore any ambient MCP server configuration
+	args := []string{
+		"--yes", claudeCodePackage,
+		"-p", prompt,
+		"--tools", "",
+		"--permission-mode", "dontAsk",
+		"--bare",
+		"--strict-mcp-config",
+	}
+	cmd := exec.CommandContext(ctx, "npx", args...)
 	cmd.WaitDelay = claudeCommandWaitDelay
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+token)
+	cmd.Env = claudeSubprocessEnv(token)
 	cmd.Stdin = strings.NewReader(input)
 	return cmd
+}
+
+// claudeSubprocessEnv builds a minimal environment for the Claude Code CLI:
+// only the allowlisted variables needed to run node/npx, plus the OAuth token.
+func claudeSubprocessEnv(token string) []string {
+	env := make([]string, 0, len(claudeEnvAllowlist)+1)
+	for _, key := range claudeEnvAllowlist {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+token)
+	return env
 }
 
 func renderGrafanaLogQueryPlanningInput(analysis Analysis, config Config) string {
