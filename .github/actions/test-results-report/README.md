@@ -160,6 +160,10 @@ jobs:
 
 The default spool path is `$GITHUB_WORKSPACE/.test-history/events.ndjson`. By default the action uploads that file for every published run as `test-history-events-${test-history-env || environment}`. Set `test-history-upload-spool: on-failure` to attach it only when shipping fails, or `false` to disable artifact upload.
 
+Because test history shipping runs after Slack notification, callers should ensure the job `timeout-minutes` is large enough to cover both reporting and OTLP posting. The port-forward and HTTP post typically complete in a few seconds, but a slow or unavailable collector will wait for the configured HTTP timeout before failing gracefully.
+
+Only set `test-history-otlp-endpoint` to a trusted endpoint. The events posted to that URL include test names, failure excerpts, repository name, run IDs, and AI analysis text. When omitted, the action opens a scoped Teleport port-forward to the internal collector, which is the recommended path.
+
 Legacy API posting remains available for compatibility by setting `test-history-publish-mode: api` with `test-history-api-url` and `test-history-token`, or by leaving `publish-test-history: auto` while providing `TEST_HISTORY_API_URL`.
 
 ### Grafana Enrichment Gate

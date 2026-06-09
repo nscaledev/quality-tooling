@@ -332,7 +332,7 @@ func writeTestHistorySpool(path string, events []TestHistoryEvent) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -466,7 +466,10 @@ func doPostTestHistoryEvents(ctx context.Context, client *http.Client, url strin
 
 func readTestHistoryResponse(resp *http.Response) (int, string) {
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[test-history] warning: failed to read response body: %v\n", err)
+	}
 	return resp.StatusCode, cleanOneLine(string(body))
 }
 

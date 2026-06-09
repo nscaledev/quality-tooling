@@ -736,3 +736,64 @@ func otlpAttributeMap(t *testing.T, raw any) map[string]string {
 	}
 	return result
 }
+
+func TestTestHistoryIngestURL(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "bare host appends path",
+			input: "https://api.example.com",
+			want:  "https://api.example.com/v1/runs/ingest",
+		},
+		{
+			name:  "trailing slash is stripped before append",
+			input: "https://api.example.com/",
+			want:  "https://api.example.com/v1/runs/ingest",
+		},
+		{
+			name:  "already complete URL is idempotent",
+			input: "https://api.example.com/v1/runs/ingest",
+			want:  "https://api.example.com/v1/runs/ingest",
+		},
+		{
+			name:  "already complete URL with trailing slash is idempotent",
+			input: "https://api.example.com/v1/runs/ingest/",
+			want:  "https://api.example.com/v1/runs/ingest",
+		},
+		{
+			name:    "empty string returns error",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "missing scheme returns error",
+			input:   "api.example.com/v1/runs/ingest",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := testHistoryIngestURL(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("testHistoryIngestURL(%q) = %q, want error", tc.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("testHistoryIngestURL(%q) unexpected error: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("testHistoryIngestURL(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
