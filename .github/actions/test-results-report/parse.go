@@ -466,7 +466,7 @@ func parseRFC3339NanoTime(value string) time.Time {
 }
 
 func normalizeStatus(value string) TestStatus {
-	switch strings.ToLower(value) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "passed", "pass", "success", "expected", "flaky":
 		return StatusPassed
 	case "failed", "failure", "error", "unexpected", "timedout", "interrupted", "panicked", "aborted":

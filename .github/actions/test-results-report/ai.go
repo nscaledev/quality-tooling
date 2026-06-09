@@ -506,8 +506,19 @@ func renderAIUnikornCRs(sb *strings.Builder, enrichment *UnikornCREnrichment) {
 		return
 	}
 
-	sb.WriteString("Unikorn/Kubernetes CR observations for final analysis:\n")
+	contexts := make([]UnikornCRContext, 0, len(enrichment.Contexts))
 	for _, context := range enrichment.Contexts {
+		if context.Error != "" {
+			continue
+		}
+		contexts = append(contexts, context)
+	}
+	if len(contexts) == 0 {
+		return
+	}
+
+	sb.WriteString("Unikorn/Kubernetes CR observations for final analysis:\n")
+	for _, context := range contexts {
 		testName := firstNonEmpty(context.TestName, "General lookup")
 		if context.Test != nil {
 			testName = firstNonEmpty(context.Test.Name, context.Test.ID, testName)
@@ -531,10 +542,6 @@ func renderAIUnikornCRs(sb *strings.Builder, enrichment *UnikornCREnrichment) {
 			sb.WriteString(fmt.Sprintf("; name: %s", truncate(cleanOneLine(context.Name), 120)))
 		} else if context.Selector != "" {
 			sb.WriteString("; selector lookup")
-		}
-		if context.Error != "" {
-			sb.WriteString(fmt.Sprintf("; CR lookup failed: %s\n", truncate(cleanOneLine(context.Error), 220)))
-			continue
 		}
 		if context.ResultCount == 0 {
 			sb.WriteString("; no matching CR objects")
@@ -901,8 +908,7 @@ func missingUnikornCREvidenceTexts(summary string, enrichment *UnikornCREnrichme
 
 func compactUnikornCREvidenceSignal(context UnikornCRContext) (string, string) {
 	if context.Error != "" {
-		message := truncate(cleanOneLine(context.Error), 160)
-		return "Kubernetes CR lookup failed: `" + message + "`.", message
+		return "", ""
 	}
 
 	signal := unikornCRSignalSummary(context)

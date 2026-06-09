@@ -92,6 +92,54 @@ func TestBuildTestHistoryEventsFromJUnitUsesAPIContractFields(t *testing.T) {
 	}
 }
 
+func TestTestHistoryFailureFingerprintNormalizesVolatileTokens(t *testing.T) {
+	t.Parallel()
+
+	first := testHistoryFailureFingerprint("Timed out after 300.005s waiting for load balancer f6413693-ba3c-444e-9e80-cf2645a41f88 at /tmp/run-123/spec.go:42 on port 8443 trace 0x7ffdeadbeef at 2026-06-09T11:02:03Z")
+	second := testHistoryFailureFingerprint(" timed out after 301s waiting for load balancer c9f3d569-4c74-4c90-ad6c-69033bc4702e at /private/tmp/run-999/spec.go:77 on port 9443 trace 0x123abc at 2026-06-09T11:07:20Z ")
+	if first == "" || second == "" || first != second {
+		t.Fatalf("expected volatile-token-normalized fingerprints to match, got %q and %q", first, second)
+	}
+
+	changed := testHistoryFailureFingerprint("connection refused while waiting for load balancer c9f3d569-4c74-4c90-ad6c-69033bc4702e")
+	if changed == first {
+		t.Fatalf("different logical failures should not share fingerprint %q", first)
+	}
+}
+
+func TestTestHistoryStatusMappersUseSharedNormalizer(t *testing.T) {
+	t.Parallel()
+
+	rawCases := map[string]string{
+		"passed":     string(StatusPassed),
+		" timedOut ": string(StatusFailed),
+		"timedOut":   string(StatusFailed),
+		"panicked":   string(StatusFailed),
+		"aborted":    string(StatusFailed),
+		"pending":    string(StatusSkipped),
+		"new-status": string(StatusOther),
+		"":           string(StatusOther),
+	}
+	for raw, want := range rawCases {
+		if got := testHistoryStatusFromRaw(raw); got != want {
+			t.Fatalf("testHistoryStatusFromRaw(%q) = %q, want %q", raw, got, want)
+		}
+	}
+
+	playwrightCases := map[string]TestStatus{
+		"passed":      StatusPassed,
+		"timedOut":    StatusFailed,
+		"interrupted": StatusFailed,
+		"skipped":     StatusSkipped,
+		"new-status":  StatusOther,
+	}
+	for raw, want := range playwrightCases {
+		if got := testHistoryPlaywrightResultStatus(raw); got != want {
+			t.Fatalf("testHistoryPlaywrightResultStatus(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestBuildTestHistoryEventsFromGinkgoTreatsAbortAndPanicAsFailures(t *testing.T) {
 	t.Parallel()
 

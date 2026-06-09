@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -56,6 +57,15 @@ type testHistoryContext struct {
 	ArtifactURL string
 	StartedAt   time.Time
 }
+
+var (
+	testHistoryFingerprintUUIDPattern      = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+	testHistoryFingerprintTempPathPattern  = regexp.MustCompile(`(?i)(?:/private)?/tmp/[^\s]+|/var/folders/[^\s]+|[a-z]:\\(?:users\\[^\\\s]+\\appdata\\local\\temp|temp)\\[^\s]+`)
+	testHistoryFingerprintTimestampPattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}[t\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b|\b\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b`)
+	testHistoryFingerprintDurationPattern  = regexp.MustCompile(`\b\d+(?:\.\d+)?\s*(?:ns|us|µs|ms|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)\b`)
+	testHistoryFingerprintHexPattern       = regexp.MustCompile(`\b0x[0-9a-f]+\b|\b[0-9a-f]{8,}\b`)
+	testHistoryFingerprintNumberPattern    = regexp.MustCompile(`\b\d+\b`)
+)
 
 type TestHistoryPublishResult struct {
 	Enabled        bool
@@ -749,6 +759,7 @@ func testHistoryAIAnnotationForEvent(event TestHistoryEvent, annotations []testH
 	}
 	if len(annotations) == 1 {
 		annotation := annotations[0]
+		// A lone AI pattern is broad run-level context, not a per-test text match.
 		annotation.MatchStrategy = "single_pattern"
 		return &annotation
 	}
@@ -986,22 +997,15 @@ func testHistoryStatusFromRaw(raw string) string {
 		return string(StatusPassed)
 	case StatusFailed:
 		return string(StatusFailed)
-	default:
+	case StatusSkipped:
 		return string(StatusSkipped)
+	default:
+		return string(StatusOther)
 	}
 }
 
 func testHistoryPlaywrightResultStatus(raw string) TestStatus {
-	switch raw {
-	case "passed":
-		return StatusPassed
-	case "failed", "timedOut", "interrupted":
-		return StatusFailed
-	case "skipped":
-		return StatusSkipped
-	default:
-		return StatusSkipped
-	}
+	return normalizeStatus(raw)
 }
 
 func playwrightResultMessage(result playwrightResult) string {
@@ -1033,12 +1037,26 @@ func truncateFailureExcerpt(value string) string {
 }
 
 func testHistoryFailureFingerprint(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
+	normalized := normalizeTestHistoryFailureFingerprintInput(value)
+	if normalized == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(trimmed))
+	sum := sha256.Sum256([]byte(normalized))
 	return "sha256:" + fmt.Sprintf("%x", sum)
+}
+
+func normalizeTestHistoryFailureFingerprintInput(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return ""
+	}
+	normalized = testHistoryFingerprintTempPathPattern.ReplaceAllString(normalized, "<path>")
+	normalized = testHistoryFingerprintUUIDPattern.ReplaceAllString(normalized, "<uuid>")
+	normalized = testHistoryFingerprintTimestampPattern.ReplaceAllString(normalized, "<timestamp>")
+	normalized = testHistoryFingerprintDurationPattern.ReplaceAllString(normalized, "<duration>")
+	normalized = testHistoryFingerprintHexPattern.ReplaceAllString(normalized, "<hex>")
+	normalized = testHistoryFingerprintNumberPattern.ReplaceAllString(normalized, "<num>")
+	return strings.Join(strings.Fields(normalized), " ")
 }
 
 func durationMilliseconds(duration time.Duration) int {

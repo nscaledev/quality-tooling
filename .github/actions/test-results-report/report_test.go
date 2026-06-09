@@ -962,6 +962,7 @@ func TestUnikornCRQueryPlanningPromptRequestsReadOnlyCRJSON(t *testing.T) {
 		"Purely client-side assertions",
 		"Generic 4xx/5xx responses without resource lifecycle evidence",
 		"Cleanup-only not_found errors unless the failure is about a Kubernetes-owned resource lifecycle",
+		"Load balancer failures; use Grafana/API evidence instead of loadbalancers.region.unikorn-cloud.org",
 		"Do not infer Kubernetes CR involvement from suite names, product areas, test locations, or filenames alone",
 		"Use the exact failure_ref values",
 		"test_name must exactly match the input Test value",
@@ -979,6 +980,7 @@ func TestUnikornCRQueryPlanningPromptRequestsReadOnlyCRJSON(t *testing.T) {
 		"Avoid duplicate queries that differ only by test name while looking up the same resource or same lifecycle condition",
 		"Do not request:",
 		"- pods",
+		"- loadbalancers.region.unikorn-cloud.org",
 		"- mutations",
 		`{"queries":[]}`,
 	} {
@@ -1080,7 +1082,7 @@ func TestParseGrafanaLogQueryPlan(t *testing.T) {
 func TestParseUnikornCRQueryPlan(t *testing.T) {
 	t.Parallel()
 
-	queries, err := parseUnikornCRQueryPlan("```json\n{\"queries\":[{\"failure_ref\":\" f1 \",\"test_name\":\" creates network \",\"backend_area\":\" network \",\"resource\":\" networks.region.unikorn-cloud.org \",\"name\":\" network-123 \",\"reason\":\" network CR reached error \",\"confidence\":\" High \"},{\"failure_ref\":\"f2\",\"resource\":\"pods\",\"name\":\"pod-1\"},{\"failure_ref\":\"f3\",\"resource\":\"instances.compute.unikorn-cloud.org\"}]}\n```")
+	queries, err := parseUnikornCRQueryPlan("```json\n{\"queries\":[{\"failure_ref\":\" f1 \",\"test_name\":\" creates network \",\"backend_area\":\" network \",\"resource\":\" networks.region.unikorn-cloud.org \",\"name\":\" network-123 \",\"reason\":\" network CR reached error \",\"confidence\":\" High \"},{\"failure_ref\":\"f2\",\"resource\":\"pods\",\"name\":\"pod-1\"},{\"failure_ref\":\"f3\",\"resource\":\"instances.compute.unikorn-cloud.org\"},{\"failure_ref\":\"f4\",\"resource\":\"loadbalancers.region.unikorn-cloud.org\",\"name\":\"lb-123\"}]}\n```")
 	if err != nil {
 		t.Fatalf("parseUnikornCRQueryPlan returned error: %v", err)
 	}
@@ -1228,6 +1230,39 @@ func TestRenderAIInputIncludesUnikornCRs(t *testing.T) {
 	}
 }
 
+func TestRenderAIInputOmitsFailedUnikornCRLookups(t *testing.T) {
+	t.Parallel()
+
+	input := renderAIInputWithOptions(Analysis{
+		Current: TestRun{Name: "API Tests"},
+		Stats:   Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:    "creates load balancer",
+			Message: "load balancer stayed provisioning",
+		}},
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				FailureRef: "f1",
+				TestName:   "creates load balancer",
+				Resource:   "loadbalancers.region.unikorn-cloud.org",
+				Name:       "lb-123",
+				Error:      "kubectl get loadbalancers failed: forbidden",
+			}},
+		},
+	}, AIInputOptions{})
+
+	for _, unexpected := range []string{
+		"Unikorn/Kubernetes CR observations for final analysis:",
+		"CR lookup failed",
+		"loadbalancers.region.unikorn-cloud.org",
+		"forbidden",
+	} {
+		if strings.Contains(input, unexpected) {
+			t.Fatalf("AI input should omit failed CR lookup detail %q:\n%s", unexpected, input)
+		}
+	}
+}
+
 func TestEnsureAIAnalysisEvidenceSignalsAddsMissingUnikornCRSignal(t *testing.T) {
 	t.Parallel()
 
@@ -1368,6 +1403,36 @@ func TestEnsureAIAnalysisEvidenceSignalsDoesNotBackfillEmptyCRLookup(t *testing.
 		if strings.Contains(summary, "Kubernetes CR lookup found no matching") ||
 			strings.Contains(summary, "no matching `networks.region.unikorn-cloud.org`") {
 			t.Fatalf("empty CR lookups should not create deterministic evidence bullets:\n%s", summary)
+		}
+	}
+}
+
+func TestEnsureAIAnalysisEvidenceSignalsDoesNotBackfillFailedCRLookup(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary:  "## Test Failure Analysis\n\n### Suggested Next Checks\n- Inspect controller logs.\n",
+		SlackSummary: "- *Load balancer setup* (infra/external): Load balancer stayed provisioning; inspect controller logs.\n- *Action:* Use the GitHub build summary for test-level failure reasons.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				Resource: "loadbalancers.region.unikorn-cloud.org",
+				Name:     "lb-123",
+				Error:    "kubectl get loadbalancers failed: forbidden",
+			}},
+		},
+	})
+
+	for _, summary := range []string{updated.StepSummary, updated.SlackSummary} {
+		for _, unexpected := range []string{
+			"Kubernetes CR lookup failed",
+			"kubectl get loadbalancers failed",
+			"forbidden",
+		} {
+			if strings.Contains(summary, unexpected) {
+				t.Fatalf("failed CR lookup should not be backfilled into summaries:\n%s", summary)
+			}
 		}
 	}
 }

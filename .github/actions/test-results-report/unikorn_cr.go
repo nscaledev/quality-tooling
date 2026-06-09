@@ -128,6 +128,7 @@ func planUnikornCRQueries(ctx context.Context, config Config, analysis Analysis)
 	}
 	originalPlannedCount := len(plannedQueries)
 	plannedQueries = limitUnikornCRPlannedQueries(plannedQueries, config.UnikornCRMaxFailures)
+	plannedQueries = filterUnsupportedUnikornCRPlannedQueries(plannedQueries)
 	logUnikornCR("Claude planned %d CR lookup(s); using %d after limit", originalPlannedCount, len(plannedQueries))
 	logUnikornCRPlannedQueries(plannedQueries)
 	return plannedQueries, nil
@@ -223,6 +224,10 @@ func writeUnikornCRContextOutputs(path string, contextPath string) error {
 func collectUnikornCRContexts(ctx context.Context, config Config, queries []UnikornCRPlannedQuery) *UnikornCREnrichment {
 	enrichment := &UnikornCREnrichment{Contexts: []UnikornCRContext{}}
 	for _, query := range queries {
+		if isUnsupportedUnikornCRResource(query.Resource) {
+			logUnikornCR("skipping unsupported CR lookup ref=%s resource=%s", firstNonEmpty(strings.TrimSpace(query.FailureRef), "<empty>"), strings.TrimSpace(query.Resource))
+			continue
+		}
 		context := UnikornCRContext{
 			FailureRef:  query.FailureRef,
 			TestName:    query.TestName,
@@ -495,6 +500,9 @@ func sanitizeUnikornCRPlannedQuery(query *UnikornCRPlannedQuery) error {
 	if !safeUnikornCRResource.MatchString(query.Resource) {
 		return fmt.Errorf("resource contains unsupported characters")
 	}
+	if isUnsupportedUnikornCRResource(query.Resource) {
+		return fmt.Errorf("resource %q is not currently supported for CR enrichment", query.Resource)
+	}
 	if isBlockedUnikornCRResource(query.Resource) {
 		return fmt.Errorf("resource %q is not allowed for CR enrichment", query.Resource)
 	}
@@ -523,14 +531,27 @@ var (
 )
 
 func isBlockedUnikornCRResource(resource string) bool {
-	base := strings.ToLower(strings.Split(resource, ".")[0])
-	base = strings.TrimSuffix(base, "s")
+	base := normalizedUnikornCRResourceBase(resource)
 	switch base {
 	case "pod", "secret", "configmap", "event":
 		return true
 	default:
 		return false
 	}
+}
+
+func isUnsupportedUnikornCRResource(resource string) bool {
+	switch normalizedUnikornCRResourceBase(resource) {
+	case "loadbalancer":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizedUnikornCRResourceBase(resource string) string {
+	base := strings.ToLower(strings.Split(strings.TrimSpace(resource), ".")[0])
+	return strings.TrimSuffix(base, "s")
 }
 
 func normalizedUnikornCRFailureLimit(limit int) int {
@@ -566,6 +587,21 @@ func limitUnikornCRPlannedQueries(queries []UnikornCRPlannedQuery, limit int) []
 		return queries[:limit]
 	}
 	return queries
+}
+
+func filterUnsupportedUnikornCRPlannedQueries(queries []UnikornCRPlannedQuery) []UnikornCRPlannedQuery {
+	if len(queries) == 0 {
+		return queries
+	}
+	filtered := make([]UnikornCRPlannedQuery, 0, len(queries))
+	for _, query := range queries {
+		if isUnsupportedUnikornCRResource(query.Resource) {
+			logUnikornCR("skipping unsupported planned lookup ref=%s resource=%s", firstNonEmpty(strings.TrimSpace(query.FailureRef), "<empty>"), strings.TrimSpace(query.Resource))
+			continue
+		}
+		filtered = append(filtered, query)
+	}
+	return filtered
 }
 
 func logUnikornCRPlannedQueries(queries []UnikornCRPlannedQuery) {

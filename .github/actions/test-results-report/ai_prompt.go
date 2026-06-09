@@ -550,7 +550,6 @@ Unikorn/Kubernetes resource lifecycle signals include:
 - Cloud resource UUIDs
 - VPC resource names
 - Network resource names
-- Load balancer resource names
 - Instance resource names
 - File storage resource names
 - Kubernetes cluster resource names
@@ -564,6 +563,7 @@ Do not create CR lookups for:
 - HTTP auth/config errors
 - Generic 4xx/5xx responses without resource lifecycle evidence
 - Cleanup-only not_found errors unless the failure is about a Kubernetes-owned resource lifecycle
+- Load balancer failures; use Grafana/API evidence instead of loadbalancers.region.unikorn-cloud.org because the CR reader path does not currently expose that resource
 - Non-resource failures that are better handled by Grafana/logs or summary analysis
 
 Do not infer Kubernetes CR involvement from suite names, product areas, test locations, or filenames alone.
@@ -599,7 +599,6 @@ Examples supported by the github-unikorn-cr-reader bot include:
 
 - networks.region.unikorn-cloud.org
 - vlanallocations.region.unikorn-cloud.org
-- loadbalancers.region.unikorn-cloud.org
 - servers.region.unikorn-cloud.org
 - filestorages.region.unikorn-cloud.org
 - computeinstances.compute.unikorn-cloud.org
@@ -692,6 +691,7 @@ Do not request:
 - secrets
 - configmaps
 - events
+- loadbalancers.region.unikorn-cloud.org
 - writes
 - deletes
 - patches

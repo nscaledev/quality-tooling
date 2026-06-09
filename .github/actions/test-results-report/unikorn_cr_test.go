@@ -111,6 +111,27 @@ func TestCollectUnikornCRContextsRecordsKubectlFailure(t *testing.T) {
 	}
 }
 
+func TestCollectUnikornCRContextsSkipsUnsupportedLoadBalancerQueries(t *testing.T) {
+	previousRunner := runKubectlGet
+	runKubectlGet = func(_ context.Context, args ...string) ([]byte, error) {
+		t.Fatalf("kubectl should not run for unsupported load balancer CR queries: %#v", args)
+		return nil, nil
+	}
+	defer func() {
+		runKubectlGet = previousRunner
+	}()
+
+	enrichment := collectUnikornCRContexts(context.Background(), Config{}, []UnikornCRPlannedQuery{{
+		FailureRef: "f1",
+		Resource:   "loadbalancers.region.unikorn-cloud.org",
+		Name:       "lb-123",
+	}})
+
+	if len(enrichment.Contexts) != 0 {
+		t.Fatalf("unsupported load balancer queries should be skipped, got %+v", enrichment.Contexts)
+	}
+}
+
 func TestCollectUnikornCRContextsRejectsUnsafeQueries(t *testing.T) {
 	previousRunner := runKubectlGet
 	runKubectlGet = func(_ context.Context, args ...string) ([]byte, error) {

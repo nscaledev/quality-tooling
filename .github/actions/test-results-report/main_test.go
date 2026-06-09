@@ -189,6 +189,68 @@ func TestRunUnikornCRPlanningModeWritesPlanOutputsWithoutKube(t *testing.T) {
 	}
 }
 
+func TestRunUnikornCRPlanningModeDropsUnsupportedLoadBalancerLookups(t *testing.T) {
+	previousPlanner := runUnikornCRQueryPlanning
+	runUnikornCRQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]UnikornCRPlannedQuery, error) {
+		return []UnikornCRPlannedQuery{{
+			FailureRef:  "f1",
+			TestName:    "creates load balancer",
+			BackendArea: "load-balancer",
+			Resource:    "loadbalancers.region.unikorn-cloud.org",
+			Name:        "lb-123",
+			Reason:      "Load balancer stayed provisioning.",
+			Confidence:  "high",
+		}}, nil
+	}
+	defer func() {
+		runUnikornCRQueryPlanning = previousPlanner
+	}()
+
+	tempDir := t.TempDir()
+	resultsPath := filepath.Join(tempDir, "results.xml")
+	if err := os.WriteFile(resultsPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="API" tests="1" failures="1">
+  <testsuite name="region" tests="1" failures="1">
+    <testcase classname="loadbalancer" name="creates load balancer">
+      <failure message="load balancer stayed provisioning">backend-shaped failure</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`), 0o600); err != nil {
+		t.Fatalf("write results: %v", err)
+	}
+
+	planPath := filepath.Join(tempDir, "unikorn-cr-plan.json")
+	outputPath := filepath.Join(tempDir, "github-output")
+	t.Setenv("GITHUB_OUTPUT", outputPath)
+
+	err := runUnikornCRPlanningMode(context.Background(), Config{
+		TestResultsPath:      resultsPath,
+		Format:               formatJUnit,
+		EnableUnikornCRs:     true,
+		EnableAIAnalysis:     true,
+		ClaudeToken:          "test-token",
+		UnikornCRMaxFailures: 2,
+		UnikornCRPlanPath:    planPath,
+	})
+	if err != nil {
+		t.Fatalf("runUnikornCRPlanningMode returned error: %v", err)
+	}
+
+	plan := readPlainTestFile(t, planPath)
+	if !strings.Contains(plan, `"queries": []`) || strings.Contains(plan, "loadbalancers.region.unikorn-cloud.org") {
+		t.Fatalf("expected load balancer CR query to be dropped, got:\n%s", plan)
+	}
+	outputs := readPlainTestFile(t, outputPath)
+	for _, expected := range []string{
+		"query-count=0",
+		"needs-kube=false",
+	} {
+		if !strings.Contains(outputs, expected) {
+			t.Fatalf("outputs missing %q:\n%s", expected, outputs)
+		}
+	}
+}
+
 func TestRunUnikornCRPlanningModeFailsOpenOnPlannerError(t *testing.T) {
 	previousPlanner := runUnikornCRQueryPlanning
 	runUnikornCRQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]UnikornCRPlannedQuery, error) {
