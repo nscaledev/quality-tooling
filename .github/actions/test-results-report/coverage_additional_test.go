@@ -16,16 +16,22 @@ import (
 func TestClaudeCommandHelpersUseClaudeCodeOutput(t *testing.T) {
 	dir := t.TempDir()
 	stdinPath := filepath.Join(dir, "stdin.txt")
+	modePath := filepath.Join(dir, "mode.txt")
 	npxPath := filepath.Join(dir, "npx")
-	script := `#!/bin/sh
-if [ -n "${FAKE_CLAUDE_STDIN:-}" ]; then
-  cat > "${FAKE_CLAUDE_STDIN}"
-else
-  cat >/dev/null
-fi
-case "${FAKE_CLAUDE_MODE}" in
+	// newClaudeCommand now runs the CLI with a minimal, allowlisted environment,
+	// so the fake npx cannot rely on ad-hoc env vars. It instead writes stdin to
+	// a baked-in path and reads its mode from a baked-in file path. PATH is on
+	// the allowlist, which is how the fake binary is still discovered.
+	script := strings.NewReplacer(
+		"__STDIN__", stdinPath,
+		"__MODE__", modePath,
+		"__DELIM__", aiSlackDelimiter,
+	).Replace(`#!/bin/sh
+cat > "__STDIN__"
+mode=$(cat "__MODE__" 2>/dev/null)
+case "$mode" in
   analysis)
-    printf '## Test Failure Analysis\n\nAI connected test failure to Loki evidence\n%s\n- *Action:* Use the GitHub build summary for test-level failure reasons.\n' "${AI_SLACK_DELIMITER}"
+    printf '## Test Failure Analysis\n\nAI connected test failure to Loki evidence\n__DELIM__\n- *Action:* Use the GitHub build summary for test-level failure reasons.\n'
     ;;
   plan)
     printf '{"queries":[{"failure_ref":"f1","test_name":"uploads file","backend_area":"file-storage","expected_error":"POST /storage returned 500","search_terms":["claim-123","500"],"logql":"file-storage claim-123","reason":"Backend 500 needs Loki evidence.","confidence":"high"}]}'
@@ -35,15 +41,18 @@ case "${FAKE_CLAUDE_MODE}" in
     exit 7
     ;;
 esac
-`
+`)
 	if err := os.WriteFile(npxPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake npx: %v", err)
 	}
+	writeMode := func(mode string) {
+		if err := os.WriteFile(modePath, []byte(mode), 0o600); err != nil {
+			t.Fatalf("write fake claude mode: %v", err)
+		}
+	}
 
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("FAKE_CLAUDE_STDIN", stdinPath)
-	t.Setenv("AI_SLACK_DELIMITER", aiSlackDelimiter)
-	t.Setenv("FAKE_CLAUDE_MODE", "analysis")
+	writeMode("analysis")
 
 	analysis := Analysis{
 		Current: TestRun{Name: "Console E2E"},
@@ -70,7 +79,7 @@ esac
 		t.Fatalf("Claude input did not include failure context:\n%s", input)
 	}
 
-	t.Setenv("FAKE_CLAUDE_MODE", "plan")
+	writeMode("plan")
 	queries, err := runClaudeGrafanaLogQueryPlanning(context.Background(), Config{
 		EnableAIAnalysis:      true,
 		ClaudeToken:           "token",
@@ -92,7 +101,7 @@ esac
 		t.Fatalf("missing Claude token should skip Grafana planning, got queries=%+v err=%v", queries, err)
 	}
 
-	t.Setenv("FAKE_CLAUDE_MODE", "error")
+	writeMode("error")
 	if _, err := runClaudeAnalysis(context.Background(), Config{EnableAIAnalysis: true, ClaudeToken: "token"}, analysis); err == nil || !strings.Contains(err.Error(), "fake claude failed") {
 		t.Fatalf("expected fake Claude error, got %v", err)
 	}
@@ -104,6 +113,94 @@ esac
 	}
 	if result, err := runClaudeAnalysis(context.Background(), Config{EnableAIAnalysis: true, ClaudeToken: "token"}, Analysis{}); err != nil || result != nil {
 		t.Fatalf("empty analysis should skip AI, got result=%+v err=%v", result, err)
+	}
+}
+
+// TestNewClaudeCommandIsHardened locks in the security posture of the Claude
+// Code subprocess: a pinned package version, tool/permission lockdown so an
+// injected prompt cannot run anything, and a minimal environment that withholds
+// runner secrets. If someone reverts these, this test should fail.
+func TestNewClaudeCommandIsHardened(t *testing.T) {
+	t.Setenv("GRAFANA_SERVICE_ACCOUNT_TOKEN", "super-secret-grafana")
+	t.Setenv("GH_TOKEN", "super-secret-gh")
+	t.Setenv("INPUT_SLACK_WEBHOOK_URL", "https://hooks.example/secret")
+
+	cmd := newClaudeCommand(context.Background(), "oauth-token", "prompt", "untrusted input")
+	args := strings.Join(cmd.Args, " ")
+
+	if !strings.Contains(args, claudeCodePackage) {
+		t.Fatalf("claude command must use the pinned package %q, got args: %s", claudeCodePackage, args)
+	}
+	if !strings.Contains(claudeCodePackage, "@") || strings.HasSuffix(claudeCodePackage, "claude-code") {
+		t.Fatalf("claude package %q must be pinned to an explicit version", claudeCodePackage)
+	}
+	for _, want := range []string{"--tools", "--permission-mode", "dontAsk", "--bare", "--strict-mcp-config"} {
+		if !containsArg(cmd.Args, want) {
+			t.Fatalf("claude command missing hardening flag %q, got args: %s", want, args)
+		}
+	}
+
+	// The subprocess environment must carry the OAuth token but none of the
+	// other runner secrets.
+	var sawToken bool
+	for _, entry := range cmd.Env {
+		if entry == "CLAUDE_CODE_OAUTH_TOKEN=oauth-token" {
+			sawToken = true
+		}
+		for _, leaked := range []string{"super-secret-grafana", "super-secret-gh", "hooks.example/secret"} {
+			if strings.Contains(entry, leaked) {
+				t.Fatalf("claude subprocess environment leaked a runner secret: %q", entry)
+			}
+		}
+		if strings.HasPrefix(entry, "GRAFANA_SERVICE_ACCOUNT_TOKEN=") ||
+			strings.HasPrefix(entry, "GH_TOKEN=") ||
+			strings.HasPrefix(entry, "INPUT_") {
+			t.Fatalf("claude subprocess environment leaked a sensitive variable: %q", entry)
+		}
+	}
+	if !sawToken {
+		t.Fatalf("claude subprocess environment must include CLAUDE_CODE_OAUTH_TOKEN, got: %v", cmd.Env)
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestStepSummaryEscapesUntrustedTestContent ensures attacker-controlled test
+// names cannot inject HTML (e.g. an image beacon) into the GitHub step summary.
+func TestStepSummaryEscapesUntrustedTestContent(t *testing.T) {
+	analysis := Analysis{
+		Current:  TestRun{Name: "suite"},
+		Stats:    Stats{Total: 1, Failed: 1},
+		Failures: []TestCase{{Name: `<img src=x onerror=alert(1)> & "go"`}},
+	}
+	summary := renderStepSummary(analysis, RenderOptions{Title: "Results", MaxFailures: 5})
+	if strings.Contains(summary, "<img") {
+		t.Fatalf("step summary must not contain raw HTML tags:\n%s", summary)
+	}
+	if !strings.Contains(summary, "&lt;img") || !strings.Contains(summary, "&amp;") {
+		t.Fatalf("step summary did not HTML-escape the test name:\n%s", summary)
+	}
+}
+
+// TestSlackFailureEscapesBroadcastMentions ensures untrusted test data cannot
+// inject Slack link syntax or broadcast mentions (<!channel>) into a payload.
+func TestSlackFailureEscapesBroadcastMentions(t *testing.T) {
+	rendered := formatSlackFailure(TestCase{
+		Name:    "<!channel> please look",
+		Message: "fail <http://evil|click> & burn",
+	})
+	if strings.Contains(rendered, "<!channel>") || strings.Contains(rendered, "<http://evil|click>") {
+		t.Fatalf("slack failure must escape mentions/links:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "&lt;!channel&gt;") || !strings.Contains(rendered, "&amp;") {
+		t.Fatalf("slack failure did not escape control characters:\n%s", rendered)
 	}
 }
 

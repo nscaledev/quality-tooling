@@ -64,10 +64,10 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 
 	envSuffix := ""
 	if options.Environment != "" {
-		envSuffix = fmt.Sprintf(" (%s)", strings.ToUpper(options.Environment))
+		envSuffix = fmt.Sprintf(" (%s)", escapeSlackText(strings.ToUpper(options.Environment)))
 	}
 
-	text := fmt.Sprintf("%s%s %s - %s", options.Title, envSuffix, firstNonEmpty(analysis.Current.Name, "Test run"), statusText)
+	text := fmt.Sprintf("%s%s %s - %s", escapeSlackText(options.Title), envSuffix, escapeSlackText(firstNonEmpty(analysis.Current.Name, "Test run")), statusText)
 	blocks := []SlackBlock{
 		{
 			Type: "section",
@@ -87,13 +87,13 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 
 	var contextFields []SlackText
 	if options.Environment != "" {
-		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Environment:*\n`%s`", options.Environment)})
+		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Environment:*\n`%s`", escapeSlackText(options.Environment))})
 	}
 	if options.Branch != "" {
-		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Branch:*\n`%s`", options.Branch)})
+		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Branch:*\n`%s`", escapeSlackText(options.Branch))})
 	}
 	if options.Actor != "" {
-		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Triggered by:*\n`%s`", options.Actor)})
+		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Triggered by:*\n`%s`", escapeSlackText(options.Actor))})
 	}
 	if len(contextFields) > 0 {
 		blocks = append(blocks, SlackBlock{Type: "section", Fields: contextFields})
@@ -193,9 +193,9 @@ func sendSlack(ctx context.Context, config Config, payload SlackPayload) error {
 
 func formatSlackFailure(test TestCase) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("*Test:* %s\n", test.Name))
+	sb.WriteString(fmt.Sprintf("*Test:* %s\n", escapeSlackText(test.Name)))
 	if test.Suite != "" {
-		sb.WriteString(fmt.Sprintf("*Suite:* `%s`\n", test.Suite))
+		sb.WriteString(fmt.Sprintf("*Suite:* `%s`\n", escapeSlackText(test.Suite)))
 	}
 	if location := formatLocation(test); location != "" {
 		if test.File != "" {
@@ -204,10 +204,21 @@ func formatSlackFailure(test TestCase) string {
 				location = fmt.Sprintf("%s:%d", location, test.Line)
 			}
 		}
-		sb.WriteString(fmt.Sprintf("*Location:* `%s`\n", location))
+		sb.WriteString(fmt.Sprintf("*Location:* `%s`\n", escapeSlackText(location)))
 	}
 	if test.Message != "" {
-		sb.WriteString(fmt.Sprintf("*Error:*\n```\n%s\n```", truncate(cleanOneLine(test.Message), 500)))
+		sb.WriteString(fmt.Sprintf("*Error:*\n```\n%s\n```", escapeSlackText(truncate(cleanOneLine(test.Message), 500))))
 	}
 	return sb.String()
+}
+
+// escapeSlackText neutralizes the three characters Slack treats as control
+// sequences in mrkdwn, so attacker-controlled test data cannot inject link
+// syntax (<url|text>) or broadcast mentions (<!channel>, <!here>) into a
+// notification. See https://api.slack.com/reference/surfaces/formatting#escaping
+func escapeSlackText(value string) string {
+	value = strings.ReplaceAll(value, "&", "&amp;")
+	value = strings.ReplaceAll(value, "<", "&lt;")
+	value = strings.ReplaceAll(value, ">", "&gt;")
+	return value
 }

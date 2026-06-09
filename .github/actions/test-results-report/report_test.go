@@ -761,7 +761,7 @@ func TestBuildSlackPayloadUsesLegacyFailureDetailsWhenAIAnalysisIsUnavailable(t 
 	rendered := slackPayloadText(payload)
 	for _, expected := range []string{
 		"*Failed Tests:*",
-		"*Test:* Flavor Discovery > should return all available flavors",
+		"*Test:* Flavor Discovery &gt; should return all available flavors",
 		"*Suite:* `Flavor Discovery`",
 		"*Location:* `regions_test.go:139`",
 		"*Error:*\n```\nstatus code 401: token is invalid or has expired\n```",
