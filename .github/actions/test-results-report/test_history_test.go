@@ -479,6 +479,7 @@ func TestPublishTestHistoryEnrichesFailedOTLPLogWithAIReason(t *testing.T) {
 
 	tempDir := t.TempDir()
 	resultsPath := filepath.Join(tempDir, "results.xml")
+	spoolPath := filepath.Join(tempDir, ".test-history", "events.ndjson")
 	if err := os.WriteFile(resultsPath, []byte(`<testsuite name="unit"><testcase classname="pkg" name="fails" time="0.25"><failure message="POST /storage returned 404">cleanup raced after network deletion</failure></testcase></testsuite>`), 0o600); err != nil {
 		t.Fatalf("write results: %v", err)
 	}
@@ -509,6 +510,7 @@ func TestPublishTestHistoryEnrichesFailedOTLPLogWithAIReason(t *testing.T) {
 		TestHistoryEnv:          "dev",
 		TestHistoryRunID:        "run-1",
 		TestHistoryRunAttempt:   1,
+		TestHistoryOutputPath:   spoolPath,
 		TestHistoryTimeout:      2 * time.Second,
 		TestHistoryRetries:      0,
 	}, current, &AIAnalysis{
@@ -522,6 +524,16 @@ func TestPublishTestHistoryEnrichesFailedOTLPLogWithAIReason(t *testing.T) {
 
 	if !result.Posted || result.EventCount != 1 {
 		t.Fatalf("unexpected publish result: %+v", result)
+	}
+	spool := readPlainTestFile(t, spoolPath)
+	for _, expected := range []string{
+		`"failure_category":"infra/external"`,
+		`"ai_likely_reason":"File storage cleanup raced after network deletion"`,
+		`"ai_next_check":"Check file-storage API/controller cleanup handling."`,
+	} {
+		if !strings.Contains(spool, expected) {
+			t.Fatalf("spool missing %q:\n%s", expected, spool)
+		}
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(capturedBody, &payload); err != nil {

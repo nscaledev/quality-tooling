@@ -40,6 +40,8 @@ type TestHistoryEvent struct {
 	FailureCategory       string `json:"failure_category,omitempty"`
 	FailureFingerprint    string `json:"failure_fingerprint,omitempty"`
 	FailureMessageExcerpt string `json:"failure_message_excerpt,omitempty"`
+	AILikelyReason        string `json:"ai_likely_reason,omitempty"`
+	AINextCheck           string `json:"ai_next_check,omitempty"`
 
 	ArtifactURL string    `json:"artifact_url,omitempty"`
 	StartedAt   time.Time `json:"started_at"`
@@ -106,6 +108,7 @@ func publishTestHistoryWithAI(ctx context.Context, config Config, current TestRu
 		result.Warnings = append(result.Warnings, "no test events found")
 		return result
 	}
+	annotateTestHistoryEventsWithAI(events, aiAnalysis)
 
 	if config.TestHistoryOutputPath != "" {
 		if err := writeTestHistorySpool(config.TestHistoryOutputPath, events); err != nil {
@@ -553,6 +556,21 @@ type testHistoryAIAnnotation struct {
 	MatchStrategy string
 }
 
+func annotateTestHistoryEventsWithAI(events []TestHistoryEvent, aiAnalysis *AIAnalysis) {
+	annotations := testHistoryAIAnnotations(aiAnalysis)
+	for index := range events {
+		annotation := testHistoryAIAnnotationForEvent(events[index], annotations)
+		if annotation == nil {
+			continue
+		}
+		if events[index].FailureCategory == "" {
+			events[index].FailureCategory = annotation.Category
+		}
+		events[index].AILikelyReason = otlpAIAttributeValue(firstNonEmpty(annotation.LikelyReason, annotation.WhyFailed), 300)
+		events[index].AINextCheck = otlpAIAttributeValue(annotation.NextCheck, 300)
+	}
+}
+
 func testHistoryOTLPLogRecord(event TestHistoryEvent, aiAnnotation *testHistoryAIAnnotation) map[string]any {
 	severityNumber, severityText := testHistoryOTLPSeverity(event.Status)
 	failureCategory := event.FailureCategory
@@ -630,13 +648,21 @@ func otlpAIAttributeValue(value string, limit int) string {
 func testHistoryOTLPBody(event TestHistoryEvent, aiAnnotation *testHistoryAIAnnotation) string {
 	name := firstNonEmpty(event.TestName, event.TestID)
 	base := fmt.Sprintf("test_history result %s run_id=%s: %s", event.Status, event.RunID, name)
-	if event.Status != string(StatusFailed) || aiAnnotation == nil {
+	if event.Status != string(StatusFailed) {
 		return base
 	}
-	if reason := otlpAIAttributeValue(firstNonEmpty(aiAnnotation.LikelyReason, aiAnnotation.WhyFailed), 220); reason != "" {
+	reason := event.AILikelyReason
+	nextCheck := event.AINextCheck
+	if aiAnnotation != nil {
+		reason = firstNonEmpty(reason, otlpAIAttributeValue(firstNonEmpty(aiAnnotation.LikelyReason, aiAnnotation.WhyFailed), 220))
+		nextCheck = firstNonEmpty(nextCheck, otlpAIAttributeValue(aiAnnotation.NextCheck, 220))
+	}
+	reason = otlpAIAttributeValue(reason, 220)
+	nextCheck = otlpAIAttributeValue(nextCheck, 220)
+	if reason != "" {
 		base += "; ai_likely_reason=" + reason
 	}
-	if nextCheck := otlpAIAttributeValue(aiAnnotation.NextCheck, 220); nextCheck != "" {
+	if nextCheck != "" {
 		base += "; ai_next_check=" + nextCheck
 	}
 	return base
