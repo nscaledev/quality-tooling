@@ -927,12 +927,18 @@ func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
 		`"expected_error"`,
 		`"search_terms"`,
 		`"confidence"`,
-		"Only create queries for failures that appear backend-related",
-		"Do not query for purely client-side assertion failures",
+		"Create queries only when backend evidence would materially help confirm or explain the failure",
+		"Do not infer backend involvement from suite names, product areas, test locations, or filenames alone",
+		"Pure UI assertion failures",
+		"search_terms must contain only values copied from the failure evidence",
+		"Do not invent search terms",
+		"Generate one query per distinct backend failure signature",
+		"Avoid duplicate queries that differ only by test name while searching for the same backend condition",
+		"Use the strongest identifiers available",
 		"Use the exact failure_ref values",
-		"Do not include Grafana URLs",
-		"do not assume a single backend component",
-		`return {"queries":[]}`,
+		"Do not include Grafana URLs, Explore URLs, dashboard URLs, time ranges",
+		"The reporter generates Grafana URLs separately using the datasource, query, and time window",
+		`{"queries":[]}`,
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("planning prompt missing %q:\n%s", expected, prompt)

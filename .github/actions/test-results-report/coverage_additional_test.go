@@ -198,9 +198,9 @@ func TestAIPlanningInputAndExtractionBranches(t *testing.T) {
 	}
 	planningPrompt := grafanaLogQueryPlanningPrompt()
 	for _, expected := range []string{
-		"provisioningStatus/error state mismatches",
-		"resource UUIDs",
-		"cloud resource names",
+		"provisioningStatus mismatches",
+		"Resource UUIDs",
+		"Cloud resource identifiers",
 	} {
 		if !strings.Contains(planningPrompt, expected) {
 			t.Fatalf("planning prompt missing backend signal %q:\n%s", expected, planningPrompt)

@@ -327,28 +327,187 @@ Use this shape:
 func grafanaLogQueryPlanningPrompt() string {
 	return `You are planning read-only Loki log queries for Grafana MCP based on parsed test failures.
 
-Return strict JSON only. Do not include markdown, prose, or code fences.
+Return strict JSON only. Do not include markdown, prose, explanations, comments, or code fences.
 
-Expected output:
-{"queries":[{"failure_ref":"f1","test_name":"uploads file","backend_area":"file-storage","expected_error":"POST /api/storage returned 500 for claim-123","search_terms":["claim-123","file-storage","500"],"logql":"{namespace=~\".+\"} |~ \"(?i)(claim-123|file-storage|500)\"","reason":"The failed UI upload crossed the file storage API and includes a backend 500 signature, so Loki evidence can confirm whether file storage emitted the same error.","confidence":"medium"}]}
+Output format:
+
+{
+  "queries": [
+    {
+      "failure_ref": "f1",
+      "test_name": "uploads file",
+      "backend_area": "file-storage",
+      "expected_error": "POST /api/storage returned 500 for claim-123",
+      "search_terms": ["claim-123","file-storage","500"],
+      "logql": "{namespace=~\".+\"} |~ \"(?i)(claim-123|file-storage|500)\"",
+      "reason": "The failed upload crossed the file storage API and includes a backend 500 response, so Loki evidence can confirm whether the service emitted the same error.",
+      "confidence": "medium"
+    }
+  ]
+}
+
+If no backend-related log lookup is justified, return:
+
+{"queries":[]}
+
+Use the parsed failure evidence to determine whether backend log correlation is warranted.
+
+Evaluate failures using the following evidence priority:
+
+1. Failure message
+2. Captured output
+3. Resource identifiers
+4. Environment-specific failure details
+5. Previous-result comparison
+
+Prefer higher-priority evidence whenever it sufficiently explains the failure.
+
+Do not infer backend involvement from suite names, product areas, test locations, or filenames alone.
+
+Create queries only when backend evidence would materially help confirm or explain the failure.
+
+Backend evidence includes:
+
+- API 4xx or 5xx responses
+- Backend exception signatures
+- Request IDs
+- Trace IDs
+- Correlation IDs
+- Resource UUIDs
+- Resource names
+- Provisioning failures
+- provisioningStatus mismatches
+- state mismatches
+- Infrastructure error states
+- Cloud resource identifiers
+- Explicit service or component failures
+- Timeout failures involving provisioning, orchestration, or backend APIs
+
+Do not create queries for:
+
+- Pure UI assertion failures
+- Visual validation failures
+- Client-side rendering failures
+- Test-code failures
+- Assertion mismatches with no backend signal
+- Known false failures where backend evidence would not affect diagnosis
+
+Use the exact failure_ref values from the input.
+
+test_name must exactly match the corresponding Test value from the input.
+
+expected_error must contain:
+
+- the exact backend-facing error message when available, or
+- the shortest exact backend error signature from the failure evidence
+
+If no exact backend-looking error exists, use an empty string.
+
+backend_area should identify the most likely backend component only when supported by the evidence.
+
+Examples:
+
+- file-storage
+- networking
+- identity
+- provisioning
+- compute
+- billing
+- cluster-lifecycle
+
+If the evidence does not support a component assignment, use:
+
+"unknown"
+
+search_terms must contain only values copied from the failure evidence.
+
+Allowed values:
+
+- trace IDs
+- request IDs
+- correlation IDs
+- UUIDs
+- resource names
+- API paths
+- API error strings
+- status codes
+- backend component names
+- provisioning states
+
+Do not invent search terms.
+
+Do not normalize, paraphrase, or expand identifiers.
+
+Prefer identifiers in the following order:
+
+1. Trace IDs
+2. Request IDs
+3. Correlation IDs
+4. UUIDs
+5. Resource names
+6. API error strings
+7. Status codes
+8. Component names
+
+Use the strongest identifiers available.
+
+reason must be a single sentence explaining why backend log evidence is or is not needed for this failure.
+
+Keep the reason grounded in the failure evidence.
+
+Do not speculate about root causes.
+
+confidence must be one of:
+
+- high
+- medium
+- low
+
+Use:
+
+high:
+- explicit backend error
+- request ID
+- trace ID
+- UUID
+- provisioning failure
+- API 4xx/5xx
+- direct backend component failure
+
+medium:
+- backend involvement is strongly implied but identifiers are limited
+
+low:
+- indirect backend indicators only
+
+Generate one query per distinct backend failure signature.
+
+Avoid duplicate queries that differ only by test name while searching for the same backend condition.
+
+When multiple failures share the same backend error pattern, use the strongest representative failure evidence.
+
+LogQL requirements:
+
+- Read-only queries only.
+- Keep queries concise and readable.
+- Prefer the smallest query that still captures the strongest identifiers.
+- Avoid broad regex searches when a unique identifier is available.
+- Use broad selectors such as:
+
+{namespace=~".+"}
+
+for cross-component failures unless the evidence clearly supports a narrower scope.
+
+Only narrow namespace or service selection when the failure evidence directly supports it.
+
+Do not invent namespaces, services, labels, resources, request IDs, trace IDs, UUIDs, component names, status codes, API paths, or error strings.
+
+Do not request writes or mutations.
 
 Rules:
-- Inspect the failed test names, suites, locations, error messages, captured output, environment, and previous-result comparison.
-- Only create queries for failures that appear backend-related or need backend evidence to confirm the likely cause.
-- Do not query for purely client-side assertion failures when there is no backend signal.
-- Treat resource provisioning timeouts, provisioningStatus/error state mismatches, API 5xx/4xx responses, trace IDs, request IDs, resource UUIDs, and cloud resource names as backend signals that justify a query.
-- Use the exact failure_ref values from the input.
-- test_name must match the input Test value for that failure_ref.
-- expected_error must be the exact error message or shortest exact error signature from the failure evidence; leave it empty when there is no exact backend-looking error.
-- search_terms must contain only identifiers, status codes, API error strings, resource names, or component names copied from the failure evidence.
-- backend_area should name the likely backend component or area when the evidence supports one; otherwise use "unknown".
-- reason must be one consolidated sentence explaining why this specific failure needs or does not need backend log evidence.
-- confidence must be one of "high", "medium", or "low".
-- Prefer precise IDs, request IDs, UUIDs, resource names, status codes, API error strings, and backend component names found in the failure evidence.
-- For cross-component UI suites, do not assume a single backend component. Use a broad Kubernetes label selector such as {namespace=~".+"} unless the failure evidence clearly points to a narrower namespace or service.
-- Keep each LogQL query readable and bounded for the supplied time window. Do not request writes or mutations.
-- Do not include Grafana URLs in this JSON. The reporter generates grafana_explore_url deterministically after it knows the datasource, query, and time range.
-- If no backend-related log lookup is justified, return {"queries":[]}.`
+
+- Do not include Grafana URLs, Explore URLs, dashboard URLs, time ranges, explanatory text outside JSON, markdown, or comments.
+- The reporter generates Grafana URLs separately using the datasource, query, and time window.`
 }
 
 func unikornCRQueryPlanningPrompt() string {
