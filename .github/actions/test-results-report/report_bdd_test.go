@@ -837,10 +837,12 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("Test-history diagnostics"))
 				Expect(action).To(ContainSubstring("open reporter logs for"))
 				Expect(action).To(ContainSubstring("- Logs query:"))
+				Expect(action).To(ContainSubstring("github_run_id=`{build_id}`"))
 				Expect(action).NotTo(ContainSubstring("- Retry spool:"))
 				Expect(action).NotTo(ContainSubstring("- wo11y Grafana:"))
 				Expect(action).NotTo(ContainSubstring("- LogQL:"))
-				Expect(action).To(ContainSubstring(`expr = f'{{service_name="test-results-report"}} |= "{build_id}"'`))
+				Expect(action).NotTo(ContainSubstring(`|= "{build_id}"`))
+				Expect(action).To(ContainSubstring("expr = f'{{service_name=\"test-results-report\"}} | github_run_id=`{build_id}`'"))
 				Expect(action).To(ContainSubstring("TEST_HISTORY_SPOOL_ARTIFACT_URL: ${{ steps.test-history-upload-spool.outputs.artifact-url }}"))
 			})
 

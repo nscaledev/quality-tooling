@@ -1398,7 +1398,7 @@ runs:
         artifact_name = os.environ.get("TEST_HISTORY_SPOOL_ARTIFACT_NAME") or "test-history-events"
         artifact_url = os.environ.get("TEST_HISTORY_SPOOL_ARTIFACT_URL") or ""
 
-        expr = f'{{service_name="test-results-report"}} |= "{build_id}"'
+        expr = f'{{service_name="test-results-report"}} | github_run_id=`{build_id}`'
         panes = {
           "test-history": {
             "datasource": "logs-all",
@@ -1431,7 +1431,7 @@ runs:
           else:
             summary.write(f"- Test history data: `{artifact_name}`\n")
           summary.write(f"- Test-history diagnostics: [open reporter logs for `{env_name}`]({grafana_url})\n")
-          summary.write(f"- Logs query: `{expr}`\n")
+          summary.write(f"- Logs query: ``{expr}``\n")
         PY
 
     - name: Dump test history OTLP port-forward logs
