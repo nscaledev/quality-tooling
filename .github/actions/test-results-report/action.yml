@@ -146,6 +146,54 @@ inputs:
     description: 'Artifact or workflow URL stored with each test event. Defaults to report-url, then the GitHub workflow run URL.'
     required: false
     default: ''
+  enable-test-history-log-lookup:
+    description: 'Fetch previous failed test-history records from O11y through Grafana MCP and pass compact recurrence context into AI analysis.'
+    required: false
+    default: 'false'
+  test-history-log-selector:
+    description: 'Loki stream selector for previous failed test-history record lookups.'
+    required: false
+    default: '{service_name="test-results-report"}'
+  test-history-log-grafana-app:
+    description: 'Teleport Grafana app used for previous failed test-history record lookups. Defaults to the O11y Grafana app.'
+    required: false
+    default: 'wo11y-grafana-dev'
+  test-history-log-grafana-url:
+    description: 'Direct Grafana URL for previous failed test-history record lookups. If omitted and test-history-log-grafana-app is set, the action opens a separate Teleport tunnel.'
+    required: false
+    default: ''
+  test-history-log-grafana-mcp-endpoint:
+    description: 'Existing mcp-grafana endpoint for previous failed test-history record lookups. Overrides test-history-log-grafana-app/url when set.'
+    required: false
+    default: ''
+  test-history-log-grafana-tunnel-port:
+    description: 'Local port used for the test-history Grafana Teleport tunnel.'
+    required: false
+    default: '3001'
+  test-history-log-grafana-mcp-port:
+    description: 'Local streamable HTTP port used for the test-history mcp-grafana server.'
+    required: false
+    default: '8001'
+  test-history-log-loki-datasource-uid:
+    description: 'Loki datasource UID for previous failed test-history record lookups. Overrides test-history-log-loki-datasource-name when set.'
+    required: false
+    default: ''
+  test-history-log-loki-datasource-name:
+    description: 'Loki datasource name for previous failed test-history record lookups.'
+    required: false
+    default: 'product-loki'
+  test-history-log-lookback:
+    description: 'Lookback duration for previous failed test-history record lookups.'
+    required: false
+    default: '336h'
+  test-history-log-limit:
+    description: 'Maximum previous failed test-history records returned per failed test lookup.'
+    required: false
+    default: '10'
+  test-history-log-max-failures:
+    description: 'Maximum current failed tests to look up in test-history records.'
+    required: false
+    default: '3'
   max-failures:
     description: 'Maximum failure details included in Slack and step summary.'
     required: false
@@ -482,7 +530,7 @@ runs:
 
     - name: Resolve Grafana MCP inputs
       id: grafana-resolve
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' }}
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' || inputs.enable-test-history-log-lookup == 'true' }}
       shell: bash
       env:
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
@@ -553,8 +601,51 @@ runs:
           write_output "token-configured" "false"
         fi
 
+    - name: Resolve test-history Grafana MCP inputs
+      id: test-history-grafana-resolve
+      if: ${{ inputs.enable-test-history-log-lookup == 'true' }}
+      shell: bash
+      env:
+        INPUT_TEST_HISTORY_LOG_GRAFANA_APP: ${{ inputs.test-history-log-grafana-app }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_URL: ${{ inputs.test-history-log-grafana-url }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_ENDPOINT: ${{ inputs.test-history-log-grafana-mcp-endpoint }}
+      run: |
+        set -euo pipefail
+
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        write_output() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+        }
+
+        history_app="${INPUT_TEST_HISTORY_LOG_GRAFANA_APP:-}"
+        history_url="${INPUT_TEST_HISTORY_LOG_GRAFANA_URL:-}"
+        history_endpoint="${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_ENDPOINT:-}"
+
+        require_single_line "test-history-log-grafana-app" "$history_app"
+        require_single_line "test-history-log-grafana-url" "$history_url"
+        require_single_line "test-history-log-grafana-mcp-endpoint" "$history_endpoint"
+        if [[ -n "$history_app" && ! "$history_app" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::test-history-log-grafana-app contains unsupported characters"
+          exit 1
+        fi
+
+        write_output "grafana-app" "$history_app"
+        write_output "grafana-url" "$history_url"
+        write_output "grafana-mcp-endpoint" "$history_endpoint"
+
     - name: Grafana MCP enrichment preflight
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' }}
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' || inputs.enable-test-history-log-lookup == 'true' }}
       shell: bash
       env:
         INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ inputs.grafana-service-account-token }}
@@ -569,6 +660,19 @@ runs:
         INPUT_GRAFANA_LOG_LIMIT: ${{ inputs.grafana-log-limit }}
         INPUT_GRAFANA_LOG_CONCURRENCY: ${{ inputs.grafana-log-concurrency }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
+        INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP: ${{ inputs.enable-test-history-log-lookup }}
+        INPUT_TEST_HISTORY_LOG_SELECTOR: ${{ inputs.test-history-log-selector }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_APP: ${{ inputs.test-history-log-grafana-app }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_APP_RESOLVED: ${{ steps.test-history-grafana-resolve.outputs.grafana-app }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_URL: ${{ inputs.test-history-log-grafana-url }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_ENDPOINT: ${{ inputs.test-history-log-grafana-mcp-endpoint }}
+        INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_UID: ${{ inputs.test-history-log-loki-datasource-uid }}
+        INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_NAME: ${{ inputs.test-history-log-loki-datasource-name }}
+        INPUT_TEST_HISTORY_LOG_LOOKBACK: ${{ inputs.test-history-log-lookback }}
+        INPUT_TEST_HISTORY_LOG_LIMIT: ${{ inputs.test-history-log-limit }}
+        INPUT_TEST_HISTORY_LOG_MAX_FAILURES: ${{ inputs.test-history-log-max-failures }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT: ${{ inputs.test-history-log-grafana-tunnel-port }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT: ${{ inputs.test-history-log-grafana-mcp-port }}
         INPUT_GRAFANA_TUNNEL_PORT: ${{ inputs.grafana-tunnel-port }}
         INPUT_GRAFANA_MCP_PORT: ${{ inputs.grafana-mcp-port }}
       run: |
@@ -624,24 +728,29 @@ runs:
         echo "Loki datasource UID configured: $(bool "${INPUT_GRAFANA_LOKI_DATASOURCE_UID:-}")"
         echo "Loki datasource name: ${INPUT_GRAFANA_LOKI_DATASOURCE_NAME:-<empty>}"
         echo "lookback: ${INPUT_GRAFANA_LOG_LOOKBACK}; limit: ${INPUT_GRAFANA_LOG_LIMIT}; max failures: ${INPUT_GRAFANA_LOG_MAX_FAILURES}; concurrency: ${INPUT_GRAFANA_LOG_CONCURRENCY}"
-        echo "MCP setup is deferred until Claude selects at least one backend-related Loki query."
+        echo "test history lookup enabled: ${INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP}; datasource uid configured: $(bool "${INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_UID:-}"); datasource name: ${INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_NAME:-<empty>}; selector: ${INPUT_TEST_HISTORY_LOG_SELECTOR:-<empty>}; lookback: ${INPUT_TEST_HISTORY_LOG_LOOKBACK}; limit: ${INPUT_TEST_HISTORY_LOG_LIMIT}; max failures: ${INPUT_TEST_HISTORY_LOG_MAX_FAILURES}"
+        echo "test history Grafana app: ${INPUT_TEST_HISTORY_LOG_GRAFANA_APP_RESOLVED:-${INPUT_TEST_HISTORY_LOG_GRAFANA_APP:-<empty>}}"
+        echo "test history direct Grafana URL configured: $(bool "${INPUT_TEST_HISTORY_LOG_GRAFANA_URL:-}")"
+        echo "test history existing MCP endpoint configured: $(bool "${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_ENDPOINT:-}")"
+        echo "test history Grafana tunnel port: ${INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT}; mcp port: ${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT}"
+        echo "MCP setup is deferred until Claude selects at least one backend-related Loki query or test-history lookup needs previous failed records."
 
         if [[ -n "${INPUT_GRAFANA_MCP_ENDPOINT:-}" ]]; then
-          echo "candidate setup path: use caller-provided mcp-grafana endpoint when backend queries are planned"
+          echo "candidate setup path: use caller-provided mcp-grafana endpoint when backend queries or test-history lookup are needed"
         elif [[ -z "${grafana_token:-}" ]]; then
-          echo "candidate setup path: cannot start mcp-grafana if backend queries are planned; grafana-service-account-token is empty"
+          echo "candidate setup path: cannot start mcp-grafana if backend queries or test-history lookup are needed; grafana-service-account-token is empty"
         elif [[ -n "${INPUT_GRAFANA_URL:-}" ]]; then
           echo "candidate setup path: start mcp-grafana against direct Grafana URL on port ${INPUT_GRAFANA_MCP_PORT}"
         elif [[ -n "${grafana_app:-}" ]]; then
           echo "candidate setup path: open Teleport app tunnel on port ${INPUT_GRAFANA_TUNNEL_PORT}, then start mcp-grafana on port ${INPUT_GRAFANA_MCP_PORT}"
         else
-          echo "candidate setup path: cannot start mcp-grafana if backend queries are planned; neither grafana-url nor grafana-app is configured"
+          echo "candidate setup path: cannot start mcp-grafana if backend queries or test-history lookup are needed; neither grafana-url nor grafana-app is configured"
         fi
         echo "::endgroup::"
 
     - name: Plan Grafana MCP queries
       id: grafana-plan
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' }}
+      if: ${{ inputs.enable-grafana-log-enrichment == 'true' || inputs.enable-test-history-log-lookup == 'true' }}
       shell: bash
       env:
         INPUT_FORMAT: ${{ inputs.format }}
@@ -656,6 +765,8 @@ runs:
         INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT: ${{ inputs.enable-grafana-log-enrichment }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
         INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ runner.temp }}/test-results-report-grafana-query-plan.json
+        INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP: ${{ inputs.enable-test-history-log-lookup }}
+        INPUT_TEST_HISTORY_LOG_MAX_FAILURES: ${{ inputs.test-history-log-max-failures }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
@@ -886,7 +997,7 @@ runs:
 
     - name: Install Teleport clients for Grafana tunnel
       id: grafana-teleport-setup
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.grafana-url == '' && steps.grafana-resolve.outputs.grafana-app != '' }}
+      if: ${{ steps.grafana-plan.outputs.needs-mcp == 'true' && steps.grafana-resolve.outputs.token-configured == 'true' && ((inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && inputs.grafana-url == '' && steps.grafana-resolve.outputs.grafana-app != '') || (inputs.enable-test-history-log-lookup == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && inputs.test-history-log-grafana-url == '' && steps.test-history-grafana-resolve.outputs.grafana-app != '')) }}
       continue-on-error: true
       uses: teleport-actions/setup@a820ebbf1bc1a496efca348ad21042d6e8df73a6
       with:
@@ -938,7 +1049,7 @@ runs:
         echo "::warning::Grafana tunnel did not become reachable; log enrichment will likely be skipped by the reporter"
 
     - name: Install Grafana MCP server
-      if: ${{ inputs.enable-grafana-log-enrichment == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.grafana-url != '' || (steps.grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure' && steps.grafana-tunnel.outcome != 'failure')) }}
+      if: ${{ steps.grafana-plan.outputs.needs-mcp == 'true' && steps.grafana-resolve.outputs.token-configured == 'true' && ((inputs.enable-grafana-log-enrichment == 'true' && inputs.grafana-mcp-endpoint == '' && (inputs.grafana-url != '' || (steps.grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure' && steps.grafana-tunnel.outcome != 'failure'))) || (inputs.enable-test-history-log-lookup == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && (inputs.test-history-log-grafana-url != '' || (steps.test-history-grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure')))) }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -1117,6 +1228,177 @@ runs:
         echo "::warning::mcp-grafana /healthz did not become reachable; log enrichment will be skipped by the reporter"
         cat "${RUNNER_TEMP}/mcp-grafana.log" || true
 
+    - name: Open test-history Grafana app tunnel
+      id: test-history-grafana-tunnel
+      if: ${{ inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.test-history-log-grafana-url == '' && steps.test-history-grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure' }}
+      continue-on-error: true
+      uses: teleport-actions/application-tunnel@bb7a8fbfb67b85d26013554f10d71dd032c1c764
+      with:
+        proxy: ${{ inputs.grafana-teleport-proxy }}
+        token: ${{ inputs.grafana-teleport-token }}
+        app: ${{ steps.test-history-grafana-resolve.outputs.grafana-app }}
+        listen: tcp://127.0.0.1:${{ inputs.test-history-log-grafana-tunnel-port }}
+        timeout-ms: '60000'
+        diag-port: '57264'
+
+    - name: Warn test-history Grafana Teleport setup failed
+      if: ${{ inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && (steps.grafana-teleport-setup.outcome == 'failure' || steps.test-history-grafana-tunnel.outcome == 'failure') }}
+      shell: bash
+      run: |
+        echo "::warning::Test-history Grafana Teleport tunnel setup failed; continuing without previous failed test-history lookup"
+
+    - name: Verify test-history Grafana tunnel
+      id: test-history-grafana-verify
+      if: ${{ inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && inputs.test-history-log-grafana-url == '' && steps.test-history-grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure' && steps.test-history-grafana-tunnel.outcome != 'failure' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT: ${{ inputs.test-history-log-grafana-tunnel-port }}
+      run: |
+        set -euo pipefail
+
+        for attempt in {1..30}; do
+          if curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT}/api/health" > "${RUNNER_TEMP}/test-history-grafana-health.json"; then
+            echo "Test-history Grafana tunnel is reachable on attempt ${attempt}"
+            cat "${RUNNER_TEMP}/test-history-grafana-health.json"
+            exit 0
+          fi
+          echo "Waiting for test-history Grafana tunnel on 127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT}, attempt ${attempt}/30"
+          if command -v ss >/dev/null 2>&1; then
+            ss -ltnp || true
+          else
+            netstat -an | grep "${INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT}" || true
+          fi
+          curl --verbose --max-time 2 "http://127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT}/api/health" || true
+          sleep 1
+        done
+
+        echo "::warning::Test-history Grafana tunnel did not become reachable; previous failed test-history lookup will likely be skipped"
+        exit 1
+
+    - name: Start test-history Grafana MCP server
+      id: test-history-grafana-start
+      if: ${{ inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.test-history-log-grafana-url != '' || (steps.test-history-grafana-resolve.outputs.grafana-app != '' && steps.grafana-teleport-setup.outcome != 'failure' && steps.test-history-grafana-tunnel.outcome != 'failure' && steps.test-history-grafana-verify.outcome != 'failure')) }}
+      shell: bash
+      env:
+        INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN: ${{ inputs.grafana-service-account-token }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_APP: ${{ steps.test-history-grafana-resolve.outputs.grafana-app }}
+        INPUT_GRAFANA_TELEPORT_PROXY: ${{ inputs.grafana-teleport-proxy }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_URL: ${{ inputs.test-history-log-grafana-url }}
+        INPUT_GRAFANA_ORG_ID: ${{ inputs.grafana-org-id }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT: ${{ inputs.test-history-log-grafana-tunnel-port }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT: ${{ inputs.test-history-log-grafana-mcp-port }}
+      run: |
+        set -euo pipefail
+
+        require_single_line() {
+          local name="$1"
+          local value="$2"
+          if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+            echo "::error::${name} must be a single-line value"
+            exit 1
+          fi
+        }
+
+        require_port() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
+            echo "::error::${name} must be a TCP port between 1 and 65535"
+            exit 1
+          fi
+        }
+
+        write_output() {
+          local name="$1"
+          local value="$2"
+          require_single_line "$name" "$value"
+          printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
+        }
+
+        workflow_escape() {
+          local value="$1"
+          value="${value//%/%25}"
+          value="${value//$'\r'/%0D}"
+          value="${value//$'\n'/%0A}"
+          printf '%s' "$value"
+        }
+
+        mask_value() {
+          local name="$1"
+          local value="$2"
+          if [[ -z "$value" ]]; then
+            return 0
+          fi
+          require_single_line "$name" "$value"
+          echo "::add-mask::$(workflow_escape "$value")"
+        }
+
+        require_port "test-history-log-grafana-tunnel-port" "$INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT"
+        require_port "test-history-log-grafana-mcp-port" "$INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT"
+        require_single_line "test-history-log-grafana-url" "$INPUT_TEST_HISTORY_LOG_GRAFANA_URL"
+        require_single_line "test-history-log-grafana-app" "$INPUT_TEST_HISTORY_LOG_GRAFANA_APP"
+        require_single_line "grafana-teleport-proxy" "$INPUT_GRAFANA_TELEPORT_PROXY"
+        require_single_line "grafana-org-id" "$INPUT_GRAFANA_ORG_ID"
+
+        grafana_token="${INPUT_GRAFANA_SERVICE_ACCOUNT_TOKEN:-${GRAFANA_SERVICE_ACCOUNT_TOKEN:-}}"
+        mask_value "grafana-service-account-token" "$grafana_token"
+        if ! command -v mcp-grafana >/dev/null 2>&1; then
+          echo "::warning::mcp-grafana is not installed; previous failed test-history lookup will be skipped by the reporter"
+          exit 0
+        fi
+
+        grafana_url="${INPUT_TEST_HISTORY_LOG_GRAFANA_URL}"
+        if [[ -z "$grafana_url" ]]; then
+          grafana_url="http://127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_TUNNEL_PORT}"
+        fi
+        report_grafana_url="$grafana_url"
+        if [[ -z "${INPUT_TEST_HISTORY_LOG_GRAFANA_URL:-}" && -n "${INPUT_TEST_HISTORY_LOG_GRAFANA_APP:-}" ]]; then
+          proxy_host="${INPUT_GRAFANA_TELEPORT_PROXY%%:*}"
+          report_grafana_url="https://${INPUT_TEST_HISTORY_LOG_GRAFANA_APP}.${proxy_host}"
+        fi
+
+        echo "Starting test-history mcp-grafana with GRAFANA_URL=${grafana_url}"
+        GRAFANA_URL="$grafana_url" \
+        GRAFANA_SERVICE_ACCOUNT_TOKEN="${grafana_token}" \
+        GRAFANA_ORG_ID="${INPUT_GRAFANA_ORG_ID}" \
+        nohup mcp-grafana \
+          -t streamable-http \
+          --address "127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT}" \
+          --enabled-tools datasource,loki \
+          --disable-write \
+          > "${RUNNER_TEMP}/test-history-mcp-grafana.log" 2>&1 &
+        mcp_pid="$!"
+        echo "$mcp_pid" > "${RUNNER_TEMP}/test-history-mcp-grafana.pid"
+
+        for attempt in {1..20}; do
+          if ! kill -0 "$mcp_pid" 2>/dev/null; then
+            echo "::warning::test-history mcp-grafana exited before /healthz became reachable"
+            cat "${RUNNER_TEMP}/test-history-mcp-grafana.log" || true
+            exit 0
+          fi
+          if curl --fail --silent --show-error --max-time 2 "http://127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT}/healthz" >/dev/null; then
+            write_output "grafana-mcp-endpoint" "http://127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT}/mcp"
+            write_output "grafana-report-url" "${report_grafana_url}"
+            echo "test-history mcp-grafana /healthz is reachable on attempt ${attempt}"
+            echo "Test-history Grafana base URL for report links: ${report_grafana_url}"
+            exit 0
+          fi
+          echo "Waiting for test-history mcp-grafana on 127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT}, attempt ${attempt}/20"
+          if command -v ss >/dev/null 2>&1; then
+            ss -ltnp || true
+          else
+            netstat -an | grep "${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT}" || true
+          fi
+          curl --verbose --max-time 2 "http://127.0.0.1:${INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_PORT}/healthz" || true
+          tail -n 80 "${RUNNER_TEMP}/test-history-mcp-grafana.log" || true
+          sleep 1
+        done
+
+        echo "::warning::test-history mcp-grafana /healthz did not become reachable; previous failed test-history lookup will be skipped by the reporter"
+        cat "${RUNNER_TEMP}/test-history-mcp-grafana.log" || true
+
     - name: Install kubectl for test history OTLP writer
       if: ${{ steps.test-history-resolve.outputs.needs-otlp-tunnel == 'true' }}
       continue-on-error: true
@@ -1280,6 +1562,17 @@ runs:
         INPUT_GRAFANA_LOG_CONCURRENCY: ${{ inputs.grafana-log-concurrency }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
         INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ steps.grafana-plan.outputs.plan-path }}
+        INPUT_ENABLE_TEST_HISTORY_LOG_LOOKUP: ${{ inputs.enable-test-history-log-lookup }}
+        INPUT_TEST_HISTORY_LOG_SELECTOR: ${{ inputs.test-history-log-selector }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_APP: ${{ inputs.test-history-log-grafana-app }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_URL: ${{ inputs.test-history-log-grafana-url }}
+        INPUT_TEST_HISTORY_LOG_GRAFANA_MCP_ENDPOINT: ${{ inputs.test-history-log-grafana-mcp-endpoint }}
+        TEST_HISTORY_LOG_GRAFANA_MCP_ENDPOINT: ${{ steps.test-history-grafana-start.outputs.grafana-mcp-endpoint }}
+        INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_UID: ${{ inputs.test-history-log-loki-datasource-uid }}
+        INPUT_TEST_HISTORY_LOG_LOKI_DATASOURCE_NAME: ${{ inputs.test-history-log-loki-datasource-name }}
+        INPUT_TEST_HISTORY_LOG_LOOKBACK: ${{ inputs.test-history-log-lookback }}
+        INPUT_TEST_HISTORY_LOG_LIMIT: ${{ inputs.test-history-log-limit }}
+        INPUT_TEST_HISTORY_LOG_MAX_FAILURES: ${{ inputs.test-history-log-max-failures }}
         INPUT_ENABLE_UNIKORN_CR_ENRICHMENT: ${{ inputs.enable-unikorn-cr-enrichment }}
         INPUT_UNIKORN_CR_PLAN_PATH: ${{ steps.unikorn-cr-plan.outputs.plan-path }}
         INPUT_UNIKORN_CR_CONTEXT_PATH: ${{ steps.unikorn-cr-collect.outputs.context-path }}
@@ -1445,6 +1738,19 @@ runs:
 
         if [[ -f "${RUNNER_TEMP}/test-history-otlp-port-forward.pid" ]]; then
           kill "$(cat "${RUNNER_TEMP}/test-history-otlp-port-forward.pid")" 2>/dev/null || true
+        fi
+
+    - name: Dump test-history Grafana MCP logs
+      if: ${{ always() && inputs.enable-test-history-log-lookup == 'true' && steps.grafana-plan.outputs.needs-mcp == 'true' && inputs.test-history-log-grafana-mcp-endpoint == '' && steps.grafana-resolve.outputs.token-configured == 'true' && (inputs.test-history-log-grafana-url != '' || steps.test-history-grafana-resolve.outputs.grafana-app != '') }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "=== test-history mcp-grafana log ==="
+        cat "${RUNNER_TEMP}/test-history-mcp-grafana.log" 2>/dev/null || true
+
+        if [[ -f "${RUNNER_TEMP}/test-history-mcp-grafana.pid" ]]; then
+          kill "$(cat "${RUNNER_TEMP}/test-history-mcp-grafana.pid")" 2>/dev/null || true
         fi
 
     - name: Dump Grafana MCP logs

@@ -800,6 +800,9 @@ func TestConfigDefaults(t *testing.T) {
 	if config.EnableGrafanaLogs {
 		t.Fatal("grafana log enrichment should default false")
 	}
+	if config.EnableTestHistoryLogs {
+		t.Fatal("test history log lookup should default false")
+	}
 	if config.EnableUnikornCRs {
 		t.Fatal("unikorn CR enrichment should default false")
 	}
@@ -809,8 +812,17 @@ func TestConfigDefaults(t *testing.T) {
 	if config.GrafanaLokiName != "Loki" {
 		t.Fatalf("grafana Loki datasource name default = %q", config.GrafanaLokiName)
 	}
+	if config.TestHistoryLogSelector != `{service_name="test-results-report"}` {
+		t.Fatalf("test history log selector default = %q", config.TestHistoryLogSelector)
+	}
+	if config.TestHistoryLogLokiName != "product-loki" {
+		t.Fatalf("test history Loki datasource name default = %q", config.TestHistoryLogLokiName)
+	}
 	if config.GrafanaLogLookback != "2h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 6 || config.GrafanaLogConcurrency != 4 {
 		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d concurrency %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures, config.GrafanaLogConcurrency)
+	}
+	if config.TestHistoryLogLookback != "336h" || config.TestHistoryLogLimit != 10 || config.TestHistoryLogMaxFailures != 3 {
+		t.Fatalf("test history log defaults = lookback %q limit %d max failures %d", config.TestHistoryLogLookback, config.TestHistoryLogLimit, config.TestHistoryLogMaxFailures)
 	}
 	if config.UnikornCRMaxFailures != 4 || config.UnikornCRTimeout != 30*time.Second {
 		t.Fatalf("unikorn CR defaults = max failures %d timeout %s", config.UnikornCRMaxFailures, config.UnikornCRTimeout)
@@ -864,6 +876,9 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 		"Other failures caused by test logic rather than product behavior",
 		"Use Grafana observations and CR observations only as supporting evidence",
 		"Combine suite evidence, Grafana observations, and CR observations",
+		"Use test history observations only as recurrence context",
+		"A previous failed test-history record is not proof of the current root cause",
+		"When test history shows the same test or failure fingerprint failed before",
 		"Keep environment, region, resource ID, and evidence signals scoped",
 		"When grouped failures have different concrete Grafana or CR signals",
 		"Do not carry VLAN IDs, physical networks, controller errors, or CR states",
@@ -1189,6 +1204,67 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 		"Search terms: instance, timeout",
 		"Grafana lookup URL: https://grafana.example.com/explore?panes=test",
 		"controller failed to create instance",
+	} {
+		if strings.Contains(input, unexpected) {
+			t.Fatalf("AI input should not include %q:\n%s", unexpected, input)
+		}
+	}
+}
+
+func TestRenderAIInputIncludesTestHistoryLogs(t *testing.T) {
+	t.Parallel()
+
+	input := renderAIInputWithOptions(Analysis{
+		Current: TestRun{Name: "API Tests"},
+		Stats:   Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			ID:      "network::creates network",
+			Name:    "creates network",
+			Message: "network entered error",
+		}},
+		HistoryLogs: &TestHistoryLogEnrichment{
+			DatasourceUID:  "loki",
+			DatasourceName: "Loki",
+			StartRFC3339:   "2026-05-18T13:00:00Z",
+			EndRFC3339:     "2026-06-01T13:00:00Z",
+			Contexts: []TestHistoryLogContext{{
+				TestName:           "creates network",
+				TestID:             "network::creates network",
+				FailureFingerprint: "sha256:same",
+				Query:              `{service_name="test-results-report"} |= "test_history result failed" |= "creates network"`,
+				SearchTerm:         "creates network",
+				Reason:             "Look up previous failed test-history records for the same current failed test.",
+				LineCount:          1,
+				Observations: []TestHistoryLogObservation{{
+					Timestamp:          "2026-05-31T12:00:00Z",
+					RunID:              "27100000000",
+					RunAttempt:         "2",
+					TestName:           "creates network",
+					FailureCategory:    "infra/external",
+					FailureFingerprint: "sha256:same",
+					AILikelyReason:     "Previous run hit VLAN allocation exhaustion",
+					AINextCheck:        "Check stale VLAN allocations before rerun.",
+				}},
+			}},
+		},
+	}, AIInputOptions{})
+
+	for _, expected := range []string{
+		"Test history observations for final analysis:",
+		"Scope: previous failed test-history records from 2026-05-18T13:00:00Z to 2026-06-01T13:00:00Z; Grafana datasource Loki (loki).",
+		"- Test: creates network; previous failed test-history records: 1; at least one previous record has the same failure fingerprint; latest run_id: 27100000000; attempt: 2; latest timestamp: 2026-05-31T12:00:00Z; previous category: infra/external",
+		"Previous AI likely reason: Previous run hit VLAN allocation exhaustion",
+		"Previous AI next check: Check stale VLAN allocations before rerun.",
+		"Lookup reason: Look up previous failed test-history records for the same current failed test.",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("AI input missing %q:\n%s", expected, input)
+		}
+	}
+	for _, unexpected := range []string{
+		`{service_name="test-results-report"}`,
+		"Search term: creates network",
+		"test_history result failed run_id=",
 	} {
 		if strings.Contains(input, unexpected) {
 			t.Fatalf("AI input should not include %q:\n%s", unexpected, input)

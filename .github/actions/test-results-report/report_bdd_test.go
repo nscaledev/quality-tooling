@@ -852,8 +852,9 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).NotTo(ContainSubstring(`echo "::add-mask::${grafana_token}"`))
 				Expect(action).To(ContainSubstring("Grafana service account token configured:"))
 				Expect(action).To(ContainSubstring("Grafana org ID:"))
-				Expect(action).To(ContainSubstring("MCP setup is deferred until Claude selects at least one backend-related Loki query."))
-				Expect(action).To(ContainSubstring("candidate setup path: cannot start mcp-grafana if backend queries are planned; grafana-service-account-token is empty"))
+				Expect(action).To(ContainSubstring("test history lookup enabled:"))
+				Expect(action).To(ContainSubstring("MCP setup is deferred until Claude selects at least one backend-related Loki query or test-history lookup needs previous failed records."))
+				Expect(action).To(ContainSubstring("candidate setup path: cannot start mcp-grafana if backend queries or test-history lookup are needed; grafana-service-account-token is empty"))
 				Expect(action).To(ContainSubstring("candidate setup path: open Teleport app tunnel"))
 			})
 
