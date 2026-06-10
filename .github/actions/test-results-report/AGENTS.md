@@ -8,7 +8,8 @@ These rules apply when editing the `test-results-report` GitHub Action.
 - Add Grafana/Loki as a compact `### Grafana Observations` section only.
 - Do not put raw Loki rows, LogQL blocks, search terms, exact failure metadata, or Grafana debug traces in the GitHub summary.
 - Keep raw or detailed Grafana evidence out of the user-facing summary; pass only compact observations to the final AI report.
-- If Grafana/Loki evidence is used in AI analysis, the `Likely reason` or `Next check` must mention the concrete signal: error terms, cleanup-only rows, empty result, weak match, or query failure.
+- If Grafana/Loki evidence is used in AI analysis, the `Likely reason` or `Next check` must mention a concrete, relevant signal.
+- Slack must omit weak, time-disjoint, identifier-unmatched, or likely unrelated Grafana observations instead of explaining that they are probably unrelated.
 - Classify skipped tests as `skipped`; do not label intentional skips as `test/false failure`.
 
 ## Grafana MCP Logic

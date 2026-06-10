@@ -222,12 +222,13 @@ type playwrightTest struct {
 }
 
 type playwrightResult struct {
-	Status   string             `json:"status"`
-	Duration int64              `json:"duration"`
-	Error    *playwrightError   `json:"error"`
-	Errors   []playwrightError  `json:"errors"`
-	Stdout   []playwrightOutput `json:"stdout"`
-	Stderr   []playwrightOutput `json:"stderr"`
+	Status    string             `json:"status"`
+	Duration  int64              `json:"duration"`
+	StartTime string             `json:"startTime"`
+	Error     *playwrightError   `json:"error"`
+	Errors    []playwrightError  `json:"errors"`
+	Stdout    []playwrightOutput `json:"stdout"`
+	Stderr    []playwrightOutput `json:"stderr"`
 }
 
 type playwrightError struct {
@@ -465,10 +466,10 @@ func parseRFC3339NanoTime(value string) time.Time {
 }
 
 func normalizeStatus(value string) TestStatus {
-	switch strings.ToLower(value) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "passed", "pass", "success", "expected", "flaky":
 		return StatusPassed
-	case "failed", "failure", "error", "unexpected", "timedout", "interrupted":
+	case "failed", "failure", "error", "unexpected", "timedout", "interrupted", "panicked", "aborted":
 		return StatusFailed
 	case "skipped", "skip", "pending":
 		return StatusSkipped

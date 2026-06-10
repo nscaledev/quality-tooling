@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -27,8 +28,25 @@ type GrafanaLogPlannedQuery struct {
 	Confidence    string   `json:"confidence,omitempty"`
 }
 
+type UnikornCRPlannedQuery struct {
+	FailureRef    string `json:"failure_ref"`
+	TestName      string `json:"test_name,omitempty"`
+	BackendArea   string `json:"backend_area,omitempty"`
+	Resource      string `json:"resource"`
+	Namespace     string `json:"namespace,omitempty"`
+	Name          string `json:"name,omitempty"`
+	Selector      string `json:"selector,omitempty"`
+	AllNamespaces bool   `json:"all_namespaces,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	Confidence    string `json:"confidence,omitempty"`
+}
+
 type grafanaLogQueryPlanResponse struct {
 	Queries []GrafanaLogPlannedQuery `json:"queries"`
+}
+
+type unikornCRQueryPlanResponse struct {
+	Queries []UnikornCRPlannedQuery `json:"queries"`
 }
 
 type AIInputOptions struct {
@@ -36,9 +54,16 @@ type AIInputOptions struct {
 	MaxSkips    int
 }
 
-const aiSlackDelimiter = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
+const (
+	aiSlackDelimiter       = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
+	claudeCommandWaitDelay = time.Second
+)
 
-var runGrafanaLogQueryPlanning = runClaudeGrafanaLogQueryPlanning
+var (
+	runGrafanaLogQueryPlanning     = runClaudeGrafanaLogQueryPlanning
+	runUnikornCRQueryPlanning      = runClaudeUnikornCRQueryPlanning
+	grafanaLogQueryPlanningTimeout = 90 * time.Second
+)
 
 func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*AIAnalysis, error) {
 	if !config.EnableAIAnalysis {
@@ -54,9 +79,7 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", claudePrompt())
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
-	cmd.Stdin = strings.NewReader(renderAIInputWithOptions(analysis, AIInputOptions{
+	cmd := newClaudeCommand(ctx, config.ClaudeToken, claudePrompt(), renderAIInputWithOptions(analysis, AIInputOptions{
 		MaxFailures: config.MaxFailures,
 		MaxSkips:    config.MaxSkips,
 	}))
@@ -73,78 +96,6 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 	return parseAIAnalysis(stdout.String()), nil
 }
 
-func claudePrompt() string {
-	return fmt.Sprintf(`Analyze these test failures and skips. The GitHub step summary already includes run totals, links, and any previous-result comparison before your output, so do not repeat those basics, do not add separate "Failed Tests" or "Skipped Tests" sections, and do not list every test.
-
-Output exactly two sections separated by a line containing only %q. Do not write this delimiter anywhere else.
-
-Section 1: Markdown for the GitHub step summary.
-- Start with '## Test Failure Analysis'.
-- Keep it concise: one compact pattern table plus up to 4 bullets.
-- Group failures and skips by likely area or pattern, not by individual test.
-- Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
-- Use skipped for patterns where all affected tests are skipped, including known-bug, intentional, disabled, pending, or sentinel skips.
-- Use test/false failure only for failed tests caused by test code, invalid assertions, sentinel failures, or false failures; do not use it for skipped tests.
-- Use unknown/mixed when there is not enough evidence to choose a category confidently.
-- Mention representative tests only when they clarify a pattern; cap examples to 2 per row.
-- If Grafana observations are present, use them only as supporting evidence inside the existing pattern rows or next-check bullets.
-- Keep the report close to the existing production format; do not add a separate Grafana section, raw log table, LogQL, search terms, or Grafana URL list.
-- When a Grafana signal is present, mention the concrete signal in the Likely reason or Next check, such as "Grafana showed INTERNAL_ERROR/connection refused" or "Grafana only returned audit/cleanup rows and no explicit error".
-- Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs.
-- If a failed test time range and Grafana query time range are both present, compare them before making timing claims.
-- Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window.
-- When the failed test is inside the Grafana window but Grafana only returned cleanup/audit/activity rows, say the provisioning error was not present in the returned Grafana lines and point the next check to the resource creation/provisioning transition period inside the test window.
-- The pattern table must make clear what failed, why it failed, the likely reason, impact, and the next check.
-- When test-level detail is useful, add a "### Representative Failed Tests" table capped at 10 rows.
-- In the representative tests table, group tests with the same failure reason into one row instead of listing duplicate failures separately.
-
-Use this shape:
-## Test Failure Analysis
-
-### Patterns
-| Category | What failed | Why it failed | Likely reason | Impact | Next check |
-| --- | --- | --- | --- | ---: | --- |
-| infra/external | Auth-dependent setup across suites | API calls returned 401 before product assertions | Expired or invalid API token | 23 failed, 37 skipped | Validate the API token, then rerun one representative suite |
-
-### Representative Failed Tests
-| Suite / area | Representative tests | Failure reason | Count |
-| --- | --- | --- | ---: |
-| File Storage Management | attach storage, detach storage | HTTP 401 access_denied before product assertions | 8 |
-
-### Suggested Next Checks
-- Confirm whether the failures share the same status/error before opening individual test issues.
-- Rerun one representative failing suite after credentials or environment config are refreshed.
-
-%s
-Section 2: Plain text Slack summary.
-- 4-6 high-signal Slack mrkdwn bullet lines.
-- Do not use tables in the Slack summary; Slack should stay short bullet lines.
-- Each pattern bullet must start with '- *<suite/category>* (<category>):', where category is one of infra/external, code/core logic, test/false failure, skipped, unknown/mixed.
-- Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason.
-- For Grafana-backed bullets, explicitly connect the test error, your interpretation, and the Grafana signal in the same bullet.
-- Do not use vague phrases like "Grafana returned related activity" unless you also say what Grafana showed or did not show.
-- If Grafana only returned audit/cleanup rows, say that and point the action to the resource creation or provisioning transition period; if Grafana returned error signals, name the signals.
-- Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window.
-- Group by suite name when one suite is affected, or by a clear category name when multiple suites share the same root cause.
-- Lead with the highest-attention real product, infra, or environment blocker; keep temporary sentinel/test-validation failures short unless they are the only issue.
-- Include only the evidence needed to justify the category; avoid selector names, file paths, and retry details unless they materially change the next action.
-- Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*' when it makes Slack easier to act on.
-- For intentional or sentinel skipped tests, use the skipped category and one short phrase that says when the skip should be removed or re-enabled; do not mention issue alerting unless it appears in the evidence.
-- For intentional or sentinel failed tests, use one short phrase that says it is temporary and should be removed or disabled before review; do not mention issue alerting unless it appears in the evidence.
-- Do not list every failed or skipped test.
-- Do not restate the test run title, environment, branch, actor, or full totals line; Slack already shows those fields.
-- End with exactly one '- *Action:*' bullet.
-- When failed tests are present, the Action bullet must mention that test-level failure reasons are available in the GitHub build summary before the next action.
-- Do not mention test-level failure reasons for skip-only runs.
-
-Use this shape:
-- *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
-- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.
-- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
-- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window, so inspect controller/provisioner logs around resource creation and the pending-to-error transition.
-- *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config, then rerun one focused smoke suite.`, aiSlackDelimiter, aiSlackDelimiter)
-}
-
 func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analysis Analysis) ([]GrafanaLogPlannedQuery, error) {
 	if !config.EnableAIAnalysis || config.ClaudeToken == "" {
 		return nil, nil
@@ -153,12 +104,10 @@ func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analys
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, grafanaLogQueryPlanningTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", grafanaLogQueryPlanningPrompt())
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
-	cmd.Stdin = strings.NewReader(renderGrafanaLogQueryPlanningInput(analysis, config))
+	cmd := newClaudeCommand(ctx, config.ClaudeToken, grafanaLogQueryPlanningPrompt(), renderGrafanaLogQueryPlanningInput(analysis, config))
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -172,30 +121,37 @@ func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analys
 	return parseGrafanaLogQueryPlan(stdout.String())
 }
 
-func grafanaLogQueryPlanningPrompt() string {
-	return `You are planning read-only Loki log queries for Grafana MCP based on parsed test failures.
+func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysis Analysis) ([]UnikornCRPlannedQuery, error) {
+	if !config.EnableAIAnalysis || config.ClaudeToken == "" {
+		return nil, nil
+	}
+	if len(analysis.Failures) == 0 {
+		return nil, nil
+	}
 
-Return strict JSON only. Do not include markdown, prose, or code fences.
+	ctx, cancel := context.WithTimeout(ctx, grafanaLogQueryPlanningTimeout)
+	defer cancel()
 
-Expected output:
-{"queries":[{"failure_ref":"f1","test_name":"uploads file","backend_area":"file-storage","expected_error":"POST /api/storage returned 500 for claim-123","search_terms":["claim-123","file-storage","500"],"logql":"{namespace=~\".+\"} |~ \"(?i)(claim-123|file-storage|500)\"","reason":"The failed UI upload crossed the file storage API and includes a backend 500 signature, so Loki evidence can confirm whether file storage emitted the same error.","confidence":"medium"}]}
+	cmd := newClaudeCommand(ctx, config.ClaudeToken, unikornCRQueryPlanningPrompt(), renderUnikornCRQueryPlanningInput(analysis, config))
 
-Rules:
-- Inspect the failed test names, suites, locations, error messages, captured output, environment, and previous-result comparison.
-- Only create queries for failures that appear backend-related or need backend evidence to confirm the likely cause.
-- Do not query for purely client-side assertion failures when there is no backend signal.
-- Use the exact failure_ref values from the input.
-- test_name must match the input Test value for that failure_ref.
-- expected_error must be the exact error message or shortest exact error signature from the failure evidence; leave it empty when there is no exact backend-looking error.
-- search_terms must contain only identifiers, status codes, API error strings, resource names, or component names copied from the failure evidence.
-- backend_area should name the likely backend component or area when the evidence supports one; otherwise use "unknown".
-- reason must be one consolidated sentence explaining why this specific failure needs or does not need backend log evidence.
-- confidence must be one of "high", "medium", or "low".
-- Prefer precise IDs, request IDs, UUIDs, resource names, status codes, API error strings, and backend component names found in the failure evidence.
-- For cross-component UI suites, do not assume a single backend component. Use a broad Kubernetes label selector such as {namespace=~".+"} unless the failure evidence clearly points to a narrower namespace or service.
-- Keep each LogQL query readable and bounded for the supplied time window. Do not request writes or mutations.
-- Do not include Grafana URLs in this JSON. The reporter generates grafana_explore_url deterministically after it knows the datasource, query, and time range.
-- If no backend-related log lookup is justified, return {"queries":[]}.`
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("run claude unikorn CR query planning: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	return parseUnikornCRQueryPlan(stdout.String())
+}
+
+func newClaudeCommand(ctx context.Context, token, prompt, input string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", prompt)
+	cmd.WaitDelay = claudeCommandWaitDelay
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+token)
+	cmd.Stdin = strings.NewReader(input)
+	return cmd
 }
 
 func renderGrafanaLogQueryPlanningInput(analysis Analysis, config Config) string {
@@ -240,6 +196,47 @@ func renderGrafanaLogQueryPlanningInput(analysis Analysis, config Config) string
 	return sb.String()
 }
 
+func renderUnikornCRQueryPlanningInput(analysis Analysis, config Config) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Test run: %s\n", analysis.Current.Name))
+	sb.WriteString(fmt.Sprintf("Environment: %s\n", config.Environment))
+	sb.WriteString(fmt.Sprintf("Totals: %d passed, %d failed, %d skipped\n", analysis.Stats.Passed, analysis.Stats.Failed, analysis.Stats.Skipped))
+	sb.WriteString(fmt.Sprintf("Maximum CR lookups allowed: %d\n\n", normalizedUnikornCRFailureLimit(config.UnikornCRMaxFailures)))
+
+	if analysis.Compare != nil {
+		sb.WriteString("Previous result comparison:\n")
+		sb.WriteString(fmt.Sprintf("New failures: %d\n", len(analysis.Compare.NewFailures)))
+		sb.WriteString(fmt.Sprintf("Recurring failures: %d\n", len(analysis.Compare.RecurringFailures)))
+		sb.WriteString(fmt.Sprintf("Resolved failures: %d\n", len(analysis.Compare.ResolvedFailures)))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Candidate failed tests for Kubernetes CR lookup:\n")
+	for _, candidate := range selectUnikornCRFailureCandidates(analysis, config.UnikornCRMaxFailures) {
+		test := candidate.Test
+		sb.WriteString(fmt.Sprintf("Failure ref: %s\n", candidate.Ref))
+		if test.ID != "" {
+			sb.WriteString(fmt.Sprintf("Test ID: %s\n", test.ID))
+		}
+		sb.WriteString(fmt.Sprintf("Test: %s\n", test.Name))
+		if test.Suite != "" {
+			sb.WriteString(fmt.Sprintf("Suite: %s\n", test.Suite))
+		}
+		if location := formatLocation(test); location != "" {
+			sb.WriteString(fmt.Sprintf("Location: %s\n", location))
+		}
+		if test.Message != "" {
+			sb.WriteString(fmt.Sprintf("Error: %s\n", truncate(test.Message, 2000)))
+		}
+		if test.Output != "" {
+			sb.WriteString(fmt.Sprintf("Output: %s\n", truncate(test.Output, 2000)))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
 func parseGrafanaLogQueryPlan(output string) ([]GrafanaLogPlannedQuery, error) {
 	var response grafanaLogQueryPlanResponse
 	if err := json.Unmarshal([]byte(extractJSONObject(output)), &response); err != nil {
@@ -257,6 +254,31 @@ func parseGrafanaLogQueryPlan(output string) ([]GrafanaLogPlannedQuery, error) {
 		query.Reason = strings.TrimSpace(query.Reason)
 		query.Confidence = normalizeGrafanaConfidence(query.Confidence)
 		if query.FailureRef == "" || query.LogQL == "" {
+			continue
+		}
+		queries = append(queries, query)
+	}
+	return queries, nil
+}
+
+func parseUnikornCRQueryPlan(output string) ([]UnikornCRPlannedQuery, error) {
+	var response unikornCRQueryPlanResponse
+	if err := json.Unmarshal([]byte(extractJSONObject(output)), &response); err != nil {
+		return nil, fmt.Errorf("decode unikorn CR query plan: %w", err)
+	}
+
+	var queries []UnikornCRPlannedQuery
+	for _, query := range response.Queries {
+		query.FailureRef = strings.TrimSpace(query.FailureRef)
+		query.TestName = strings.TrimSpace(query.TestName)
+		query.BackendArea = strings.TrimSpace(query.BackendArea)
+		query.Resource = strings.TrimSpace(query.Resource)
+		query.Namespace = strings.TrimSpace(query.Namespace)
+		query.Name = strings.TrimSpace(query.Name)
+		query.Selector = strings.TrimSpace(query.Selector)
+		query.Reason = strings.TrimSpace(query.Reason)
+		query.Confidence = normalizeGrafanaConfidence(query.Confidence)
+		if sanitizeUnikornCRPlannedQuery(&query) != nil {
 			continue
 		}
 		queries = append(queries, query)
@@ -317,6 +339,7 @@ func renderAIInputWithOptions(analysis Analysis, options AIInputOptions) string 
 	}
 
 	renderAIGrafanaLogs(&sb, analysis.GrafanaLogs)
+	renderAIUnikornCRs(&sb, analysis.UnikornCRs)
 
 	if len(analysis.Failures) > 0 {
 		renderAITestListHeader(&sb, "Failed tests", len(analysis.Failures), options.MaxFailures)
@@ -479,6 +502,66 @@ func renderAIGrafanaLogs(sb *strings.Builder, enrichment *GrafanaLogEnrichment) 
 	sb.WriteString("\n")
 }
 
+func renderAIUnikornCRs(sb *strings.Builder, enrichment *UnikornCREnrichment) {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return
+	}
+
+	contexts := make([]UnikornCRContext, 0, len(enrichment.Contexts))
+	for _, context := range enrichment.Contexts {
+		if context.Error != "" {
+			continue
+		}
+		contexts = append(contexts, context)
+	}
+	if len(contexts) == 0 {
+		return
+	}
+
+	sb.WriteString("Unikorn/Kubernetes CR observations for final analysis:\n")
+	for _, context := range contexts {
+		testName := firstNonEmpty(context.TestName, "General lookup")
+		if context.Test != nil {
+			testName = firstNonEmpty(context.Test.Name, context.Test.ID, testName)
+		}
+		sb.WriteString(fmt.Sprintf("- Test: %s", truncate(cleanOneLine(testName), 220)))
+		if context.BackendArea != "" {
+			sb.WriteString(fmt.Sprintf("; backend: %s", truncate(cleanOneLine(context.BackendArea), 80)))
+		}
+		if context.Confidence != "" {
+			sb.WriteString(fmt.Sprintf("; confidence: %s", context.Confidence))
+		}
+		if context.Resource != "" {
+			sb.WriteString(fmt.Sprintf("; CR: %s", truncate(cleanOneLine(context.Resource), 120)))
+		}
+		if context.Namespace != "" {
+			sb.WriteString(fmt.Sprintf("; namespace: %s", truncate(cleanOneLine(context.Namespace), 80)))
+		} else if context.Name == "" {
+			sb.WriteString("; namespace: all")
+		}
+		if context.Name != "" {
+			sb.WriteString(fmt.Sprintf("; name: %s", truncate(cleanOneLine(context.Name), 120)))
+		} else if context.Selector != "" {
+			sb.WriteString("; selector lookup")
+		}
+		if context.ResultCount == 0 {
+			sb.WriteString("; no matching CR objects")
+		} else if context.ResultCount == 1 {
+			sb.WriteString("; found 1 CR object")
+		} else {
+			sb.WriteString(fmt.Sprintf("; found %d CR objects", context.ResultCount))
+		}
+		if signal := unikornCRSignalSummary(context); signal != "" {
+			sb.WriteString(fmt.Sprintf("; CR signal: %s", signal))
+		}
+		sb.WriteString("\n")
+		if context.Reason != "" {
+			sb.WriteString(fmt.Sprintf("  Lookup reason: %s\n", truncate(cleanOneLine(context.Reason), 220)))
+		}
+	}
+	sb.WriteString("\n")
+}
+
 func grafanaLogFirstMatchHint(context GrafanaLogContext) string {
 	if len(context.Entries) == 0 {
 		return ""
@@ -502,10 +585,164 @@ func grafanaLogSignalSummary(context GrafanaLogContext) string {
 		return ""
 	}
 
+	if signals := grafanaLogConcreteErrorSignals(context.Entries); len(signals) > 0 {
+		return "controller error: " + strings.Join(signals, ", ")
+	}
 	if signals := grafanaLogErrorSignals(context.Entries); len(signals) > 0 {
 		return "error signals: " + strings.Join(signals, ", ")
 	}
 	return "no explicit error string in returned rows"
+}
+
+func grafanaLogConcreteErrorSignals(entries []GrafanaLogEntry) []string {
+	seen := map[string]bool{}
+	var signals []string
+	for _, entry := range entries {
+		for _, text := range grafanaLogSignalTexts(entry) {
+			signal := grafanaLogConcreteSignalFromText(text)
+			if signal == "" || seen[strings.ToLower(signal)] {
+				continue
+			}
+			seen[strings.ToLower(signal)] = true
+			signals = append(signals, signal)
+			if len(signals) >= 3 {
+				return signals
+			}
+		}
+	}
+	return signals
+}
+
+func grafanaLogSignalTexts(entry GrafanaLogEntry) []string {
+	seen := map[string]bool{}
+	var texts []string
+	add := func(value string) {
+		value = cleanOneLine(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		texts = append(texts, value)
+	}
+
+	for _, key := range []string{"error", "message", "msg", "reason", "type"} {
+		add(entry.Parsed[key])
+	}
+	for _, key := range []string{"error", "message", "msg", "reason", "type"} {
+		add(extractJSONStringField(entry.Line, key))
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(entry.Line), &parsed); err == nil {
+		for _, key := range []string{"error", "message", "msg", "reason", "type"} {
+			if value, ok := parsed[key].(string); ok {
+				add(value)
+			}
+		}
+	}
+
+	add(entry.Line)
+	return texts
+}
+
+func grafanaLogConcreteSignalFromText(text string) string {
+	text = cleanOneLine(text)
+	lower := strings.ToLower(text)
+	if lower == "" {
+		return ""
+	}
+	if strings.Contains(lower, "allocation failure: vlan ids exhausted") {
+		return "allocation failure: vlan ids exhausted"
+	}
+	if strings.Contains(lower, "vlan ids exhausted") {
+		return "vlan ids exhausted"
+	}
+	if signal := grafanaLogNeutronVLANSignal(text); signal != "" {
+		return signal
+	}
+	return ""
+}
+
+func grafanaLogNeutronVLANSignal(text string) string {
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "vlanidinuse") && !(strings.Contains(lower, "vlan ") && strings.Contains(lower, " is in use")) {
+		return ""
+	}
+
+	for _, candidate := range []string{
+		extractJSONStringField(text, "message"),
+		extractJSONStringField(text, "error_description"),
+		text,
+	} {
+		if message := grafanaLogVLANInUseMessage(candidate); message != "" {
+			return "VlanIdInUse: " + message
+		}
+	}
+	return "VlanIdInUse"
+}
+
+func grafanaLogVLANInUseMessage(text string) string {
+	text = cleanOneLine(text)
+	if text == "" {
+		return ""
+	}
+	match := regexp.MustCompile(`(?i)(?:unable to create the network\. )?(?:the )?VLAN\s+\d+\s+on physical network\s+[^".]+?\s+is in use`).FindString(text)
+	if match == "" {
+		return ""
+	}
+	match = strings.TrimSpace(match)
+	match = regexp.MustCompile(`(?i)^unable to create the network\.\s+`).ReplaceAllString(match, "")
+	match = regexp.MustCompile(`(?i)^the\s+`).ReplaceAllString(match, "")
+	match = regexp.MustCompile(`(?i)^vlan`).ReplaceAllString(match, "VLAN")
+	return match
+}
+
+func extractJSONStringField(text, field string) string {
+	if text == "" || field == "" {
+		return ""
+	}
+	marker := `"` + field + `"`
+	searchFrom := 0
+	for {
+		index := strings.Index(text[searchFrom:], marker)
+		if index < 0 {
+			return ""
+		}
+		index += searchFrom
+		cursor := index + len(marker)
+		for cursor < len(text) && (text[cursor] == ' ' || text[cursor] == '\t' || text[cursor] == '\n' || text[cursor] == '\r') {
+			cursor++
+		}
+		if cursor >= len(text) || text[cursor] != ':' {
+			searchFrom = index + len(marker)
+			continue
+		}
+		cursor++
+		for cursor < len(text) && (text[cursor] == ' ' || text[cursor] == '\t' || text[cursor] == '\n' || text[cursor] == '\r') {
+			cursor++
+		}
+		if cursor >= len(text) || text[cursor] != '"' {
+			searchFrom = index + len(marker)
+			continue
+		}
+		valueStart := cursor
+		escaped := false
+		for cursor = valueStart + 1; cursor < len(text); cursor++ {
+			switch {
+			case escaped:
+				escaped = false
+			case text[cursor] == '\\':
+				escaped = true
+			case text[cursor] == '"':
+				var value string
+				if err := json.Unmarshal([]byte(text[valueStart:cursor+1]), &value); err == nil {
+					return value
+				}
+				return ""
+			}
+		}
+		return ""
+	}
 }
 
 func grafanaLogErrorSignals(entries []GrafanaLogEntry) []string {
@@ -594,6 +831,230 @@ func parseAIAnalysis(output string) *AIAnalysis {
 		StepSummary:  strings.TrimSpace(before),
 		SlackSummary: strings.TrimSpace(after),
 	}
+}
+
+func ensureAIAnalysisEvidenceSignals(analysis *AIAnalysis, testAnalysis Analysis) *AIAnalysis {
+	if analysis == nil {
+		return nil
+	}
+	analysis.StepSummary = ensureAIStepSummaryEvidenceSignals(analysis.StepSummary, testAnalysis)
+	analysis.SlackSummary = ensureAISlackSummaryEvidenceSignals(analysis.SlackSummary, testAnalysis)
+	return analysis
+}
+
+func ensureAIStepSummaryEvidenceSignals(summary string, analysis Analysis) string {
+	bullets := missingAIAnalysisEvidenceBullets(summary, analysis)
+	if len(bullets) == 0 {
+		return summary
+	}
+
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return "## Test Failure Analysis\n\n### Suggested Next Checks\n" + strings.Join(bullets, "\n")
+	}
+	if strings.Contains(strings.ToLower(trimmed), "### suggested next checks") {
+		return trimmed + "\n" + strings.Join(bullets, "\n")
+	}
+	return trimmed + "\n\n### Suggested Next Checks\n" + strings.Join(bullets, "\n")
+}
+
+func ensureAISlackSummaryEvidenceSignals(summary string, analysis Analysis) string {
+	evidence := missingAIAnalysisEvidenceTexts(summary, analysis)
+	if len(evidence) == 0 {
+		return summary
+	}
+
+	trimmed := strings.TrimSpace(summary)
+	if trimmed == "" {
+		return formatSlackEvidencePatternLine(evidence)
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	targetIndex := -1
+	actionIndex := -1
+	for index, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		lowerLine := strings.ToLower(trimmedLine)
+		if strings.HasPrefix(lowerLine, "- *action:*") {
+			if actionIndex < 0 {
+				actionIndex = index
+			}
+			continue
+		}
+		if isSlackSupportBullet(lowerLine) {
+			continue
+		}
+		if strings.HasPrefix(trimmedLine, "- *") && !strings.Contains(lowerLine, "(skipped):") {
+			targetIndex = index
+			break
+		}
+	}
+	if targetIndex < 0 {
+		fallbackLine := formatSlackEvidencePatternLine(evidence)
+		if actionIndex >= 0 {
+			updated := append([]string{}, lines[:actionIndex]...)
+			updated = append(updated, fallbackLine)
+			updated = append(updated, lines[actionIndex:]...)
+			return strings.Join(updated, "\n")
+		}
+		return trimmed + "\n" + fallbackLine
+	}
+
+	lines[targetIndex] = appendEvidenceToSlackPatternLine(lines[targetIndex], evidence)
+	return strings.Join(lines, "\n")
+}
+
+func isSlackSupportBullet(lowerLine string) bool {
+	for _, prefix := range []string{"- *evidence:*", "- *impact:*", "- *details:*", "- *confidence:*"} {
+		if strings.HasPrefix(lowerLine, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendEvidenceToSlackPatternLine(line string, evidence []string) string {
+	trimmedLine := strings.TrimRight(line, " \t")
+	var additions []string
+	for _, text := range evidence {
+		text = strings.TrimSpace(strings.TrimSuffix(text, "."))
+		if text == "" {
+			continue
+		}
+		additions = append(additions, text)
+	}
+	if len(additions) == 0 {
+		return line
+	}
+	separator := ";"
+	if strings.HasSuffix(trimmedLine, ".") {
+		separator = ""
+	}
+	return trimmedLine + separator + " " + strings.Join(additions, "; ") + "."
+}
+
+func formatSlackEvidencePatternLine(evidence []string) string {
+	text := strings.TrimSpace(strings.Join(trimEvidenceSentences(evidence), "; "))
+	if text == "" {
+		text = "No suite/category summary was available from AI analysis."
+	}
+	if !strings.HasSuffix(text, ".") {
+		text += "."
+	}
+	return "- *Backend signals* (unknown/mixed): " + text
+}
+
+func trimEvidenceSentences(evidence []string) []string {
+	var trimmed []string
+	for _, text := range evidence {
+		text = strings.TrimSpace(strings.TrimSuffix(text, "."))
+		if text != "" {
+			trimmed = append(trimmed, text)
+		}
+	}
+	return trimmed
+}
+
+func missingAIAnalysisEvidenceBullets(summary string, analysis Analysis) []string {
+	texts := missingAIAnalysisEvidenceTexts(summary, analysis)
+	bullets := make([]string, 0, len(texts))
+	for _, text := range texts {
+		bullets = append(bullets, "- "+text)
+	}
+	return bullets
+}
+
+func missingAIAnalysisEvidenceTexts(summary string, analysis Analysis) []string {
+	var texts []string
+	texts = append(texts, missingGrafanaLogEvidenceTexts(summary, analysis.GrafanaLogs)...)
+	texts = append(texts, missingUnikornCREvidenceTexts(summary, analysis.UnikornCRs)...)
+	if len(texts) > 2 {
+		return texts[:2]
+	}
+	return texts
+}
+
+func missingGrafanaLogEvidenceTexts(summary string, enrichment *GrafanaLogEnrichment) []string {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return nil
+	}
+
+	lowerSummary := strings.ToLower(summary)
+	seen := map[string]bool{}
+	var texts []string
+	for _, context := range enrichment.Contexts {
+		text, marker := compactGrafanaLogEvidenceSignal(context)
+		if text == "" || marker == "" {
+			continue
+		}
+		marker = strings.ToLower(marker)
+		if seen[marker] || strings.Contains(lowerSummary, marker) {
+			continue
+		}
+		seen[marker] = true
+		texts = append(texts, text)
+		if len(texts) >= 2 {
+			break
+		}
+	}
+	return texts
+}
+
+func compactGrafanaLogEvidenceSignal(context GrafanaLogContext) (string, string) {
+	signals := grafanaLogConcreteErrorSignals(context.Entries)
+	if len(signals) == 0 {
+		return "", ""
+	}
+	signal := signals[0]
+	return "Grafana/Loki signal: controller error includes `" + signal + "`.", signal
+}
+
+func missingUnikornCREvidenceTexts(summary string, enrichment *UnikornCREnrichment) []string {
+	if enrichment == nil || len(enrichment.Contexts) == 0 {
+		return nil
+	}
+
+	lowerSummary := strings.ToLower(summary)
+	seen := map[string]bool{}
+	var texts []string
+	for _, context := range enrichment.Contexts {
+		text, marker := compactUnikornCREvidenceSignal(context)
+		if text == "" || marker == "" {
+			continue
+		}
+		marker = strings.ToLower(marker)
+		if seen[marker] || strings.Contains(lowerSummary, marker) {
+			continue
+		}
+		seen[marker] = true
+		texts = append(texts, text)
+		if len(texts) >= 2 {
+			break
+		}
+	}
+	return texts
+}
+
+func compactUnikornCREvidenceSignal(context UnikornCRContext) (string, string) {
+	if context.Error != "" {
+		return "", ""
+	}
+
+	signal := unikornCRSignalSummary(context)
+	if signal == "" {
+		return "", ""
+	}
+	lowerSignal := strings.ToLower(signal)
+	if strings.Contains(lowerSignal, "allocation failure: vlan ids exhausted") {
+		return "Kubernetes CR signal: Network CR condition message includes `allocation failure: vlan ids exhausted`.", "allocation failure: vlan ids exhausted"
+	}
+	if strings.Contains(lowerSignal, "vlan ids exhausted") {
+		return "Kubernetes CR signal: Network CR condition message includes `vlan ids exhausted`.", "vlan ids exhausted"
+	}
+	if strings.Contains(lowerSignal, "vlanexhausted") {
+		return "Kubernetes CR signal: Network CR condition reason is `VLANExhausted`.", "vlanexhausted"
+	}
+	return "Kubernetes CR signal: " + truncate(cleanOneLine(signal), 220) + ".", signal
 }
 
 func cutAIAnalysisOnDelimiter(output string) (string, string, bool) {

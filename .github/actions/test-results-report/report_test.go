@@ -800,6 +800,9 @@ func TestConfigDefaults(t *testing.T) {
 	if config.EnableGrafanaLogs {
 		t.Fatal("grafana log enrichment should default false")
 	}
+	if config.EnableUnikornCRs {
+		t.Fatal("unikorn CR enrichment should default false")
+	}
 	if config.GrafanaOrgID != "1" {
 		t.Fatalf("grafana org ID default = %q", config.GrafanaOrgID)
 	}
@@ -808,6 +811,9 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if config.GrafanaLogLookback != "2h" || config.GrafanaLogLimit != 20 || config.GrafanaLogMaxFailures != 6 || config.GrafanaLogConcurrency != 4 {
 		t.Fatalf("grafana defaults = lookback %q limit %d max failures %d concurrency %d", config.GrafanaLogLookback, config.GrafanaLogLimit, config.GrafanaLogMaxFailures, config.GrafanaLogConcurrency)
+	}
+	if config.UnikornCRMaxFailures != 4 || config.UnikornCRTimeout != 30*time.Second {
+		t.Fatalf("unikorn CR defaults = max failures %d timeout %s", config.UnikornCRMaxFailures, config.UnikornCRTimeout)
 	}
 }
 
@@ -844,45 +850,69 @@ func TestClaudePromptRequestsPatternSummary(t *testing.T) {
 	prompt := claudePrompt()
 	for _, expected := range []string{
 		"4-6 high-signal Slack mrkdwn bullet lines",
-		"Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed",
-		"Use skipped for patterns where all affected tests are skipped",
-		"Use test/false failure only for failed tests",
-		"If Grafana observations are present, use them only as supporting evidence",
+		"Evidence priority:",
+		"Do not override suite-report evidence with lower-priority observations",
+		"Confidence guidance:",
+		"Reflect confidence through wording but do not add a confidence column",
+		"Base analysis on suite-report evidence first",
+		"inspect nearby test code and fixtures for dependency context",
+		"Use test code context only to understand relationships between resources",
+		"Do not quote source code or add raw source snippets to the report",
+		"Classification must be one of:",
+		"- configuration",
+		"All affected tests are skipped",
+		"Other failures caused by test logic rather than product behavior",
+		"Use Grafana observations and CR observations only as supporting evidence",
+		"Combine suite evidence, Grafana observations, and CR observations",
+		"Keep environment, region, resource ID, and evidence signals scoped",
+		"When grouped failures have different concrete Grafana or CR signals",
+		"Do not carry VLAN IDs, physical networks, controller errors, or CR states",
 		"Keep the report close to the existing production format",
-		"do not add a separate Grafana section",
-		"When a Grafana signal is present, mention the concrete signal",
+		"Do not add a separate Grafana section",
+		"put that exact signal in the Likely reason or Next check",
+		"load balancer stuck because its network dependency failed",
+		"Grafana showed INTERNAL_ERROR",
+		"Network CR status phase=Error reason=VLANExhausted",
+		"Grafana showed VlanIdInUse: VLAN 1101 on physical network physnet1 is in use",
+		"Mention a specific VLAN ID or physical network only when the matched evidence",
+		"Treat \"allocation failure: vlan ids exhausted\" as allocation-pool exhaustion",
 		"Do not overstate certainty when Grafana returned empty, cleanup-only, or loosely related logs",
+		"Do not promote weak, time-disjoint, or identifier-unmatched Grafana observations",
+		"Do not overstate certainty when CR lookup returned no objects",
 		"If a failed test time range and Grafana query time range are both present",
-		"Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window",
-		"the provisioning error was not present in the returned Grafana lines",
-		`add a "### Representative Failed Tests" table capped at 10 rows`,
-		"group tests with the same failure reason into one row",
-		"Each pattern bullet must start with '- *<suite/category>* (<category>):'",
-		"Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason",
-		"For Grafana-backed bullets, explicitly connect the test error",
+		"Do not claim an error occurred before the Grafana capture window unless the failed test began before that window",
+		"provisioning/error signal was not present in the returned Grafana lines",
+		"Maximum 10 rows",
+		"Group duplicate failure reasons into a single row",
+		"*<suite/category>* (<category>):",
+		"Each pattern bullet must explain",
+		"Include Grafana only when it directly supports the failure interpretation",
+		"Explicitly connect the test error, interpretation, and Grafana signal",
+		"Explicitly connect the test error, interpretation, and CR signal",
+		"Keep Slack as an overall summary by suite/failure category",
 		`Do not use vague phrases like "Grafana returned related activity"`,
-		"If Grafana only returned audit/cleanup rows",
+		`Do not use vague phrases like "CR state looked related"`,
+		"Do not mention Grafana merely to say evidence was time-disjoint",
+		"Mention cleanup/audit/activity rows only when they directly match",
 		`Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window`,
-		"Group by suite name when one suite is affected",
-		"Lead with the highest-attention real product, infra, or environment blocker",
-		"keep temporary sentinel/test-validation failures short",
-		"Include only the evidence needed to justify the category",
-		"avoid selector names, file paths, and retry details",
-		"Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*'",
-		"For intentional or sentinel skipped tests",
-		"re-enabled",
-		"For intentional or sentinel failed tests",
+		"Group by suite when one suite is affected",
+		"Lead with the highest-attention product, infra, configuration, or environment blocker",
+		"Keep temporary sentinel/test-validation failures short",
+		"Do not include selector names, file paths, or retry details unless they materially change the next action",
+		"Do not add Evidence bullets",
+		"disabled tests, pending tests, and sentinel skips",
+		"removed or re-enabled",
+		"intentional sentinel failures",
 		"removed or disabled before review",
 		"Do not list every failed or skipped test",
-		"End with exactly one '- *Action:*' bullet",
-		"the Action bullet must mention that test-level failure reasons are available in the GitHub build summary",
+		"Finish with exactly one action bullet",
+		"detailed test-level failure reasons are available in the GitHub build summary",
 		"Do not mention test-level failure reasons for skip-only runs",
-		"- *Auth / all suites* (infra/external):",
+		"- *Auth / all suites* (configuration):",
 		"| Suite / area | Representative tests | Failure reason | Count |",
-		"- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run.",
 		"- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457",
-		"- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window",
-		"- *Action:* Use the GitHub build summary for test-level failure reasons;",
+		"- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana showed vlan ids exhausted for the same resource during the test window",
+		"- *Action:* Use the GitHub build summary for detailed test-level failure reasons",
 		aiSlackDelimiter,
 	} {
 		if !strings.Contains(prompt, expected) {
@@ -908,15 +938,73 @@ func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
 		`"expected_error"`,
 		`"search_terms"`,
 		`"confidence"`,
-		"Only create queries for failures that appear backend-related",
-		"Do not query for purely client-side assertion failures",
+		"Create queries only when backend evidence would materially help confirm or explain the failure",
+		"Do not infer backend involvement from suite names, product areas, test locations, or filenames alone",
+		"Pure UI assertion failures",
+		"Dependent resource identifiers from API output or status fields",
+		"status.networkId for a load balancer",
+		"Dependency-aware lookup rules",
+		"the useful backend error may be in the dependency controller logs",
+		"inspect the referenced test and fixture helpers to understand dependency setup",
+		"search_terms must contain only values copied from the failure evidence",
+		"Do not invent search terms",
+		"Generate one query per distinct backend failure signature",
+		"Avoid duplicate queries that differ only by test name while searching for the same backend condition",
+		"Use the strongest identifiers available",
 		"Use the exact failure_ref values",
-		"Do not include Grafana URLs",
-		"do not assume a single backend component",
-		`return {"queries":[]}`,
+		"Do not include Grafana URLs, Explore URLs, dashboard URLs, time ranges",
+		"The reporter generates Grafana URLs separately using the datasource, query, and time window",
+		`{"queries":[]}`,
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("planning prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
+func TestUnikornCRQueryPlanningPromptRequestsReadOnlyCRJSON(t *testing.T) {
+	t.Parallel()
+
+	prompt := unikornCRQueryPlanningPrompt()
+	for _, expected := range []string{
+		"Return strict JSON only",
+		`"resource"`,
+		`"namespace"`,
+		`"selector"`,
+		`"all_namespaces"`,
+		"Do not use CRs as the default failure source",
+		"Create CR lookups only when Kubernetes custom-resource state could materially improve",
+		"Unikorn/Kubernetes resource lifecycle signal",
+		"Purely client-side assertions",
+		"Generic 4xx/5xx responses without resource lifecycle evidence",
+		"Cleanup-only not_found errors unless the failure is about a Kubernetes-owned resource lifecycle",
+		"do not request loadbalancers.region.unikorn-cloud.org",
+		"status.networkId or POST /networks UUIDs",
+		"CR lookups for dependency resources such as networks.region.unikorn-cloud.org or vlanallocations.region.unikorn-cloud.org are allowed",
+		"Direct load balancer CR lookups",
+		"Do not infer Kubernetes CR involvement from suite names, product areas, test locations, or filenames alone",
+		"Use the exact failure_ref values",
+		"test_name must exactly match the input Test value",
+		"resource must be exactly one kubectl resource identifier",
+		"networks.region.unikorn-cloud.org",
+		"computeinstances.compute.unikorn-cloud.org",
+		"resource must never include:",
+		"Include either name or selector",
+		"Prefer exact name over selector whenever available",
+		"Do not invent names, UUIDs, namespaces, selectors, resource kinds, groups, labels, or backend areas",
+		"Do not invent a default namespace unless the evidence explicitly says default",
+		"If using name, selector must be an empty string",
+		"If using selector, name must be an empty string",
+		"Generate one query per distinct Kubernetes-owned resource or distinct CR failure signature",
+		"Avoid duplicate queries that differ only by test name while looking up the same resource or same lifecycle condition",
+		"Do not request:",
+		"- pods",
+		"- loadbalancers.region.unikorn-cloud.org",
+		"- mutations",
+		`{"queries":[]}`,
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("CR planning prompt missing %q:\n%s", expected, prompt)
 		}
 	}
 }
@@ -958,6 +1046,36 @@ func TestRenderGrafanaLogQueryPlanningInputIncludesFailureRefs(t *testing.T) {
 	}
 }
 
+func TestRenderUnikornCRQueryPlanningInputIncludesFailureRefs(t *testing.T) {
+	t.Parallel()
+
+	input := renderUnikornCRQueryPlanningInput(Analysis{
+		Current: TestRun{Name: "Region API"},
+		Stats:   Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			ID:      "network-create",
+			Name:    "creates network",
+			Suite:   "Network Management",
+			File:    "network_test.go",
+			Message: "Network cc68d1a4-c005-4b61-a24e-b7c64cb451d0 reached Error: vlan ids exhausted",
+		}},
+	}, Config{
+		Environment:          "uat",
+		UnikornCRMaxFailures: 1,
+	})
+
+	for _, expected := range []string{
+		"Failure ref: f1",
+		"Test ID: network-create",
+		"Network cc68d1a4-c005-4b61-a24e-b7c64cb451d0 reached Error",
+		"Maximum CR lookups allowed: 1",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("CR planning input missing %q:\n%s", expected, input)
+		}
+	}
+}
+
 func TestParseGrafanaLogQueryPlan(t *testing.T) {
 	t.Parallel()
 
@@ -977,6 +1095,28 @@ func TestParseGrafanaLogQueryPlan(t *testing.T) {
 		!strings.Contains(queries[0].LogQL, "claim-123") ||
 		queries[0].Reason != "storage backend error" {
 		t.Fatalf("unexpected query: %+v", queries[0])
+	}
+}
+
+func TestParseUnikornCRQueryPlan(t *testing.T) {
+	t.Parallel()
+
+	queries, err := parseUnikornCRQueryPlan("```json\n{\"queries\":[{\"failure_ref\":\" f1 \",\"test_name\":\" creates network \",\"backend_area\":\" network \",\"resource\":\" networks.region.unikorn-cloud.org \",\"name\":\" network-123 \",\"reason\":\" network CR reached error \",\"confidence\":\" High \"},{\"failure_ref\":\"f2\",\"resource\":\"pods\",\"name\":\"pod-1\"},{\"failure_ref\":\"f3\",\"resource\":\"instances.compute.unikorn-cloud.org\"},{\"failure_ref\":\"f4\",\"resource\":\"loadbalancers.region.unikorn-cloud.org\",\"name\":\"lb-123\"}]}\n```")
+	if err != nil {
+		t.Fatalf("parseUnikornCRQueryPlan returned error: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("queries = %+v", queries)
+	}
+	if queries[0].FailureRef != "f1" ||
+		queries[0].TestName != "creates network" ||
+		queries[0].BackendArea != "network" ||
+		queries[0].Resource != "networks.region.unikorn-cloud.org" ||
+		queries[0].Name != "network-123" ||
+		!queries[0].AllNamespaces ||
+		queries[0].Confidence != "high" ||
+		queries[0].Reason != "network CR reached error" {
+		t.Fatalf("unexpected CR query: %+v", queries[0])
 	}
 }
 
@@ -1056,6 +1196,266 @@ func TestRenderAIInputIncludesGrafanaLogs(t *testing.T) {
 	}
 }
 
+func TestRenderAIInputIncludesUnikornCRs(t *testing.T) {
+	t.Parallel()
+
+	input := renderAIInputWithOptions(Analysis{
+		Current: TestRun{Name: "API Tests"},
+		Stats:   Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:    "creates network",
+			Message: "network reached error",
+		}},
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				FailureRef:  "f1",
+				TestName:    "creates network",
+				BackendArea: "network",
+				Resource:    "networks.region.unikorn-cloud.org",
+				Name:        "network-123",
+				Reason:      "Network provisioning reached Error and the CR name was present in the failure.",
+				Confidence:  "high",
+				ResultCount: 1,
+				Objects: []UnikornCRObjectSummary{{
+					Kind:              "Network",
+					Namespace:         "unikorn",
+					Name:              "network-123",
+					Phase:             "Error",
+					ProvisioningState: "failed",
+					Conditions:        []string{"Ready =False reason=VLANExhausted message=vlan ids exhausted"},
+					OwnerRefs:         []string{"Region/region-1"},
+				}},
+			}},
+		},
+	}, AIInputOptions{})
+
+	for _, expected := range []string{
+		"Unikorn/Kubernetes CR observations for final analysis:",
+		"- Test: creates network; backend: network; confidence: high; CR: networks.region.unikorn-cloud.org; name: network-123; found 1 CR object; CR signal: Network/network-123 namespace=unikorn, phase=Error, provisioning=failed, conditions=Ready =False reason=VLANExhausted message=vlan ids exhausted, owners=Region/region-1",
+		"Lookup reason: Network provisioning reached Error and the CR name was present in the failure.",
+	} {
+		if !strings.Contains(input, expected) {
+			t.Fatalf("AI input missing %q:\n%s", expected, input)
+		}
+	}
+	for _, unexpected := range []string{
+		"kubectl get",
+		"raw CR YAML",
+		"raw CR JSON",
+	} {
+		if strings.Contains(input, unexpected) {
+			t.Fatalf("AI input should not include %q:\n%s", unexpected, input)
+		}
+	}
+}
+
+func TestRenderAIInputOmitsFailedUnikornCRLookups(t *testing.T) {
+	t.Parallel()
+
+	input := renderAIInputWithOptions(Analysis{
+		Current: TestRun{Name: "API Tests"},
+		Stats:   Stats{Passed: 1, Failed: 1},
+		Failures: []TestCase{{
+			Name:    "creates load balancer",
+			Message: "load balancer stayed provisioning",
+		}},
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				FailureRef: "f1",
+				TestName:   "creates load balancer",
+				Resource:   "loadbalancers.region.unikorn-cloud.org",
+				Name:       "lb-123",
+				Error:      "kubectl get loadbalancers failed: forbidden",
+			}},
+		},
+	}, AIInputOptions{})
+
+	for _, unexpected := range []string{
+		"Unikorn/Kubernetes CR observations for final analysis:",
+		"CR lookup failed",
+		"loadbalancers.region.unikorn-cloud.org",
+		"forbidden",
+	} {
+		if strings.Contains(input, unexpected) {
+			t.Fatalf("AI input should omit failed CR lookup detail %q:\n%s", unexpected, input)
+		}
+	}
+}
+
+func TestEnsureAIAnalysisEvidenceSignalsAddsMissingUnikornCRSignal(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary: "## Test Failure Analysis\n\n### Patterns\n| Category | What failed | Why it failed | Likely reason | Impact | Next check |\n| --- | --- | --- | --- | ---: | --- |\n| infra/external | Network setup | Network reached error | Network controller/backend issue | 1 failed | Inspect Network CR |\n",
+		SlackSummary: "- *Network setup* (infra/external): Network reached error instead of provisioned; inspect the Network CR.\n" +
+			"- *Action:* Use the GitHub build summary for test-level failure reasons; inspect network controller state, then rerun the focused suite.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				Resource:    "networks.region.unikorn-cloud.org",
+				Name:        "network-123",
+				ResultCount: 1,
+				Objects: []UnikornCRObjectSummary{{
+					Kind:       "Network",
+					Name:       "network-123",
+					Phase:      "Error",
+					Conditions: []string{"Available =False reason=Errored message=Unhandled error: allocation failure: vlan ids exhausted"},
+				}},
+			}},
+		},
+	})
+
+	if updated == nil {
+		t.Fatal("expected AI analysis")
+	}
+	if !strings.Contains(updated.StepSummary, "Kubernetes CR signal") ||
+		!strings.Contains(updated.StepSummary, "allocation failure: vlan ids exhausted") {
+		t.Fatalf("summary should include CR evidence signal:\n%s", updated.StepSummary)
+	}
+	if strings.Contains(updated.StepSummary, "network-123") {
+		t.Fatalf("summary should not need exact CR object names for the deterministic evidence bullet:\n%s", updated.StepSummary)
+	}
+	if !strings.Contains(updated.SlackSummary, "Kubernetes CR signal") ||
+		!strings.Contains(updated.SlackSummary, "allocation failure: vlan ids exhausted") {
+		t.Fatalf("slack summary should include CR evidence signal:\n%s", updated.SlackSummary)
+	}
+	if strings.Contains(updated.SlackSummary, "- *Evidence:*") {
+		t.Fatalf("slack summary should not add a standalone evidence bullet:\n%s", updated.SlackSummary)
+	}
+	firstLine := strings.Split(updated.SlackSummary, "\n")[0]
+	if !strings.Contains(firstLine, "Kubernetes CR signal") {
+		t.Fatalf("slack summary should keep CR signal in the suite/category bullet:\n%s", updated.SlackSummary)
+	}
+	if strings.Index(updated.SlackSummary, "Kubernetes CR signal") > strings.Index(updated.SlackSummary, "- *Action:*") {
+		t.Fatalf("slack CR signal should appear before the final action bullet:\n%s", updated.SlackSummary)
+	}
+	if strings.Contains(updated.SlackSummary, "network-123") {
+		t.Fatalf("slack summary should not need exact CR object names for the deterministic evidence bullet:\n%s", updated.SlackSummary)
+	}
+}
+
+func TestEnsureAIAnalysisEvidenceSignalsDoesNotDuplicateExistingUnikornCRSignal(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary:  "## Test Failure Analysis\n\n### Suggested Next Checks\n- Kubernetes CR signal already says `vlan ids exhausted`.\n",
+		SlackSummary: "- *Network setup* (infra/external): Kubernetes CR signal already says `vlan ids exhausted`.\n- *Action:* Rerun after checking capacity.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				ResultCount: 1,
+				Objects: []UnikornCRObjectSummary{{
+					Kind:       "Network",
+					Name:       "network-123",
+					Conditions: []string{"Available =False message=vlan ids exhausted"},
+				}},
+			}},
+		},
+	})
+
+	if strings.Count(strings.ToLower(updated.StepSummary), "vlan ids exhausted") != 1 {
+		t.Fatalf("summary should not duplicate existing CR signal:\n%s", updated.StepSummary)
+	}
+	if strings.Count(strings.ToLower(updated.SlackSummary), "vlan ids exhausted") != 1 {
+		t.Fatalf("slack summary should not duplicate existing CR signal:\n%s", updated.SlackSummary)
+	}
+}
+
+func TestEnsureAIAnalysisEvidenceSignalsAddsConcreteGrafanaSignal(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary: "## Test Failure Analysis\n\n### Patterns\n| Category | What failed | Why it failed | Likely reason | Impact | Next check |\n| --- | --- | --- | --- | ---: | --- |\n| infra/external | Network setup | Network reached error | Network controller/backend issue | 1 failed | Inspect controller logs |\n",
+		SlackSummary: "- *Network setup* (infra/external): Network reached error instead of provisioned; inspect controller logs.\n" +
+			"- *Action:* Use the GitHub build summary for test-level failure reasons; inspect network controller state, then rerun the focused suite.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		GrafanaLogs: &GrafanaLogEnrichment{
+			Contexts: []GrafanaLogContext{{
+				Entries: []GrafanaLogEntry{{
+					Line: `{"logger":"controllers.Network","error":"allocation failure: vlan ids exhausted"}`,
+				}},
+			}},
+		},
+	})
+
+	if updated == nil {
+		t.Fatal("expected AI analysis")
+	}
+	for _, summary := range []string{updated.StepSummary, updated.SlackSummary} {
+		if !strings.Contains(summary, "Grafana/Loki signal") ||
+			!strings.Contains(summary, "allocation failure: vlan ids exhausted") {
+			t.Fatalf("summary should include concrete Grafana signal:\n%s", summary)
+		}
+	}
+	if strings.Contains(updated.SlackSummary, "- *Evidence:*") {
+		t.Fatalf("slack summary should not add a standalone evidence bullet:\n%s", updated.SlackSummary)
+	}
+	firstLine := strings.Split(updated.SlackSummary, "\n")[0]
+	if !strings.Contains(firstLine, "Grafana/Loki signal") {
+		t.Fatalf("slack summary should keep Grafana signal in the suite/category bullet:\n%s", updated.SlackSummary)
+	}
+	if strings.Index(updated.SlackSummary, "Grafana/Loki signal") > strings.Index(updated.SlackSummary, "- *Action:*") {
+		t.Fatalf("slack Grafana signal should appear before the final action bullet:\n%s", updated.SlackSummary)
+	}
+}
+
+func TestEnsureAIAnalysisEvidenceSignalsDoesNotBackfillEmptyCRLookup(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary:  "## Test Failure Analysis\n\n### Suggested Next Checks\n- Inspect the network controller logs.\n",
+		SlackSummary: "- *Network setup* (infra/external): Network reached error; inspect controller logs.\n- *Action:* Use the GitHub build summary for test-level failure reasons; rerun the focused suite.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				Resource:    "networks.region.unikorn-cloud.org",
+				ResultCount: 0,
+			}},
+		},
+	})
+
+	for _, summary := range []string{updated.StepSummary, updated.SlackSummary} {
+		if strings.Contains(summary, "Kubernetes CR lookup found no matching") ||
+			strings.Contains(summary, "no matching `networks.region.unikorn-cloud.org`") {
+			t.Fatalf("empty CR lookups should not create deterministic evidence bullets:\n%s", summary)
+		}
+	}
+}
+
+func TestEnsureAIAnalysisEvidenceSignalsDoesNotBackfillFailedCRLookup(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary:  "## Test Failure Analysis\n\n### Suggested Next Checks\n- Inspect controller logs.\n",
+		SlackSummary: "- *Load balancer setup* (infra/external): Load balancer stayed provisioning; inspect controller logs.\n- *Action:* Use the GitHub build summary for test-level failure reasons.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				Resource: "loadbalancers.region.unikorn-cloud.org",
+				Name:     "lb-123",
+				Error:    "kubectl get loadbalancers failed: forbidden",
+			}},
+		},
+	})
+
+	for _, summary := range []string{updated.StepSummary, updated.SlackSummary} {
+		for _, unexpected := range []string{
+			"Kubernetes CR lookup failed",
+			"kubectl get loadbalancers failed",
+			"forbidden",
+		} {
+			if strings.Contains(summary, unexpected) {
+				t.Fatalf("failed CR lookup should not be backfilled into summaries:\n%s", summary)
+			}
+		}
+	}
+}
+
 func TestGrafanaLogSignalSummaryIncludesCleanupOnlyObservation(t *testing.T) {
 	t.Parallel()
 
@@ -1078,6 +1478,35 @@ func TestGrafanaLogSignalSummaryIncludesCleanupOnlyObservation(t *testing.T) {
 		if strings.Contains(summary, unexpected) {
 			t.Fatalf("signal summary should not include raw message %q: %s", unexpected, summary)
 		}
+	}
+}
+
+func TestGrafanaLogSignalSummaryIncludesVLANExhaustion(t *testing.T) {
+	t.Parallel()
+
+	summary := grafanaLogSignalSummary(GrafanaLogContext{
+		Entries: []GrafanaLogEntry{{
+			Line: `{"level":"error","logger":"controllers.Network","error":"allocation failure: vlan ids exhausted"}`,
+		}},
+	})
+
+	if summary != "controller error: allocation failure: vlan ids exhausted" {
+		t.Fatalf("signal summary should preserve concrete controller error: %s", summary)
+	}
+}
+
+func TestGrafanaLogSignalSummaryIncludesNeutronVlanInUse(t *testing.T) {
+	t.Parallel()
+
+	summary := grafanaLogSignalSummary(GrafanaLogContext{
+		Entries: []GrafanaLogEntry{{
+			Line: `{"level":"error","msg":"provisioning failed unexpectedly","error":"Expected HTTP response code [201 202] when accessing [POST https://compute.glo1.dev.nscale.com:9696/v2.0/networks], but got 409 instead: {\"NeutronError\": {\"type\": \"VlanIdInUse\", \"message\": \"Unable to create the network. The VLAN 1101 on physical network physnet1 is in use.\", \"detail\": \"\"}}","stacktrace":"truncated`,
+		}},
+	})
+
+	expected := "controller error: VlanIdInUse: VLAN 1101 on physical network physnet1 is in use"
+	if summary != expected {
+		t.Fatalf("signal summary should preserve concrete Neutron VLAN error:\nwant: %s\n got: %s", expected, summary)
 	}
 }
 

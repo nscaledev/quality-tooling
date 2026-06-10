@@ -50,6 +50,7 @@ type Analysis struct {
 	Skipped     []TestCase
 	Compare     *Comparison
 	GrafanaLogs *GrafanaLogEnrichment
+	UnikornCRs  *UnikornCREnrichment
 }
 
 type Comparison struct {
@@ -99,4 +100,38 @@ type GrafanaLogEntry struct {
 	Labels             map[string]string
 	StructuredMetadata map[string]string
 	Parsed             map[string]string
+}
+
+type UnikornCREnrichment struct {
+	Contexts []UnikornCRContext `json:"contexts"`
+}
+
+type UnikornCRContext struct {
+	Test        *TestCase                `json:"-"`
+	FailureRef  string                   `json:"failure_ref,omitempty"`
+	TestName    string                   `json:"test_name,omitempty"`
+	BackendArea string                   `json:"backend_area,omitempty"`
+	Resource    string                   `json:"resource,omitempty"`
+	Namespace   string                   `json:"namespace,omitempty"`
+	Name        string                   `json:"name,omitempty"`
+	Selector    string                   `json:"selector,omitempty"`
+	Reason      string                   `json:"reason,omitempty"`
+	Confidence  string                   `json:"confidence,omitempty"`
+	ResultCount int                      `json:"result_count"`
+	Objects     []UnikornCRObjectSummary `json:"objects,omitempty"`
+	Error       string                   `json:"error,omitempty"`
+}
+
+type UnikornCRObjectSummary struct {
+	APIVersion        string   `json:"api_version,omitempty"`
+	Kind              string   `json:"kind,omitempty"`
+	Namespace         string   `json:"namespace,omitempty"`
+	Name              string   `json:"name,omitempty"`
+	Phase             string   `json:"phase,omitempty"`
+	State             string   `json:"state,omitempty"`
+	ProvisioningState string   `json:"provisioning_state,omitempty"`
+	Health            string   `json:"health,omitempty"`
+	DeletionTimestamp string   `json:"deletion_timestamp,omitempty"`
+	Conditions        []string `json:"conditions,omitempty"`
+	OwnerRefs         []string `json:"owner_refs,omitempty"`
 }

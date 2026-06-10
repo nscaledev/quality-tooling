@@ -12,13 +12,20 @@ import (
 var runAIAnalysis = runClaudeAnalysis
 
 const grafanaPlanOnlyArg = "--grafana-plan-only"
+const unikornCRPlanOnlyArg = "--unikorn-cr-plan-only"
+const unikornCRCollectOnlyArg = "--unikorn-cr-collect-only"
 
 func main() {
 	config := loadConfig()
 	var err error
-	if len(os.Args) > 1 && os.Args[1] == grafanaPlanOnlyArg {
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == grafanaPlanOnlyArg:
 		err = runGrafanaQueryPlanningMode(context.Background(), config)
-	} else {
+	case len(os.Args) > 1 && os.Args[1] == unikornCRPlanOnlyArg:
+		err = runUnikornCRPlanningMode(context.Background(), config)
+	case len(os.Args) > 1 && os.Args[1] == unikornCRCollectOnlyArg:
+		err = runUnikornCRCollectionMode(context.Background(), config)
+	default:
 		err = run(context.Background(), config)
 	}
 	if err != nil {
@@ -66,10 +73,20 @@ func run(ctx context.Context, config Config) error {
 	logReportTiming("grafana-log-enrichment", stageStarted)
 
 	stageStarted = time.Now()
+	unikornCRs, err := runUnikornCREnrichment(config, analysis)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Unikorn CR enrichment skipped: %v\n", err)
+	} else if unikornCRs != nil {
+		analysis.UnikornCRs = unikornCRs
+	}
+	logReportTiming("unikorn-cr-enrichment", stageStarted)
+
+	stageStarted = time.Now()
 	aiAnalysis, err := runAIAnalysis(ctx, config, analysis)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: AI failure analysis skipped: %v\n", err)
 	}
+	aiAnalysis = ensureAIAnalysisEvidenceSignals(aiAnalysis, analysis)
 	logReportTiming("ai-failure-analysis", stageStarted)
 
 	if config.WriteStepSummary {
@@ -123,7 +140,18 @@ func run(ctx context.Context, config Config) error {
 	}
 
 	stageStarted = time.Now()
+	testHistoryResult := publishTestHistoryWithAI(ctx, config, current, aiAnalysis)
+	for _, warning := range testHistoryResult.Warnings {
+		fmt.Fprintf(os.Stderr, "Warning: test history publishing: %s\n", warning)
+	}
+	emitTestHistoryShippingWarning(testHistoryResult)
+	logReportTiming("test-history-publish", stageStarted)
+
+	stageStarted = time.Now()
 	if err := writeOutputs(os.Getenv("GITHUB_OUTPUT"), analysis, slackSent); err != nil {
+		return err
+	}
+	if err := writeTestHistoryOutputs(os.Getenv("GITHUB_OUTPUT"), testHistoryResult); err != nil {
 		return err
 	}
 	logReportTiming("write-outputs", stageStarted)
@@ -380,6 +408,34 @@ func writeGrafanaPlanOutputs(path string, planPath string, queryCount int) error
 		{"plan-path", planPath},
 		{"query-count", fmt.Sprint(queryCount)},
 		{"needs-mcp", fmt.Sprint(queryCount > 0)},
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
+	}
+	defer file.Close()
+
+	for _, value := range values {
+		if _, err := fmt.Fprintf(file, "%s=%s\n", value.key, value.value); err != nil {
+			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
+		}
+	}
+	return nil
+}
+
+func writeUnikornCRPlanOutputs(path string, planPath string, queryCount int) error {
+	if path == "" {
+		return nil
+	}
+
+	values := []struct {
+		key   string
+		value string
+	}{
+		{"plan-path", planPath},
+		{"query-count", fmt.Sprint(queryCount)},
+		{"needs-kube", fmt.Sprint(queryCount > 0)},
 	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)

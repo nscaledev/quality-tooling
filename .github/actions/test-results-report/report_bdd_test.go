@@ -286,6 +286,70 @@ var _ = Describe("Test Results Report", func() {
 				Expect(outputs).To(HaveKeyWithValue("slack-sent", "true"))
 			})
 
+			It("should run AI analysis and Slack before test history OTLP shipping", func() {
+				var aiCalled atomic.Bool
+				var slackCalled atomic.Bool
+				var otlpSawAI atomic.Bool
+				var otlpSawSlack atomic.Bool
+				var slackPayload SlackPayload
+
+				slackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+					Expect(json.NewDecoder(request.Body).Decode(&slackPayload)).To(Succeed())
+					slackCalled.Store(true)
+					w.WriteHeader(http.StatusOK)
+				}))
+				defer slackServer.Close()
+
+				otlpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					otlpSawAI.Store(aiCalled.Load())
+					otlpSawSlack.Store(slackCalled.Load())
+					http.Error(w, "collector unavailable", http.StatusServiceUnavailable)
+				}))
+				defer otlpServer.Close()
+
+				previousRunner := runAIAnalysis
+				runAIAnalysis = func(_ context.Context, receivedConfig Config, analysis Analysis) (*AIAnalysis, error) {
+					Expect(receivedConfig.EnableAIAnalysis).To(BeTrue())
+					Expect(analysis.Failures).To(HaveLen(1))
+					aiCalled.Store(true)
+					return &AIAnalysis{
+						StepSummary:  "## Test Failure Analysis\n\nAI analysis completed before OTLP shipping.",
+						SlackSummary: "- *Compute* (infra/external): AI Slack summary was ready before OTLP shipping.",
+					}, nil
+				}
+				DeferCleanup(func() {
+					runAIAnalysis = previousRunner
+				})
+
+				config.EnableAIAnalysis = true
+				config.ClaudeToken = "test-claude-token"
+				config.SendSlack = true
+				config.SlackWebhookURL = slackServer.URL
+				config.PublishTestHistory = true
+				config.TestHistoryPublishMode = "otlp"
+				config.TestHistoryOTLPEndpoint = otlpServer.URL + "/v1/logs"
+				config.TestHistoryOutputPath = filepath.Join(dir, ".test-history", "events.ndjson")
+				config.TestHistoryTimeout = time.Second
+				config.TestHistoryRetries = 0
+
+				err := run(context.Background(), config)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(aiCalled.Load()).To(BeTrue())
+				Expect(slackCalled.Load()).To(BeTrue())
+				Expect(otlpSawAI.Load()).To(BeTrue())
+				Expect(otlpSawSlack.Load()).To(BeTrue())
+				Expect(slackPayloadText(slackPayload)).To(ContainSubstring("AI Slack summary was ready before OTLP shipping."))
+
+				summary := readTestFile(summaryPath)
+				Expect(summary).To(ContainSubstring("AI analysis completed before OTLP shipping."))
+
+				outputs := readOutputFile(outputPath)
+				Expect(outputs).To(HaveKeyWithValue("slack-sent", "true"))
+				Expect(outputs).To(HaveKeyWithValue("test-history-shipping-status", "failed"))
+				Expect(outputs).To(HaveKeyWithValue("test-history-posted", "false"))
+			})
+
 			It("should plan backend Grafana queries, fetch MCP logs, and pass them into the final AI report", func() {
 				writeTestFile(currentPath, `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="Console E2E" tests="2" failures="2" skipped="0" time="18">
@@ -735,6 +799,53 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).NotTo(ContainSubstring("GRAFANA_SERVICE_ACCOUNT_TOKEN_RESOLVED=${grafana_token}"))
 			})
 
+			It("should use the test history OTLP writer bot when publishing needs the observability collector", func() {
+				Expect(action).To(ContainSubstring("Resolve Test History publishing"))
+				Expect(action).To(ContainSubstring("github-test-history-otlp-writer"))
+				Expect(action).To(ContainSubstring("teleport-actions/auth-k8s@0f46164469ae4fcd4d359d40e06bab17d4be17c9"))
+				Expect(action).To(ContainSubstring("token: ${{ inputs.test-history-teleport-token }}"))
+				Expect(action).To(ContainSubstring("kubernetes-cluster: ${{ inputs.test-history-kube-cluster }}"))
+				Expect(action).To(ContainSubstring(`kubectl port-forward`))
+				Expect(action).To(ContainSubstring(`--address 127.0.0.1`))
+				Expect(action).To(ContainSubstring(`"svc/${service}"`))
+				Expect(action).To(ContainSubstring(`"${local_port}:${collector_port}"`))
+				Expect(action).To(ContainSubstring("continue-on-error: true\n      shell: bash"))
+				Expect(action).To(ContainSubstring(`INPUT_TEST_HISTORY_PUBLISH_MODE: ${{ steps.test-history-resolve.outputs.mode }}`))
+				Expect(action).To(ContainSubstring(`INPUT_TEST_HISTORY_OTLP_ENDPOINT: ${{ steps.test-history-resolve.outputs.otlp-endpoint }}`))
+				Expect(action).To(ContainSubstring("test-history-publish-mode"))
+				Expect(action).To(ContainSubstring("Dump test history OTLP port-forward logs"))
+			})
+
+			It("should attach the test history retry spool when collector shipping fails", func() {
+				Expect(action).To(ContainSubstring("test-history-upload-spool"))
+				Expect(action).To(ContainSubstring("default: 'always'"))
+				Expect(action).To(ContainSubstring("Upload test history retry spool"))
+				Expect(action).To(ContainSubstring("actions/upload-artifact@v4"))
+				Expect(action).To(ContainSubstring("test-history-upload-spool must be one of: on-failure, always, false"))
+				Expect(action).To(ContainSubstring("write_output \"upload-spool\" \"$upload_spool\""))
+				Expect(action).To(ContainSubstring("write_output \"spool-artifact-name\" \"$spool_artifact_name\""))
+				Expect(action).To(ContainSubstring("steps.test-history-resolve.outputs.upload-spool == 'on-failure'"))
+				Expect(action).To(ContainSubstring("steps.report.outputs.test-history-shipping-status == 'failed'"))
+				Expect(action).To(ContainSubstring("name: ${{ steps.test-history-resolve.outputs.spool-artifact-name }}"))
+				Expect(action).To(ContainSubstring("steps.report.outputs.test-history-spool-path"))
+				Expect(action).To(ContainSubstring("include-hidden-files: true"))
+				Expect(action).To(ContainSubstring("test-history-spool-artifact-url"))
+				Expect(action).To(ContainSubstring("Append test history step summary"))
+				Expect(action).To(ContainSubstring("### Test History"))
+				Expect(action).To(ContainSubstring("wo11y-grafana-dev.nscale.teleport.sh/explore"))
+				Expect(action).To(ContainSubstring("Test history data"))
+				Expect(action).To(ContainSubstring("Test-history diagnostics"))
+				Expect(action).To(ContainSubstring("open reporter logs for"))
+				Expect(action).To(ContainSubstring("- Logs query:"))
+				Expect(action).To(ContainSubstring("github_run_id=`{build_id}`"))
+				Expect(action).NotTo(ContainSubstring("- Retry spool:"))
+				Expect(action).NotTo(ContainSubstring("- wo11y Grafana:"))
+				Expect(action).NotTo(ContainSubstring("- LogQL:"))
+				Expect(action).NotTo(ContainSubstring(`|= "{build_id}"`))
+				Expect(action).To(ContainSubstring("expr = f'{{service_name=\"test-results-report\"}} | github_run_id=`{build_id}`'"))
+				Expect(action).To(ContainSubstring("TEST_HISTORY_SPOOL_ARTIFACT_URL: ${{ steps.test-history-upload-spool.outputs.artifact-url }}"))
+			})
+
 			It("should log Grafana MCP preflight decisions without exposing the service account token", func() {
 				Expect(action).To(ContainSubstring("Grafana MCP enrichment preflight"))
 				Expect(action).To(ContainSubstring(`mask_value "grafana-service-account-token" "$grafana_token"`))
@@ -752,6 +863,23 @@ var _ = Describe("Test Results Report", func() {
 				Expect(action).To(ContainSubstring("INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ runner.temp }}/test-results-report-grafana-query-plan.json"))
 				Expect(action).To(ContainSubstring("steps.grafana-plan.outputs.needs-mcp == 'true'"))
 				Expect(action).To(ContainSubstring("INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ steps.grafana-plan.outputs.plan-path }}"))
+			})
+
+			It("should use the Unikorn CR reader bot only after Claude plans CR lookups", func() {
+				Expect(action).To(ContainSubstring("enable-unikorn-cr-enrichment"))
+				Expect(action).To(ContainSubstring("github-unikorn-cr-reader"))
+				Expect(action).To(ContainSubstring("Resolve Unikorn CR inputs"))
+				Expect(action).To(ContainSubstring("nks-dev-glo1"))
+				Expect(action).To(ContainSubstring("nks-stg-europe-west2"))
+				Expect(action).To(ContainSubstring("Plan Unikorn CR queries"))
+				Expect(action).To(ContainSubstring("go run . --unikorn-cr-plan-only"))
+				Expect(action).To(ContainSubstring("steps.unikorn-cr-plan.outputs.needs-kube == 'true'"))
+				Expect(action).To(ContainSubstring("teleport-actions/auth-k8s@0f46164469ae4fcd4d359d40e06bab17d4be17c9"))
+				Expect(action).To(ContainSubstring("token: ${{ inputs.unikorn-cr-teleport-token }}"))
+				Expect(action).To(ContainSubstring("kubernetes-cluster: ${{ steps.unikorn-cr-resolve.outputs.kube-cluster }}"))
+				Expect(action).To(ContainSubstring("go run . --unikorn-cr-collect-only"))
+				Expect(action).To(ContainSubstring("INPUT_UNIKORN_CR_CONTEXT_PATH: ${{ steps.unikorn-cr-collect.outputs.context-path }}"))
+				Expect(action).To(ContainSubstring("kubectl auth is deferred until Claude selects at least one backend-related CR lookup."))
 			})
 
 			It("should not interpolate the action path directly into shell scripts", func() {
@@ -832,45 +960,63 @@ var _ = Describe("Test Results Report", func() {
 			It("should ask for pattern-level triage instead of repeated raw test lists", func() {
 				prompt := claudePrompt()
 
-				Expect(prompt).To(ContainSubstring("already includes run totals, links, and any previous-result comparison"))
-				Expect(prompt).To(ContainSubstring(`do not add separate "Failed Tests" or "Skipped Tests" sections`))
+				Expect(prompt).To(ContainSubstring("already includes run totals, links, environment details, actor information"))
+				Expect(prompt).To(ContainSubstring("Evidence priority:"))
+				Expect(prompt).To(ContainSubstring("Do not override suite-report evidence with lower-priority observations"))
+				Expect(prompt).To(ContainSubstring("Confidence guidance:"))
+				Expect(prompt).To(ContainSubstring("Reflect confidence through wording but do not add a confidence column"))
+				Expect(prompt).To(ContainSubstring("Separate Failed Tests sections"))
 				Expect(prompt).To(ContainSubstring("Group failures and skips by likely area or pattern"))
-				Expect(prompt).To(ContainSubstring("Classify each pattern as one of: infra/external, code/core logic, test/false failure, skipped, unknown/mixed"))
-				Expect(prompt).To(ContainSubstring("Use skipped for patterns where all affected tests are skipped"))
-				Expect(prompt).To(ContainSubstring("Use test/false failure only for failed tests"))
-				Expect(prompt).To(ContainSubstring("Use unknown/mixed when there is not enough evidence"))
-				Expect(prompt).To(ContainSubstring("If Grafana observations are present, use them only as supporting evidence"))
+				Expect(prompt).To(ContainSubstring("inspect nearby test code and fixtures for dependency context"))
+				Expect(prompt).To(ContainSubstring("Use test code context only to understand relationships between resources"))
+				Expect(prompt).To(ContainSubstring("Do not quote source code or add raw source snippets to the report"))
+				Expect(prompt).To(ContainSubstring("Classification must be one of:"))
+				Expect(prompt).To(ContainSubstring("- configuration"))
+				Expect(prompt).To(ContainSubstring("All affected tests are skipped"))
+				Expect(prompt).To(ContainSubstring("Other failures caused by test logic rather than product behavior"))
+				Expect(prompt).To(ContainSubstring("Root cause cannot be confidently determined"))
+				Expect(prompt).To(ContainSubstring("Use Grafana observations only when directly relevant and concrete"))
+				Expect(prompt).To(ContainSubstring("Use CR observations only when directly relevant and concrete"))
+				Expect(prompt).To(ContainSubstring("Use Grafana observations and CR observations only as supporting evidence"))
 				Expect(prompt).To(ContainSubstring("Keep the report close to the existing production format"))
-				Expect(prompt).To(ContainSubstring("do not add a separate Grafana section"))
-				Expect(prompt).To(ContainSubstring("When a Grafana signal is present, mention the concrete signal"))
+				Expect(prompt).To(ContainSubstring("Do not add a separate Grafana section"))
+				Expect(prompt).To(ContainSubstring("put that exact signal in the Likely reason or Next check"))
+				Expect(prompt).To(ContainSubstring("load balancer stuck because its network dependency failed"))
+				Expect(prompt).To(ContainSubstring("Grafana showed INTERNAL_ERROR"))
+				Expect(prompt).To(ContainSubstring("Grafana showed VlanIdInUse: VLAN 1101 on physical network physnet1 is in use"))
+				Expect(prompt).To(ContainSubstring("Network CR status phase=Error reason=VLANExhausted"))
 				Expect(prompt).To(ContainSubstring("If a failed test time range and Grafana query time range are both present"))
-				Expect(prompt).To(ContainSubstring("Do not say a provisioning/error event happened before the Grafana capture window unless the failed test began before that window"))
-				Expect(prompt).To(ContainSubstring("the provisioning error was not present in the returned Grafana lines"))
-				Expect(prompt).To(ContainSubstring("cap examples to 2 per row"))
-				Expect(prompt).To(ContainSubstring(`add a "### Representative Failed Tests" table capped at 10 rows`))
-				Expect(prompt).To(ContainSubstring("group tests with the same failure reason into one row"))
+				Expect(prompt).To(ContainSubstring("Do not claim an error occurred before the Grafana capture window unless the failed test began before that window"))
+				Expect(prompt).To(ContainSubstring("provisioning/error signal was not present in the returned Grafana lines"))
+				Expect(prompt).To(ContainSubstring("at most two test names per pattern"))
+				Expect(prompt).To(ContainSubstring("Maximum 10 rows"))
+				Expect(prompt).To(ContainSubstring("Group duplicate failure reasons into a single row"))
 				Expect(prompt).To(ContainSubstring("4-6 high-signal Slack mrkdwn bullet lines"))
-				Expect(prompt).To(ContainSubstring("Each pattern bullet must start with '- *<suite/category>* (<category>):'"))
-				Expect(prompt).To(ContainSubstring("Each pattern bullet must answer: which suite/test area failed, what failed, and the likely reason"))
-				Expect(prompt).To(ContainSubstring("For Grafana-backed bullets, explicitly connect the test error"))
+				Expect(prompt).To(ContainSubstring("*<suite/category>* (<category>):"))
+				Expect(prompt).To(ContainSubstring("Each pattern bullet must explain"))
+				Expect(prompt).To(ContainSubstring("Include Grafana only when it directly supports the failure interpretation"))
+				Expect(prompt).To(ContainSubstring("Explicitly connect the test error, interpretation, and Grafana signal"))
+				Expect(prompt).To(ContainSubstring("Explicitly connect the test error, interpretation, and CR signal"))
 				Expect(prompt).To(ContainSubstring(`Do not use vague phrases like "Grafana returned related activity"`))
-				Expect(prompt).To(ContainSubstring("If Grafana only returned audit/cleanup rows"))
+				Expect(prompt).To(ContainSubstring(`Do not use vague phrases like "CR state looked related"`))
+				Expect(prompt).To(ContainSubstring("Do not mention Grafana merely to say evidence was time-disjoint"))
+				Expect(prompt).To(ContainSubstring("Mention cleanup/audit/activity rows only when they directly match"))
 				Expect(prompt).To(ContainSubstring(`Do not say "before the captured window" when the failed test start/end times are inside the Grafana query window`))
-				Expect(prompt).To(ContainSubstring("Group by suite name when one suite is affected"))
-				Expect(prompt).To(ContainSubstring("Lead with the highest-attention real product, infra, or environment blocker"))
-				Expect(prompt).To(ContainSubstring("keep temporary sentinel/test-validation failures short"))
-				Expect(prompt).To(ContainSubstring("Include only the evidence needed to justify the category"))
-				Expect(prompt).To(ContainSubstring("avoid selector names, file paths, and retry details"))
-				Expect(prompt).To(ContainSubstring("Use at most one supporting bullet such as '- *Evidence:*' or '- *Impact:*'"))
-				Expect(prompt).To(ContainSubstring("For intentional or sentinel skipped tests"))
-				Expect(prompt).To(ContainSubstring("re-enabled"))
-				Expect(prompt).To(ContainSubstring("For intentional or sentinel failed tests"))
+				Expect(prompt).To(ContainSubstring("Group by suite when one suite is affected"))
+				Expect(prompt).To(ContainSubstring("Lead with the highest-attention product, infra, configuration, or environment blocker"))
+				Expect(prompt).To(ContainSubstring("Keep temporary sentinel/test-validation failures short"))
+				Expect(prompt).To(ContainSubstring("Do not include selector names, file paths, or retry details unless they materially change the next action"))
+				Expect(prompt).To(ContainSubstring("Keep Slack as an overall summary by suite/failure category"))
+				Expect(prompt).To(ContainSubstring("Do not add Evidence bullets"))
+				Expect(prompt).To(ContainSubstring("disabled tests, pending tests, and sentinel skips"))
+				Expect(prompt).To(ContainSubstring("removed or re-enabled"))
+				Expect(prompt).To(ContainSubstring("intentional sentinel failures"))
 				Expect(prompt).To(ContainSubstring("removed or disabled before review"))
-				Expect(prompt).To(ContainSubstring("do not mention issue alerting unless it appears in the evidence"))
+				Expect(prompt).To(ContainSubstring("Do not mention issue alerting unless it appears in the evidence"))
 				Expect(prompt).To(ContainSubstring("When failed tests are present"))
 				Expect(prompt).To(ContainSubstring("Do not restate the test run title"))
-				Expect(prompt).To(ContainSubstring("End with exactly one '- *Action:*' bullet"))
-				Expect(prompt).To(ContainSubstring("the Action bullet must mention that test-level failure reasons are available in the GitHub build summary"))
+				Expect(prompt).To(ContainSubstring("Finish with exactly one action bullet"))
+				Expect(prompt).To(ContainSubstring("detailed test-level failure reasons are available in the GitHub build summary"))
 				Expect(prompt).To(ContainSubstring("Do not mention test-level failure reasons for skip-only runs"))
 			})
 
@@ -878,19 +1024,18 @@ var _ = Describe("Test Results Report", func() {
 				prompt := claudePrompt()
 
 				Expect(prompt).To(ContainSubstring("| Category | What failed | Why it failed | Likely reason | Impact | Next check |"))
-				Expect(prompt).To(ContainSubstring("| infra/external | Auth-dependent setup across suites"))
+				Expect(prompt).To(ContainSubstring("| configuration | Auth-dependent setup across suites"))
 				Expect(prompt).To(ContainSubstring("### Representative Failed Tests"))
 				Expect(prompt).To(ContainSubstring("| Suite / area | Representative tests | Failure reason | Count |"))
 				Expect(prompt).To(ContainSubstring("| File Storage Management | attach storage, detach storage | HTTP 401 access_denied before product assertions | 8 |"))
 				Expect(prompt).To(ContainSubstring("23 failed, 37 skipped"))
-				Expect(prompt).To(ContainSubstring("- *Auth / all suites* (infra/external): 23 setup-dependent tests failed with HTTP 401"))
-				Expect(prompt).To(ContainSubstring("- *Impact:* Multiple setup-dependent suites are blocked before product-level assertions run."))
+				Expect(prompt).To(ContainSubstring("- *Auth / all suites* (configuration): 23 setup-dependent tests failed with HTTP 401"))
 				Expect(prompt).To(ContainSubstring("- *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457"))
-				Expect(prompt).To(ContainSubstring("- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana matched the resource only in audit/cleanup rows during the test window"))
+				Expect(prompt).To(ContainSubstring("- *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana showed vlan ids exhausted for the same resource during the test window"))
 				Expect(prompt).NotTo(ContainSubstring("before the log capture window opened"))
 				Expect(prompt).NotTo(ContainSubstring("- *Confidence:* High for the auth/config failure pattern"))
 				Expect(prompt).NotTo(ContainSubstring("- *Details:* Test-level failure reasons are available in the GitHub build summary."))
-				Expect(prompt).To(ContainSubstring("- *Action:* Use the GitHub build summary for test-level failure reasons; refresh the token or config"))
+				Expect(prompt).To(ContainSubstring("- *Action:* Use the GitHub build summary for detailed test-level failure reasons"))
 			})
 		})
 

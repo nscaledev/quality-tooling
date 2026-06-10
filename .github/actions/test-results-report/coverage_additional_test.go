@@ -107,6 +107,50 @@ esac
 	}
 }
 
+func TestClaudeGrafanaLogQueryPlanningTimeoutIsCapped(t *testing.T) {
+	previousTimeout := grafanaLogQueryPlanningTimeout
+	grafanaLogQueryPlanningTimeout = 20 * time.Millisecond
+	defer func() {
+		grafanaLogQueryPlanningTimeout = previousTimeout
+	}()
+
+	dir := t.TempDir()
+	npxPath := filepath.Join(dir, "npx")
+	script := `#!/bin/sh
+cat >/dev/null
+sleep 5
+printf '{"queries":[]}'
+`
+	if err := os.WriteFile(npxPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake npx: %v", err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	analysis := Analysis{
+		Stats: Stats{Failed: 1, Total: 1},
+		Failures: []TestCase{{
+			Name:    "creates network",
+			Message: "network reached error instead of provisioned",
+		}},
+	}
+	started := time.Now()
+	_, err := runClaudeGrafanaLogQueryPlanning(context.Background(), Config{
+		EnableAIAnalysis:      true,
+		ClaudeToken:           "token",
+		GrafanaLogMaxFailures: 1,
+	}, analysis)
+	if err == nil {
+		t.Fatal("expected Grafana query planning timeout error")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Grafana query planning timeout took too long: %s", elapsed)
+	}
+	if !strings.Contains(err.Error(), "run claude grafana log query planning") {
+		t.Fatalf("unexpected timeout error: %v", err)
+	}
+}
+
 func TestAIPlanningInputAndExtractionBranches(t *testing.T) {
 	t.Parallel()
 
@@ -149,6 +193,19 @@ func TestAIPlanningInputAndExtractionBranches(t *testing.T) {
 			t.Fatalf("planning input missing %q:\n%s", expected, input)
 		}
 	}
+	if grafanaLogQueryPlanningTimeout != 90*time.Second {
+		t.Fatalf("grafana query planning timeout = %s, want 1m30s", grafanaLogQueryPlanningTimeout)
+	}
+	planningPrompt := grafanaLogQueryPlanningPrompt()
+	for _, expected := range []string{
+		"provisioningStatus mismatches",
+		"Resource UUIDs",
+		"Cloud resource identifiers",
+	} {
+		if !strings.Contains(planningPrompt, expected) {
+			t.Fatalf("planning prompt missing backend signal %q:\n%s", expected, planningPrompt)
+		}
+	}
 
 	for _, tc := range []struct {
 		output string
@@ -183,6 +240,20 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 		"GITHUB_SERVER_URL":                   "https://github.example",
 		"GITHUB_REPOSITORY":                   "nscale/repo",
 		"GITHUB_RUN_ID":                       "12345",
+		"INPUT_REPORT_URL":                    "https://reports.example/allure",
+		"INPUT_PUBLISH_TEST_HISTORY":          "auto",
+		"TEST_HISTORY_API_URL":                "https://history.example",
+		"TEST_HISTORY_TOKEN":                  "env-history-token",
+		"INPUT_TEST_HISTORY_SUITE":            "region-api",
+		"INPUT_TEST_HISTORY_FRAMEWORK":        "ginkgo",
+		"INPUT_TEST_HISTORY_ENV":              "qa",
+		"INPUT_TEST_HISTORY_REPO":             "nscale/override",
+		"INPUT_TEST_HISTORY_BRANCH":           "history-branch",
+		"INPUT_TEST_HISTORY_COMMIT":           "commit-abc",
+		"INPUT_TEST_HISTORY_RUN_ID":           "run-99",
+		"INPUT_TEST_HISTORY_RUN_ATTEMPT":      "3",
+		"INPUT_TEST_HISTORY_ARTIFACT_URL":     "https://artifacts.example/run-99",
+		"GITHUB_WORKSPACE":                    "/workspace/repo",
 		"INPUT_MAX_FAILURES":                  "12",
 		"INPUT_MAX_SKIPS":                     "13",
 		"INPUT_INCLUDE_SKIPS":                 "no",
@@ -200,6 +271,11 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 		"INPUT_GRAFANA_LOG_LIMIT":             "25",
 		"INPUT_GRAFANA_LOG_MAX_FAILURES":      "7",
 		"INPUT_GRAFANA_LOG_CONCURRENCY":       "8",
+		"INPUT_ENABLE_UNIKORN_CR_ENRICHMENT":  "true",
+		"INPUT_UNIKORN_CR_PLAN_PATH":          "/tmp/unikorn-cr-plan.json",
+		"INPUT_UNIKORN_CR_CONTEXT_PATH":       "/tmp/unikorn-cr-context.json",
+		"INPUT_UNIKORN_CR_MAX_FAILURES":       "5",
+		"INPUT_UNIKORN_CR_TIMEOUT_SECONDS":    "12",
 	}
 	config := configFromEnv(env)
 
@@ -218,6 +294,21 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 	if config.ClaudeToken != "env-token" || !config.EnableGrafanaLogs || config.GrafanaURL != "https://grafana.example.com" || config.GrafanaLokiName != "Prod Loki" {
 		t.Fatalf("unexpected Grafana/AI config: %+v", config)
 	}
+	if !config.EnableUnikornCRs || config.UnikornCRPlanPath != "/tmp/unikorn-cr-plan.json" || config.UnikornCRContextPath != "/tmp/unikorn-cr-context.json" || config.UnikornCRMaxFailures != 5 || config.UnikornCRTimeout != 12*time.Second {
+		t.Fatalf("unexpected Unikorn CR config: %+v", config)
+	}
+	if !config.PublishTestHistory || config.TestHistoryPublishMode != "api" || config.TestHistoryAPIURL != "https://history.example" || config.TestHistoryToken != "env-history-token" {
+		t.Fatalf("unexpected test history enable/API config: %+v", config)
+	}
+	if config.TestHistorySuite != "region-api" || config.TestHistoryFramework != "ginkgo" || config.TestHistoryEnv != "qa" {
+		t.Fatalf("unexpected test history context config: %+v", config)
+	}
+	if config.TestHistoryRepo != "nscale/override" || config.TestHistoryBranch != "history-branch" || config.TestHistoryCommit != "commit-abc" || config.TestHistoryRunID != "run-99" || config.TestHistoryRunAttempt != 3 {
+		t.Fatalf("unexpected test history run identity config: %+v", config)
+	}
+	if config.TestHistoryArtifactURL != "https://artifacts.example/run-99" || config.TestHistoryOutputPath != "/workspace/repo/.test-history/events.ndjson" {
+		t.Fatalf("unexpected test history artifact/spool config: %+v", config)
+	}
 
 	for _, tc := range []struct {
 		value    string
@@ -233,6 +324,28 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 	} {
 		if got := parseBoolDefault(tc.value, tc.fallback); got != tc.want {
 			t.Fatalf("parseBoolDefault(%q, %t) = %t, want %t", tc.value, tc.fallback, got, tc.want)
+		}
+	}
+	if !parseAutoBool("auto", true) || parseAutoBool("auto", false) || !parseAutoBool("yes", false) || parseAutoBool("no", true) {
+		t.Fatal("parseAutoBool did not return expected values")
+	}
+	for _, tc := range []struct {
+		name           string
+		mode           string
+		publishSetting string
+		apiURL         string
+		otlpEndpoint   string
+		want           string
+	}{
+		{"explicit API", "api", "true", "", "", "api"},
+		{"explicit OTLP", "otlp", "auto", "https://history.example", "", "otlp"},
+		{"explicit publish defaults OTLP", "auto", "true", "https://history.example", "", "otlp"},
+		{"legacy API auto", "auto", "auto", "https://history.example", "", "api"},
+		{"OTLP endpoint auto", "auto", "auto", "", "http://127.0.0.1:14318/v1/logs", "otlp"},
+		{"disabled no endpoint still resolves OTLP", "auto", "false", "", "", "otlp"},
+	} {
+		if got := resolveTestHistoryPublishMode(tc.mode, tc.publishSetting, tc.apiURL, tc.otlpEndpoint); got != tc.want {
+			t.Fatalf("%s: resolveTestHistoryPublishMode() = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 	for _, tc := range []struct {
