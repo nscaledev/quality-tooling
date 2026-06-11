@@ -367,6 +367,7 @@ When enabled, the report includes:
 | `max-skips` | No | `10` | Skip detail limit |
 | `include-skips` | No | `true` | Include skipped test details in summary |
 | `enable-ai-analysis` | No | `false` | Run Claude analysis |
+| `ai-analysis-timeout-seconds` | No | `300` | Claude failure-analysis timeout; on timeout the report is sent without the AI section |
 | `claude-token` | No | empty | Claude Code OAuth token |
 | `enable-grafana-log-enrichment` | No | `false` | Fetch related logs through Grafana MCP |
 | `grafana-service-account-token` | No | empty | Grafana service account token used when this action starts `mcp-grafana` |

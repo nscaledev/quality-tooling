@@ -162,6 +162,10 @@ inputs:
     description: 'Run Claude failure analysis and include it in the step summary and Slack.'
     required: false
     default: 'false'
+  ai-analysis-timeout-seconds:
+    description: 'Timeout for the Claude failure-analysis call. On timeout the report and Slack message are still sent, just without the AI section.'
+    required: false
+    default: '300'
   claude-token:
     description: 'Claude Code OAuth token. If omitted, CLAUDE_CODE_OAUTH_TOKEN is used.'
     required: false
@@ -1263,6 +1267,7 @@ runs:
         INPUT_MAX_SKIPS: ${{ inputs.max-skips }}
         INPUT_INCLUDE_SKIPS: ${{ inputs.include-skips }}
         INPUT_ENABLE_AI_ANALYSIS: ${{ inputs.enable-ai-analysis }}
+        INPUT_AI_ANALYSIS_TIMEOUT_SECONDS: ${{ inputs.ai-analysis-timeout-seconds }}
         INPUT_CLAUDE_TOKEN: ${{ inputs.claude-token }}
         INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT: ${{ inputs.enable-grafana-log-enrichment }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}

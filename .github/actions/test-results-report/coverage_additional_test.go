@@ -258,6 +258,7 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 		"INPUT_MAX_SKIPS":                     "13",
 		"INPUT_INCLUDE_SKIPS":                 "no",
 		"INPUT_ENABLE_AI_ANALYSIS":            "true",
+		"INPUT_AI_ANALYSIS_TIMEOUT_SECONDS":   "240",
 		"CLAUDE_CODE_OAUTH_TOKEN":             "env-token",
 		"INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT": "on",
 		"INPUT_GRAFANA_URL":                   "https://grafana.example.com",
@@ -291,7 +292,7 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 	if config.MaxFailures != 12 || config.MaxSkips != 13 || config.GrafanaLogLimit != 25 || config.GrafanaLogMaxFailures != 7 || config.GrafanaLogConcurrency != 8 {
 		t.Fatalf("unexpected numeric config: %+v", config)
 	}
-	if config.ClaudeToken != "env-token" || !config.EnableGrafanaLogs || config.GrafanaURL != "https://grafana.example.com" || config.GrafanaLokiName != "Prod Loki" {
+	if config.ClaudeToken != "env-token" || config.AIAnalysisTimeout != 240*time.Second || !config.EnableGrafanaLogs || config.GrafanaURL != "https://grafana.example.com" || config.GrafanaLokiName != "Prod Loki" {
 		t.Fatalf("unexpected Grafana/AI config: %+v", config)
 	}
 	if !config.EnableUnikornCRs || config.UnikornCRPlanPath != "/tmp/unikorn-cr-plan.json" || config.UnikornCRContextPath != "/tmp/unikorn-cr-context.json" || config.UnikornCRMaxFailures != 5 || config.UnikornCRTimeout != 12*time.Second {
