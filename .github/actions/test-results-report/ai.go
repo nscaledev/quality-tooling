@@ -163,11 +163,18 @@ func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysi
 
 func newClaudeCommand(ctx context.Context, token, prompt, input string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", prompt)
-	// SIGTERM instead of the default SIGKILL on context cancellation, so the
-	// CLI can exit cleanly and report what it was doing; WaitDelay hard-kills
-	// if it doesn't.
+	// On context cancellation, SIGTERM the whole process group instead of the
+	// default SIGKILL-the-leader: npx wraps the actual claude process, so
+	// signalling only the leader leaves the child running (holding the stdout
+	// pipe open until WaitDelay). SIGTERM also lets the CLI exit cleanly and
+	// flush stderr; WaitDelay hard-kills if it doesn't.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		return cmd.Process.Signal(syscall.SIGTERM)
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
 	}
 	cmd.WaitDelay = claudeCommandWaitDelay
 	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+token)
