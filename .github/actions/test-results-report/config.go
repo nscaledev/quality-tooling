@@ -31,6 +31,7 @@ type Config struct {
 	MaxSkips                int
 	IncludeSkips            bool
 	EnableAIAnalysis        bool
+	AIAnalysisTimeout       time.Duration
 	ClaudeToken             string
 	EnableGrafanaLogs       bool
 	GrafanaURL              string
@@ -125,6 +126,7 @@ func configFromEnv(env map[string]string) Config {
 		MaxSkips:                parseIntDefault(env["INPUT_MAX_SKIPS"], 10),
 		IncludeSkips:            parseBoolDefault(env["INPUT_INCLUDE_SKIPS"], true),
 		EnableAIAnalysis:        parseBoolDefault(env["INPUT_ENABLE_AI_ANALYSIS"], false),
+		AIAnalysisTimeout:       time.Duration(parseIntDefault(env["INPUT_AI_ANALYSIS_TIMEOUT_SECONDS"], 300)) * time.Second,
 		ClaudeToken:             firstNonEmpty(env["INPUT_CLAUDE_TOKEN"], env["CLAUDE_CODE_OAUTH_TOKEN"]),
 		EnableGrafanaLogs:       parseBoolDefault(env["INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT"], false),
 		GrafanaURL:              firstNonEmpty(env["INPUT_GRAFANA_URL"], env["GRAFANA_REPORT_URL"], env["GRAFANA_URL"]),
