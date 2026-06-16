@@ -32,7 +32,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const githubAPI = "https://api.github.com"
+const defaultGitHubAPI = "https://api.github.com"
 
 // pullRequest is the subset of the GitHub pulls API response we need.
 type pullRequest struct {
@@ -63,6 +63,18 @@ type constellationService struct {
 	Version string `yaml:"version"`
 }
 
+type serviceVersion struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+type versionAPIConfig struct {
+	versionURL   string
+	versionToken string
+	serviceRepo  string
+	repoToken    string
+}
+
 // tagPattern validates the vX.Y.Z format we expect after stripping the short-SHA.
 var tagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 
@@ -71,6 +83,8 @@ var errNotFound = errors.New("not found")
 
 func main() {
 	useStagingConstellation := !strings.EqualFold(strings.TrimSpace(os.Getenv("USE_STAGING_CONSTELLATION")), "false")
+	useVersionAPI := envBool("USE_VERSION_API", false)
+	fallbackToConstellation := envBool("FALLBACK_TO_CONSTELLATION", true)
 
 	if !useStagingConstellation {
 		if eventName := os.Getenv("GITHUB_EVENT_NAME"); eventName != "workflow_dispatch" {
@@ -86,18 +100,9 @@ func main() {
 
 		fmt.Printf("Using selected workflow ref for UAT: %s\n", ref)
 
-		if outputFile := os.Getenv("GITHUB_OUTPUT"); outputFile != "" {
-			f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_WRONLY, 0o600)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "ERROR: failed to open GITHUB_OUTPUT: %v\n", err)
-				os.Exit(1)
-			}
-			defer f.Close()
-
-			if _, err := fmt.Fprintf(f, "ref=%s\n", ref); err != nil {
-				fmt.Fprintf(os.Stderr, "ERROR: failed to write GITHUB_OUTPUT: %v\n", err)
-				os.Exit(1)
-			}
+		if err := writeOutputs("", ref); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(1)
 		}
 
 		return
@@ -109,18 +114,44 @@ func main() {
 		os.Exit(1)
 	}
 
-	token := os.Getenv("GH_TOKEN")
-	if token == "" {
-		fmt.Fprintln(os.Stderr, "ERROR: GH_TOKEN environment variable not set")
-		os.Exit(1)
-	}
-
 	releasesRepo := os.Getenv("RELEASES_REPO")
 	if releasesRepo == "" {
 		releasesRepo = "nscaledev/uni-releases"
 	}
 
-	client := &githubClient{token: token}
+	releasesToken := strings.TrimSpace(os.Getenv("GH_TOKEN"))
+	repoToken := firstNonEmpty(os.Getenv("SERVICE_REPO_TOKEN"), releasesToken)
+
+	if useVersionAPI {
+		tag, err := findVersionAPITag(&githubClient{token: repoToken}, versionAPIConfig{
+			versionURL:   strings.TrimSpace(os.Getenv("VERSION_API_URL")),
+			versionToken: strings.TrimSpace(os.Getenv("VERSION_API_TOKEN")),
+			serviceRepo:  firstNonEmpty(os.Getenv("SERVICE_REPO"), os.Getenv("GITHUB_REPOSITORY")),
+			repoToken:    repoToken,
+		})
+		if err == nil {
+			if err := writeOutputs(tag, tag); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+				os.Exit(1)
+			}
+
+			return
+		}
+
+		if !fallbackToConstellation {
+			fmt.Fprintf(os.Stderr, "ERROR: version API lookup failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("WARNING: version API lookup failed: %v; falling back to staged constellation\n", err)
+	}
+
+	if releasesToken == "" {
+		fmt.Fprintln(os.Stderr, "ERROR: GH_TOKEN environment variable not set")
+		os.Exit(1)
+	}
+
+	client := &githubClient{token: releasesToken}
 
 	tag, err := findCandidateTag(client, releasesRepo, service)
 	if err != nil {
@@ -133,24 +164,159 @@ func main() {
 		return
 	}
 
-	if outputFile := os.Getenv("GITHUB_OUTPUT"); outputFile != "" {
-		f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_WRONLY, 0o600)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: failed to open GITHUB_OUTPUT: %v\n", err)
-			os.Exit(1)
-		}
-		defer f.Close()
+	if err := writeOutputs(tag, tag); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		os.Exit(1)
+	}
+}
 
+func writeOutputs(tag, ref string) error {
+	outputFile := os.Getenv("GITHUB_OUTPUT")
+	if outputFile == "" {
+		return nil
+	}
+
+	f, err := os.OpenFile(outputFile, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open GITHUB_OUTPUT: %w", err)
+	}
+	defer f.Close()
+
+	if tag != "" {
 		if _, err := fmt.Fprintf(f, "tag=%s\n", tag); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: failed to write GITHUB_OUTPUT: %v\n", err)
-			os.Exit(1)
-		}
-
-		if _, err := fmt.Fprintf(f, "ref=%s\n", tag); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: failed to write GITHUB_OUTPUT: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("failed to write GITHUB_OUTPUT: %w", err)
 		}
 	}
+
+	if ref != "" {
+		if _, err := fmt.Fprintf(f, "ref=%s\n", ref); err != nil {
+			return fmt.Errorf("failed to write GITHUB_OUTPUT: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func envBool(name string, defaultValue bool) bool {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue
+	}
+
+	return strings.EqualFold(raw, "true")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func githubAPIURL() string {
+	if raw := strings.TrimRight(strings.TrimSpace(os.Getenv("GITHUB_API_URL")), "/"); raw != "" {
+		return raw
+	}
+
+	return defaultGitHubAPI
+}
+
+func findVersionAPITag(client *githubClient, cfg versionAPIConfig) (string, error) {
+	versionURL := strings.TrimSpace(cfg.versionURL)
+	if versionURL == "" {
+		return "", errors.New("VERSION_API_URL environment variable not set") //nolint:err113
+	}
+
+	if cfg.serviceRepo == "" {
+		return "", errors.New("SERVICE_REPO or GITHUB_REPOSITORY environment variable not set") //nolint:err113
+	}
+
+	if cfg.repoToken == "" {
+		return "", errors.New("SERVICE_REPO_TOKEN or GH_TOKEN environment variable not set") //nolint:err113
+	}
+
+	serviceVersion, err := fetchServiceVersion(versionURL, cfg.versionToken)
+	if err != nil {
+		return "", err
+	}
+
+	tag := strings.TrimSpace(serviceVersion.Version)
+	if !tagPattern.MatchString(tag) {
+		return "", fmt.Errorf("version API returned %q, which does not match expected vX.Y.Z tag format", serviceVersion.Version) //nolint:err113
+	}
+
+	exists, err := tagExists(client, cfg.serviceRepo, tag)
+	if err != nil {
+		return "", fmt.Errorf("checking tag %s in %s: %w", tag, cfg.serviceRepo, err)
+	}
+
+	if !exists {
+		return "", fmt.Errorf("tag %s from version API does not exist in %s", tag, cfg.serviceRepo) //nolint:err113
+	}
+
+	fmt.Printf("Matched service version API: %s reports %s (%s); tag exists in %s\n", versionURL, tag, serviceVersion.Name, cfg.serviceRepo)
+
+	return tag, nil
+}
+
+func fetchServiceVersion(versionURL, token string) (serviceVersion, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, versionURL, nil)
+	if err != nil {
+		return serviceVersion{}, fmt.Errorf("creating request for %s: %w", versionURL, err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return serviceVersion{}, fmt.Errorf("GET %s: %w", versionURL, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return serviceVersion{}, fmt.Errorf("reading response from %s: %w", versionURL, err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return serviceVersion{}, fmt.Errorf("GET %s returned %d: %s", versionURL, resp.StatusCode, string(body)) //nolint:err113
+	}
+
+	var version serviceVersion
+	if err := json.Unmarshal(body, &version); err != nil {
+		return serviceVersion{}, fmt.Errorf("decoding response from %s: %w", versionURL, err)
+	}
+
+	if version.Version == "" {
+		return serviceVersion{}, fmt.Errorf("version API response from %s did not include version", versionURL) //nolint:err113
+	}
+
+	return version, nil
+}
+
+func tagExists(client *githubClient, repo, tag string) (bool, error) {
+	u := fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", githubAPIURL(), repo, url.PathEscape(tag))
+
+	var ref struct {
+		Ref string `json:"ref"`
+	}
+
+	if _, err := client.getJSON(u, &ref); err != nil {
+		if errors.Is(err, errNotFound) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return ref.Ref != "", nil
 }
 
 // findCandidateTag scans open PRs in releasesRepo for a constellation with
@@ -244,7 +410,7 @@ func checkConstellationFile(client *githubClient, releasesRepo, service string, 
 func listOpenPRs(client *githubClient, repo string) ([]pullRequest, error) {
 	var all []pullRequest
 
-	nextURL := fmt.Sprintf("%s/repos/%s/pulls?state=open&per_page=100", githubAPI, repo)
+	nextURL := fmt.Sprintf("%s/repos/%s/pulls?state=open&per_page=100", githubAPIURL(), repo)
 
 	for nextURL != "" {
 		var page []pullRequest
@@ -263,7 +429,7 @@ func listOpenPRs(client *githubClient, repo string) ([]pullRequest, error) {
 
 // listConstellationFiles returns the files in the constellations/ directory at the given ref.
 func listConstellationFiles(client *githubClient, repo, ref string) ([]fileEntry, error) {
-	u := fmt.Sprintf("%s/repos/%s/contents/constellations?ref=%s", githubAPI, repo, url.QueryEscape(ref))
+	u := fmt.Sprintf("%s/repos/%s/contents/constellations?ref=%s", githubAPIURL(), repo, url.QueryEscape(ref))
 
 	var files []fileEntry
 	if _, err := client.getJSON(u, &files); err != nil {
@@ -275,7 +441,7 @@ func listConstellationFiles(client *githubClient, repo, ref string) ([]fileEntry
 
 // fetchFileContent downloads a single file and returns its decoded content.
 func fetchFileContent(client *githubClient, repo, ref, filename string) ([]byte, error) {
-	u := fmt.Sprintf("%s/repos/%s/contents/constellations/%s?ref=%s", githubAPI, repo, filename, url.QueryEscape(ref))
+	u := fmt.Sprintf("%s/repos/%s/contents/constellations/%s?ref=%s", githubAPIURL(), repo, filename, url.QueryEscape(ref))
 
 	var fc fileContent
 	if _, err := client.getJSON(u, &fc); err != nil {

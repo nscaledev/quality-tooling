@@ -17,6 +17,30 @@ inputs:
     description: 'When true, resolve the ref from the staged constellation; when false on workflow_dispatch, use the selected workflow ref'
     required: false
     default: 'true'
+  use-version-api:
+    description: 'When true, try the deployed service /api/version endpoint before staged constellation lookup'
+    required: false
+    default: 'false'
+  version-api-url:
+    description: 'Fully qualified deployed service version endpoint, for example https://region.example.com/api/version'
+    required: false
+    default: ''
+  version-api-token:
+    description: 'Bearer token used to call the deployed service version endpoint'
+    required: false
+    default: ''
+  fallback-to-constellation:
+    description: 'When true, fall back to staged constellation lookup if version API lookup fails'
+    required: false
+    default: 'true'
+  service-repo:
+    description: 'Service repository used to verify the version API tag exists; defaults to the current workflow repository'
+    required: false
+    default: ''
+  repo-read-token:
+    description: 'GitHub token with read access to the service repository for tag validation; defaults to github.token'
+    required: false
+    default: ''
 
 outputs:
   tag:
@@ -39,3 +63,9 @@ runs:
         SERVICE: ${{ inputs.service }}
         RELEASES_REPO: ${{ inputs.releases-repo }}
         USE_STAGING_CONSTELLATION: ${{ inputs.use-staging-constellation }}
+        USE_VERSION_API: ${{ inputs.use-version-api }}
+        VERSION_API_URL: ${{ inputs.version-api-url }}
+        VERSION_API_TOKEN: ${{ inputs.version-api-token }}
+        FALLBACK_TO_CONSTELLATION: ${{ inputs.fallback-to-constellation }}
+        SERVICE_REPO: ${{ inputs.service-repo || github.repository }}
+        SERVICE_REPO_TOKEN: ${{ inputs.repo-read-token || github.token }}
