@@ -287,6 +287,130 @@ func TestRunGrafanaLogEnrichmentUsesPreplannedQueryFile(t *testing.T) {
 	}
 }
 
+func TestRunGrafanaLogEnrichmentFiltersScopeOnlyGrafanaMatches(t *testing.T) {
+	previousPlanner := runGrafanaLogQueryPlanning
+	runGrafanaLogQueryPlanning = func(_ context.Context, _ Config, _ Analysis) ([]GrafanaLogPlannedQuery, error) {
+		t.Fatal("planner should not run when a preplanned query file is provided")
+		return nil, nil
+	}
+	defer func() {
+		runGrafanaLogQueryPlanning = previousPlanner
+	}()
+
+	const (
+		failedNetworkName  = "e2e-test-vpc-ci-build1266-170626-065805"
+		organizationID     = "ab6a2c69-efc9-11f0-a016-88f4dae84608"
+		controlPlaneRegion = "sample-region1"
+		unrelatedNetwork   = "de145f09-757c-411f-9ef4-c17eba5ab2be"
+	)
+
+	planPath := filepath.Join(t.TempDir(), "grafana-plan.json")
+	if err := writeGrafanaLogQueryPlan(planPath, []GrafanaLogPlannedQuery{{
+		FailureRef:    "f1",
+		TestName:      "creates VPC",
+		BackendArea:   "networking",
+		ExpectedError: "Error",
+		SearchTerms:   []string{failedNetworkName, organizationID, controlPlaneRegion},
+		LogQL:         `{namespace=~".+"} |~ "(?i)(` + failedNetworkName + `|` + organizationID + `|` + controlPlaneRegion + `)"`,
+		Reason:        "VPC provisioning reached Error and needs networking logs.",
+		Confidence:    "high",
+	}}); err != nil {
+		t.Fatalf("write preplanned query file: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var rpc struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
+			t.Fatalf("decode rpc request: %v", err)
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Mcp-Session-Id", "test-session")
+
+		switch rpc.Method {
+		case "initialize":
+			writeMCPResponse(t, writer, rpc.ID, map[string]any{
+				"protocolVersion": mcpProtocolVersion,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "fake-grafana-mcp"},
+			})
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			var params struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(rpc.Params, &params); err != nil {
+				t.Fatalf("decode tool params: %v", err)
+			}
+			switch params.Name {
+			case "list_datasources":
+				writeMCPToolResponse(t, writer, rpc.ID, `{"datasources":[{"uid":"loki-dev","name":"Loki","type":"loki","isDefault":true}]}`)
+			case "query_loki_logs":
+				writeMCPToolResponse(t, writer, rpc.ID, `{"data":[{"timestamp":"1780322400000000000","line":"GET /api/v2/servers?networkID=`+unrelatedNetwork+`&organizationID=`+organizationID+`","labels":{"namespace":"region-api"}},{"timestamp":"1780322400000000001","line":"GET https://region.nks-stg.`+controlPlaneRegion+`.nscale.com/api/v2/networks","labels":{"namespace":"region-api"}},{"timestamp":"1780322400000000002","line":"network `+failedNetworkName+` provisioning reached Error","labels":{"namespace":"unikorn-region"}}],"metadata":{"linesReturned":3,"resultsTruncated":false}}`)
+			default:
+				t.Fatalf("unexpected tool %s", params.Name)
+			}
+		default:
+			t.Fatalf("unexpected method %s", rpc.Method)
+		}
+	}))
+	defer server.Close()
+
+	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
+		EnableGrafanaLogs:    true,
+		GrafanaMCPEndpoint:   server.URL + "/mcp",
+		GrafanaQueryPlanPath: planPath,
+		GrafanaLogStart:      "2026-06-17T06:58:00Z",
+		GrafanaLogEnd:        "2026-06-17T07:05:00Z",
+		GrafanaLogLimit:      5,
+	}, Analysis{
+		Failures: []TestCase{{
+			ID:      "vpc-create",
+			Name:    "creates VPC",
+			Suite:   "VPC Management",
+			Message: `Expected substring: "Provisioned"; Received string: "` + failedNetworkName + `read-only-projectno-glo110.0.0.0/100 RoutesJune 17, 2026a few seconds agoError"`,
+			Output:  `[API] GET https://region.nks-stg.` + controlPlaneRegion + `.nscale.com/api/v2/networks?organizationID=` + organizationID,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("runGrafanaLogEnrichment returned error: %v", err)
+	}
+	if enrichment == nil || len(enrichment.Contexts) != 1 {
+		t.Fatalf("unexpected enrichment: %+v", enrichment)
+	}
+	entries := enrichment.Contexts[0].Entries
+	if len(entries) != 1 {
+		t.Fatalf("expected only resource-specific log entry, got %+v", entries)
+	}
+	if strings.Contains(entries[0].Line, unrelatedNetwork) {
+		t.Fatalf("scope-only organization match was kept: %+v", entries[0])
+	}
+	if !strings.Contains(entries[0].Line, failedNetworkName) {
+		t.Fatalf("resource-specific log entry was not kept: %+v", entries[0])
+	}
+}
+
+func TestGrafanaStrongSearchTermsIgnoreTestIdentity(t *testing.T) {
+	t.Parallel()
+
+	terms := grafanaStrongSearchTerms(grafanaLogQueryJob{
+		SearchTerms: []string{"suite-test-1234"},
+		Test: &TestCase{
+			ID:     "suite-test-1234",
+			Name:   "suite-test-1234",
+			Output: "GET /api/v2/networks?organizationID=ab6a2c69-efc9-11f0-a016-88f4dae84608",
+		},
+	})
+	if len(terms) != 0 {
+		t.Fatalf("test identity should not make a search term strong: %+v", terms)
+	}
+}
+
 func TestDecodeListDatasourcesResultAcceptsObjectAndLiveArrayShapes(t *testing.T) {
 	t.Parallel()
 
