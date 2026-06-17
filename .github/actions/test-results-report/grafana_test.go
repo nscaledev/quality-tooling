@@ -395,6 +395,105 @@ func TestRunGrafanaLogEnrichmentFiltersScopeOnlyGrafanaMatches(t *testing.T) {
 	}
 }
 
+func TestRunGrafanaLogEnrichmentUsesResourceFilteredExploreURL(t *testing.T) {
+	const (
+		failedNetworkName  = "e2e-test-vpc-ci-build1266-170626-065805"
+		organizationID     = "ab6a2c69-efc9-11f0-a016-88f4dae84608"
+		controlPlaneRegion = "sample-region1"
+	)
+
+	planPath := filepath.Join(t.TempDir(), "grafana-plan.json")
+	if err := writeGrafanaLogQueryPlan(planPath, []GrafanaLogPlannedQuery{{
+		FailureRef:    "f1",
+		TestName:      "creates VPC",
+		BackendArea:   "networking",
+		ExpectedError: "Error",
+		SearchTerms:   []string{failedNetworkName, organizationID, controlPlaneRegion},
+		LogQL:         `{namespace=~".+"} |~ "(?i)(` + failedNetworkName + `|` + organizationID + `|` + controlPlaneRegion + `)"`,
+		Reason:        "VPC provisioning reached Error and needs networking logs.",
+		Confidence:    "high",
+	}}); err != nil {
+		t.Fatalf("write preplanned query file: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var rpc struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&rpc); err != nil {
+			t.Fatalf("decode rpc request: %v", err)
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Mcp-Session-Id", "test-session")
+
+		switch rpc.Method {
+		case "initialize":
+			writeMCPResponse(t, writer, rpc.ID, map[string]any{
+				"protocolVersion": mcpProtocolVersion,
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]string{"name": "fake-grafana-mcp"},
+			})
+		case "notifications/initialized":
+			writer.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			var params struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(rpc.Params, &params); err != nil {
+				t.Fatalf("decode tool params: %v", err)
+			}
+			switch params.Name {
+			case "list_datasources":
+				writeMCPToolResponse(t, writer, rpc.ID, `{"datasources":[{"uid":"loki-dev","name":"Loki","type":"loki","isDefault":true}]}`)
+			case "query_loki_logs":
+				writeMCPToolResponse(t, writer, rpc.ID, `{"data":[{"timestamp":"1780322400000000000","line":"GET /api/v2/networks?organizationID=`+organizationID+`","labels":{"namespace":"region-api"}},{"timestamp":"1780322400000000001","line":"network `+failedNetworkName+` provisioning reached Error","labels":{"namespace":"unikorn-region"}}],"metadata":{"linesReturned":2,"resultsTruncated":false}}`)
+			default:
+				t.Fatalf("unexpected tool %s", params.Name)
+			}
+		default:
+			t.Fatalf("unexpected method %s", rpc.Method)
+		}
+	}))
+	defer server.Close()
+
+	enrichment, err := runGrafanaLogEnrichment(context.Background(), Config{
+		EnableGrafanaLogs:    true,
+		GrafanaMCPEndpoint:   server.URL + "/mcp",
+		GrafanaQueryPlanPath: planPath,
+		GrafanaURL:           "https://grafana.example.com",
+		GrafanaLogStart:      "2026-06-17T06:58:00Z",
+		GrafanaLogEnd:        "2026-06-17T07:05:00Z",
+		GrafanaLogLimit:      5,
+	}, Analysis{
+		Failures: []TestCase{{
+			ID:      "vpc-create",
+			Name:    "creates VPC",
+			Suite:   "VPC Management",
+			Message: `Expected substring: "Provisioned"; Received string: "` + failedNetworkName + `read-only-projectno-glo110.0.0.0/100 RoutesJune 17, 2026a few seconds agoError"`,
+			Output:  `[API] GET https://region.nks-stg.` + controlPlaneRegion + `.nscale.com/api/v2/networks?organizationID=` + organizationID,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("runGrafanaLogEnrichment returned error: %v", err)
+	}
+	if enrichment == nil || len(enrichment.Contexts) != 1 {
+		t.Fatalf("unexpected enrichment: %+v", enrichment)
+	}
+
+	expr := grafanaExploreExpr(t, enrichment.Contexts[0].GrafanaExploreURL)
+	if !strings.Contains(expr, failedNetworkName) {
+		t.Fatalf("filtered explore query missing resource name: %s", expr)
+	}
+	for _, forbidden := range []string{organizationID, controlPlaneRegion} {
+		if strings.Contains(expr, forbidden) {
+			t.Fatalf("filtered explore query kept scope-only term %q: %s", forbidden, expr)
+		}
+	}
+}
+
 func TestGrafanaStrongSearchTermsIgnoreTestIdentity(t *testing.T) {
 	t.Parallel()
 
@@ -408,6 +507,36 @@ func TestGrafanaStrongSearchTermsIgnoreTestIdentity(t *testing.T) {
 	})
 	if len(terms) != 0 {
 		t.Fatalf("test identity should not make a search term strong: %+v", terms)
+	}
+}
+
+func TestGrafanaStrongSearchTermsKeepResourceAPIPath(t *testing.T) {
+	t.Parallel()
+
+	const path = "/api/v2/networks/e7275f2b-3cef-4532-996c-70c8df48bd2a"
+
+	terms := grafanaStrongSearchTerms(grafanaLogQueryJob{
+		SearchTerms: []string{path},
+		Test: &TestCase{
+			Message: "GET " + path + " returned 500",
+		},
+	})
+	if len(terms) != 1 || terms[0] != path {
+		t.Fatalf("resource API path should be a strong term, got %+v", terms)
+	}
+}
+
+func TestGrafanaStrongSearchTermsKeepShortResourceName(t *testing.T) {
+	t.Parallel()
+
+	terms := grafanaStrongSearchTerms(grafanaLogQueryJob{
+		SearchTerms: []string{"test-vpc1"},
+		Test: &TestCase{
+			Message: `Expected substring: "Provisioned"; Received string: "test-vpc1read-only-projectno-glo110.0.0.0/100 RoutesJune 17, 2026a few seconds agoError"`,
+		},
+	})
+	if len(terms) != 1 || terms[0] != "test-vpc1" {
+		t.Fatalf("short resource name should be a strong term, got %+v", terms)
 	}
 }
 
@@ -873,6 +1002,30 @@ func TestRunGrafanaLogEnrichmentSkipsMCPForNonBackendFailureWhenAIPlansNoQueries
 	if mcpCallCount.Load() != 0 {
 		t.Fatalf("expected Grafana MCP lookup to be skipped for non-backend failure, got %d MCP call(s)", mcpCallCount.Load())
 	}
+}
+
+func grafanaExploreExpr(t *testing.T, exploreURL string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(exploreURL)
+	if err != nil {
+		t.Fatalf("parse explore URL: %v", err)
+	}
+	var panes map[string]struct {
+		Queries []struct {
+			Expr string `json:"expr"`
+		} `json:"queries"`
+	}
+	if err := json.Unmarshal([]byte(parsed.Query().Get("panes")), &panes); err != nil {
+		t.Fatalf("decode explore panes: %v", err)
+	}
+	for _, pane := range panes {
+		if len(pane.Queries) > 0 {
+			return pane.Queries[0].Expr
+		}
+	}
+	t.Fatal("explore panes did not include a query expr")
+	return ""
 }
 
 func writeMCPResponse(t *testing.T, writer http.ResponseWriter, id json.RawMessage, result any) {
