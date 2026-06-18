@@ -70,6 +70,34 @@ inputs:
     description: 'Optional published report URL, such as Allure.'
     required: false
     default: ''
+  component-name:
+    description: 'Name of the tested service/component, such as uni-region.'
+    required: false
+    default: ''
+  component-version:
+    description: 'Deployed version of the tested service/component. When omitted, component-version-url can be used to resolve it.'
+    required: false
+    default: ''
+  component-ref:
+    description: 'Git ref, tag, or SHA used for the tested service/component.'
+    required: false
+    default: ''
+  component-repo:
+    description: 'Repository for the tested service/component. Defaults to GITHUB_REPOSITORY.'
+    required: false
+    default: ''
+  component-version-url:
+    description: 'Optional absolute URL for a read-only version endpoint that returns JSON with a version field.'
+    required: false
+    default: ''
+  component-version-token:
+    description: 'Optional bearer token for component-version-url.'
+    required: false
+    default: ''
+  component-version-timeout-seconds:
+    description: 'Timeout for component-version-url lookup. Lookup failures are warnings and do not fail the report.'
+    required: false
+    default: '10'
   publish-test-history:
     description: 'Publish normalized test attempt events: true, false, or auto. Defaults to OTLP over the github-test-history-otlp-writer Teleport bot.'
     required: false
@@ -314,6 +342,18 @@ outputs:
   slack-sent:
     description: 'true if a Slack notification was sent successfully.'
     value: ${{ steps.report.outputs.slack-sent }}
+  component-name:
+    description: 'Resolved tested service/component name.'
+    value: ${{ steps.report.outputs.component-name }}
+  component-version:
+    description: 'Resolved tested service/component version.'
+    value: ${{ steps.report.outputs.component-version }}
+  component-ref:
+    description: 'Resolved tested service/component ref.'
+    value: ${{ steps.report.outputs.component-ref }}
+  component-repo:
+    description: 'Resolved tested service/component repository.'
+    value: ${{ steps.report.outputs.component-repo }}
   test-history-enabled:
     description: 'true if test history publishing/spooling ran.'
     value: ${{ steps.report.outputs.test-history-enabled }}
@@ -1250,6 +1290,13 @@ runs:
         INPUT_TITLE: ${{ inputs.title }}
         INPUT_WORKFLOW_URL: ${{ inputs.workflow-url }}
         INPUT_REPORT_URL: ${{ inputs.report-url }}
+        INPUT_COMPONENT_NAME: ${{ inputs.component-name }}
+        INPUT_COMPONENT_VERSION: ${{ inputs.component-version }}
+        INPUT_COMPONENT_REF: ${{ inputs.component-ref }}
+        INPUT_COMPONENT_REPO: ${{ inputs.component-repo }}
+        INPUT_COMPONENT_VERSION_URL: ${{ inputs.component-version-url }}
+        INPUT_COMPONENT_VERSION_TOKEN: ${{ inputs.component-version-token }}
+        INPUT_COMPONENT_VERSION_TIMEOUT_SECONDS: ${{ inputs.component-version-timeout-seconds }}
         INPUT_PUBLISH_TEST_HISTORY: ${{ steps.test-history-resolve.outputs.enabled }}
         INPUT_TEST_HISTORY_PUBLISH_MODE: ${{ steps.test-history-resolve.outputs.mode }}
         INPUT_TEST_HISTORY_OTLP_ENDPOINT: ${{ steps.test-history-resolve.outputs.otlp-endpoint }}
@@ -1323,6 +1370,13 @@ runs:
 
         mask_value "slack-webhook-url" "${INPUT_SLACK_WEBHOOK_URL:-}"
         mask_value "claude-token" "${INPUT_CLAUDE_TOKEN:-}"
+        mask_value "component-version-token" "${INPUT_COMPONENT_VERSION_TOKEN:-}"
+        require_single_line "component-name" "${INPUT_COMPONENT_NAME:-}"
+        require_single_line "component-version" "${INPUT_COMPONENT_VERSION:-}"
+        require_single_line "component-ref" "${INPUT_COMPONENT_REF:-}"
+        require_single_line "component-repo" "${INPUT_COMPONENT_REPO:-}"
+        require_single_line "component-version-url" "${INPUT_COMPONENT_VERSION_URL:-}"
+        require_single_line "component-version-timeout-seconds" "${INPUT_COMPONENT_VERSION_TIMEOUT_SECONDS:-}"
         require_single_line "test-history-publish-mode" "${INPUT_TEST_HISTORY_PUBLISH_MODE:-}"
         require_single_line "test-history-api-url" "${INPUT_TEST_HISTORY_API_URL:-${TEST_HISTORY_API_URL:-}}"
         require_single_line "test-history-otlp-endpoint" "${INPUT_TEST_HISTORY_OTLP_ENDPOINT:-${TEST_HISTORY_OTLP_ENDPOINT:-}}"

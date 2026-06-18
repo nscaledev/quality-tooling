@@ -54,6 +54,35 @@ Pass `slack-webhook-url` and `claude-token` from GitHub secrets. The action mask
 
 AI analysis shells out through `npx @anthropic-ai/claude-code`, so the runner must have Node.js/npm available.
 
+## Uni Component Version Metadata
+
+Uni component workflows can attach the deployed component version without changing test code. Pass an explicit version when the workflow already resolved one, or pass the service `/api/version` URL and token so the reporter resolves it before writing the summary, Slack payload, and test-history events.
+
+```yaml
+- name: Report API Test Results
+  uses: nscaledev/quality-tooling/.github/actions/test-results-report@main
+  if: ${{ !cancelled() }}
+  with:
+    test-results-path: test-results.json
+    format: ginkgo-json
+    environment: uat
+    title: Region API Test Results
+    test-history-suite: uni-region-api
+    component-name: uni-region
+    component-repo: nscaledev/uni-region
+    component-version: ${{ needs.find-staging-constellation.outputs.tag }}
+    component-ref: ${{ needs.find-staging-constellation.outputs.ref }}
+```
+
+For environments where the workflow does not already know the deployed tag:
+
+```yaml
+    component-name: uni-region
+    component-repo: nscaledev/uni-region
+    component-version-url: ${{ env.REGION_BASE_URL }}/api/version
+    component-version-token: ${{ env.API_AUTH_TOKEN }}
+```
+
 ## Processing Flow
 
 At a high level, the action keeps orchestration inside the GitHub workflow runner:
@@ -120,6 +149,7 @@ This section is the operating contract for maintainers and coding agents changin
 - `test-results-path` can be a file or directory. Directory mode recursively selects the newest supported `results.xml`, `junit.xml`, `results.json`, or `test-results.json`.
 - Supported formats are `ginkgo-json`, `junit`, `playwright-json`, and `auto`.
 - Ginkgo JSON preserves suite and spec start/end timestamps when present. Those timestamps are passed into AI analysis so timing claims can be checked against the Grafana query window.
+- Component metadata is optional and additive. When supplied or resolved, it is included in the GitHub summary, Slack context, action outputs, NDJSON spool, and OTLP attributes such as `component.name` and `component.version`.
 - Skipped tests are reported as skipped. Intentional, known-bug, pending, disabled, or sentinel skips must not be classified as `test/false failure`.
 - Previous-result comparison runs only when `compare-with-previous` is enabled or auto-detected from `previous-results-path`. Previous results are advisory comparison context; they do not change current run totals.
 
@@ -344,6 +374,13 @@ When enabled, the report includes:
 | `title` | No | `Test Results` | Report title |
 | `workflow-url` | No | inferred | GitHub Actions workflow URL |
 | `report-url` | No | empty | Published report URL, e.g. Allure |
+| `component-name` | No | empty | Tested service/component name, e.g. `uni-region` |
+| `component-version` | No | empty | Deployed tested service/component version |
+| `component-ref` | No | empty | Git ref, tag, or SHA used for the tested component |
+| `component-repo` | No | `GITHUB_REPOSITORY` | Tested component repository |
+| `component-version-url` | No | empty | Read-only version endpoint returning JSON with a `version` field |
+| `component-version-token` | No | empty | Optional bearer token for `component-version-url` |
+| `component-version-timeout-seconds` | No | `10` | Timeout for version lookup; failures warn and continue |
 | `publish-test-history` | No | `true` | Publish normalized events: `true`, `false`, or `auto`; default `true` uses OTLP through the Teleport writer bot |
 | `test-history-publish-mode` | No | `otlp` | `otlp`, `api`, or `auto`; OTLP uses the Teleport-backed observability collector by default |
 | `test-history-otlp-endpoint` | No | `TEST_HISTORY_OTLP_ENDPOINT` | Existing OTLP HTTP logs endpoint; when omitted in OTLP mode, the action opens a collector port-forward |
