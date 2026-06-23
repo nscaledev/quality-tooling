@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSelectedWorkflowRefWritesRefOutput(t *testing.T) {
@@ -214,6 +215,29 @@ func TestVersionAPIStrictModeFailsWithoutFallback(t *testing.T) {
 
 	if !strings.Contains(result.stderr, "ERROR: version API lookup failed") {
 		t.Fatalf("expected version API lookup error, got stderr:\n%s", result.stderr)
+	}
+}
+
+func TestFetchServiceVersionTimesOut(t *testing.T) {
+	originalTimeout := versionAPIRequestTimeout
+	versionAPIRequestTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		versionAPIRequestTimeout = originalTimeout
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprint(w, `{"name":"unikorn-region-server","version":"v1.17.2"}`)
+	}))
+	defer server.Close()
+
+	_, err := fetchServiceVersion(server.URL+"/api/version", "")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	if !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("expected deadline exceeded error, got %v", err)
 	}
 }
 

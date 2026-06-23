@@ -28,11 +28,14 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 const defaultGitHubAPI = "https://api.github.com"
+
+var versionAPIRequestTimeout = 15 * time.Second
 
 // pullRequest is the subset of the GitHub pulls API response we need.
 type pullRequest struct {
@@ -264,7 +267,10 @@ func findVersionAPITag(client *githubClient, cfg versionAPIConfig) (string, erro
 }
 
 func fetchServiceVersion(versionURL, token string) (serviceVersion, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, versionURL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), versionAPIRequestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
 	if err != nil {
 		return serviceVersion{}, fmt.Errorf("creating request for %s: %w", versionURL, err)
 	}
