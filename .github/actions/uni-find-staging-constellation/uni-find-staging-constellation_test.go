@@ -18,12 +18,16 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSelectedWorkflowRefWritesRefOutput(t *testing.T) {
@@ -90,6 +94,150 @@ func TestUnsetUseStagingConstellationUsesStagingLookup(t *testing.T) {
 
 	if !strings.Contains(result.stderr, "ERROR: SERVICE environment variable not set") {
 		t.Fatalf("expected staging lookup path to require SERVICE, got stderr:\n%s", result.stderr)
+	}
+}
+
+func TestVersionAPIWritesTagAndRefOutput(t *testing.T) {
+	outputFile := createOutputFile(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/version":
+			if got := r.Header.Get("Authorization"); got != "Bearer api-token" {
+				t.Errorf("expected version API bearer token, got %q", got)
+			}
+			fmt.Fprint(w, `{"name":"unikorn-region-server","version":"v1.17.2"}`)
+		case "/repos/nscaledev/uni-region/git/ref/tags/v1.17.2":
+			if got := r.Header.Get("Authorization"); got != "Bearer repo-token" {
+				t.Errorf("expected repo token, got %q", got)
+			}
+			fmt.Fprint(w, `{"ref":"refs/tags/v1.17.2"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	result := runMain(t, map[string]string{
+		"SERVICE":            "uni-region",
+		"USE_VERSION_API":    "true",
+		"VERSION_API_URL":    server.URL + "/api/version",
+		"VERSION_API_TOKEN":  "api-token",
+		"SERVICE_REPO":       "nscaledev/uni-region",
+		"SERVICE_REPO_TOKEN": "repo-token",
+		"GITHUB_API_URL":     server.URL,
+		"GITHUB_OUTPUT":      outputFile,
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout:\n%s\nstderr:\n%s", result.exitCode, result.stdout, result.stderr)
+	}
+
+	if !strings.Contains(result.stdout, "Matched service version API") {
+		t.Fatalf("expected version API match log, got stdout:\n%s", result.stdout)
+	}
+
+	output := readFile(t, outputFile)
+	if output != "tag=v1.17.2\nref=v1.17.2\n" {
+		t.Fatalf("expected tag and ref output, got %q", output)
+	}
+}
+
+func TestVersionAPIFallsBackToConstellation(t *testing.T) {
+	outputFile := createOutputFile(t)
+	const constellationYAML = `status: candidate
+services:
+  uni-region:
+    version: v1.16.4-c2153ee
+`
+	encodedConstellation := base64.StdEncoding.EncodeToString([]byte(constellationYAML))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/version":
+			http.NotFound(w, r)
+		case "/repos/nscaledev/uni-releases/pulls":
+			fmt.Fprint(w, `[{"number":42,"head":{"sha":"abc123","ref":"release/staging"}}]`)
+		case "/repos/nscaledev/uni-releases/contents/constellations":
+			fmt.Fprint(w, `[{"name":"candidate.yaml"}]`)
+		case "/repos/nscaledev/uni-releases/contents/constellations/candidate.yaml":
+			fmt.Fprintf(w, `{"content":%q}`, encodedConstellation)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	result := runMain(t, map[string]string{
+		"SERVICE":            "uni-region",
+		"GH_TOKEN":           "releases-token",
+		"RELEASES_REPO":      "nscaledev/uni-releases",
+		"USE_VERSION_API":    "true",
+		"VERSION_API_URL":    server.URL + "/api/version",
+		"SERVICE_REPO":       "nscaledev/uni-region",
+		"SERVICE_REPO_TOKEN": "repo-token",
+		"GITHUB_API_URL":     server.URL,
+		"GITHUB_OUTPUT":      outputFile,
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout:\n%s\nstderr:\n%s", result.exitCode, result.stdout, result.stderr)
+	}
+
+	if !strings.Contains(result.stdout, "falling back to staged constellation") {
+		t.Fatalf("expected fallback log, got stdout:\n%s", result.stdout)
+	}
+
+	output := readFile(t, outputFile)
+	if output != "tag=v1.16.4\nref=v1.16.4\n" {
+		t.Fatalf("expected fallback tag and ref output, got %q", output)
+	}
+}
+
+func TestVersionAPIStrictModeFailsWithoutFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	result := runMain(t, map[string]string{
+		"SERVICE":                   "uni-region",
+		"USE_VERSION_API":           "true",
+		"VERSION_API_URL":           server.URL + "/api/version",
+		"FALLBACK_TO_CONSTELLATION": "false",
+		"SERVICE_REPO":              "nscaledev/uni-region",
+		"SERVICE_REPO_TOKEN":        "repo-token",
+		"GITHUB_API_URL":            server.URL,
+	})
+
+	if result.exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d\nstdout:\n%s\nstderr:\n%s", result.exitCode, result.stdout, result.stderr)
+	}
+
+	if !strings.Contains(result.stderr, "ERROR: version API lookup failed") {
+		t.Fatalf("expected version API lookup error, got stderr:\n%s", result.stderr)
+	}
+}
+
+func TestFetchServiceVersionTimesOut(t *testing.T) {
+	originalTimeout := versionAPIRequestTimeout
+	versionAPIRequestTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		versionAPIRequestTimeout = originalTimeout
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprint(w, `{"name":"unikorn-region-server","version":"v1.17.2"}`)
+	}))
+	defer server.Close()
+
+	_, err := fetchServiceVersion(server.URL+"/api/version", "")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+
+	if !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("expected deadline exceeded error, got %v", err)
 	}
 }
 
