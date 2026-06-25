@@ -339,6 +339,7 @@ When enabled, the report includes:
 | `slack-webhook-url` | No | empty | Incoming webhook URL |
 | `fail-on-slack-error` | No | `false` | Fail action on Slack errors |
 | `environment` | No | empty | Environment label |
+| `deployed-version` | No | empty | Deployed component version or resolved ref shown in Slack |
 | `branch` | No | `GITHUB_REF_NAME` | Branch shown in Slack |
 | `actor` | No | `GITHUB_ACTOR` | Actor shown in Slack |
 | `title` | No | `Test Results` | Report title |

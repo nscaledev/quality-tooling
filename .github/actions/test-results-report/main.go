@@ -120,6 +120,7 @@ func run(ctx context.Context, config Config) error {
 		payload := buildSlackPayload(analysis, SlackOptions{
 			Title:              config.Title,
 			Environment:        config.Environment,
+			DeployedVersion:    config.DeployedVersion,
 			Branch:             config.Branch,
 			Actor:              config.Actor,
 			WorkflowURL:        config.WorkflowURL,

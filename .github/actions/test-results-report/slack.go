@@ -15,6 +15,7 @@ import (
 type SlackOptions struct {
 	Title              string
 	Environment        string
+	DeployedVersion    string
 	Branch             string
 	Actor              string
 	WorkflowURL        string
@@ -88,6 +89,9 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 	var contextFields []SlackText
 	if options.Environment != "" {
 		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Environment:*\n`%s`", options.Environment)})
+	}
+	if options.DeployedVersion != "" {
+		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Deployed version:*\n`%s`", options.DeployedVersion)})
 	}
 	if options.Branch != "" {
 		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Branch:*\n`%s`", options.Branch)})
