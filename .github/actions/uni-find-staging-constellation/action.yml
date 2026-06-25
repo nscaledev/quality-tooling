@@ -41,14 +41,21 @@ inputs:
     description: 'GitHub token with read access to the service repository for tag validation; defaults to github.token'
     required: false
     default: ''
+  summary-title:
+    description: 'Optional GitHub step summary title for resolved checkout details'
+    required: false
+    default: ''
 
 outputs:
   tag:
-    description: 'Git tag pinned in the candidate constellation (e.g. v1.16.4), empty if no candidate found'
+    description: 'Git tag pinned in the candidate constellation or returned by the version API, empty if no tag was resolved'
     value: ${{ steps.find.outputs.tag }}
   ref:
-    description: 'Checkout ref for UAT tests: the staged constellation tag or the selected workflow ref'
+    description: 'Checkout ref for tests: the staged constellation tag, selected workflow ref, version API tag, or pseudo-version commit SHA'
     value: ${{ steps.find.outputs.ref }}
+  version:
+    description: 'Version string returned by the deployed service version API, empty when not using version API resolution'
+    value: ${{ steps.find.outputs.version }}
 
 runs:
   using: 'composite'
@@ -69,3 +76,4 @@ runs:
         FALLBACK_TO_CONSTELLATION: ${{ inputs.fallback-to-constellation }}
         SERVICE_REPO: ${{ inputs.service-repo || github.repository }}
         SERVICE_REPO_TOKEN: ${{ inputs.repo-read-token || github.token }}
+        SUMMARY_TITLE: ${{ inputs.summary-title }}

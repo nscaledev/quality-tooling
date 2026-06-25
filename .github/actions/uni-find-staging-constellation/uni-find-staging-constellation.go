@@ -78,8 +78,20 @@ type versionAPIConfig struct {
 	repoToken    string
 }
 
+type versionAPIRef struct {
+	tag     string
+	ref     string
+	version string
+}
+
 // tagPattern validates the vX.Y.Z format we expect after stripping the short-SHA.
 var tagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// semverTagPattern validates service versions that should exist as Git tags.
+var semverTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
+
+// pseudoVersionPattern validates Go pseudo-versions and captures the commit hash.
+var pseudoVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+-(?:[0-9A-Za-z][0-9A-Za-z.-]*\.)?\d{14}-([0-9a-f]{12,40})(?:\+incompatible)?$`)
 
 // errNotFound is returned by getJSON when the server responds with 404.
 var errNotFound = errors.New("not found")
@@ -88,6 +100,8 @@ func main() {
 	useStagingConstellation := !strings.EqualFold(strings.TrimSpace(os.Getenv("USE_STAGING_CONSTELLATION")), "false")
 	useVersionAPI := envBool("USE_VERSION_API", false)
 	fallbackToConstellation := envBool("FALLBACK_TO_CONSTELLATION", true)
+	versionURL := strings.TrimSpace(os.Getenv("VERSION_API_URL"))
+	summaryTitle := strings.TrimSpace(os.Getenv("SUMMARY_TITLE"))
 
 	if !useStagingConstellation {
 		if eventName := os.Getenv("GITHUB_EVENT_NAME"); eventName != "workflow_dispatch" {
@@ -103,7 +117,11 @@ func main() {
 
 		fmt.Printf("Using selected workflow ref for UAT: %s\n", ref)
 
-		if err := writeOutputs("", ref); err != nil {
+		if err := writeOutputs("", ref, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(1)
+		}
+		if err := writeStepSummary(summaryTitle, versionURL, "", "", ref); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
 		}
@@ -126,14 +144,18 @@ func main() {
 	repoToken := firstNonEmpty(os.Getenv("SERVICE_REPO_TOKEN"), releasesToken)
 
 	if useVersionAPI {
-		tag, err := findVersionAPITag(&githubClient{token: repoToken}, versionAPIConfig{
-			versionURL:   strings.TrimSpace(os.Getenv("VERSION_API_URL")),
+		resolved, err := findVersionAPIRef(&githubClient{token: repoToken}, versionAPIConfig{
+			versionURL:   versionURL,
 			versionToken: strings.TrimSpace(os.Getenv("VERSION_API_TOKEN")),
 			serviceRepo:  firstNonEmpty(os.Getenv("SERVICE_REPO"), os.Getenv("GITHUB_REPOSITORY")),
 			repoToken:    repoToken,
 		})
 		if err == nil {
-			if err := writeOutputs(tag, tag); err != nil {
+			if err := writeOutputs(resolved.tag, resolved.ref, resolved.version); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+				os.Exit(1)
+			}
+			if err := writeStepSummary(summaryTitle, versionURL, resolved.version, resolved.tag, resolved.ref); err != nil {
 				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 				os.Exit(1)
 			}
@@ -142,6 +164,10 @@ func main() {
 		}
 
 		if !fallbackToConstellation {
+			if summaryErr := writeStepSummary(summaryTitle, versionURL, "", "", ""); summaryErr != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: %v\n", summaryErr)
+				os.Exit(1)
+			}
 			fmt.Fprintf(os.Stderr, "ERROR: version API lookup failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -167,13 +193,17 @@ func main() {
 		return
 	}
 
-	if err := writeOutputs(tag, tag); err != nil {
+	if err := writeOutputs(tag, tag, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		os.Exit(1)
+	}
+	if err := writeStepSummary(summaryTitle, versionURL, "", tag, tag); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func writeOutputs(tag, ref string) error {
+func writeOutputs(tag, ref, version string) error {
 	outputFile := os.Getenv("GITHUB_OUTPUT")
 	if outputFile == "" {
 		return nil
@@ -197,7 +227,57 @@ func writeOutputs(tag, ref string) error {
 		}
 	}
 
+	if version != "" {
+		if _, err := fmt.Fprintf(f, "version=%s\n", version); err != nil {
+			return fmt.Errorf("failed to write GITHUB_OUTPUT: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func writeStepSummary(title, versionURL, version, tag, ref string) error {
+	if title == "" {
+		return nil
+	}
+
+	summaryFile := os.Getenv("GITHUB_STEP_SUMMARY")
+	if summaryFile == "" {
+		return nil
+	}
+
+	f, err := os.OpenFile(summaryFile, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open GITHUB_STEP_SUMMARY: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := fmt.Fprintf(f, "### %s\n", title); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "- **Version API:** `%s`\n", summaryValue(versionURL, "<not configured>")); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "- **Deployed Version:** `%s`\n", summaryValue(version, "<not resolved>")); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "- **Resolved Tag:** `%s`\n", summaryValue(tag, "<none>")); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "- **Checkout Ref:** `%s`\n", summaryValue(ref, "<not resolved>")); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+
+	return nil
+}
+
+func summaryValue(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+
+	return value
 }
 
 func envBool(name string, defaultValue bool) bool {
@@ -228,42 +308,62 @@ func githubAPIURL() string {
 	return defaultGitHubAPI
 }
 
-func findVersionAPITag(client *githubClient, cfg versionAPIConfig) (string, error) {
+func findVersionAPIRef(client *githubClient, cfg versionAPIConfig) (versionAPIRef, error) {
 	versionURL := strings.TrimSpace(cfg.versionURL)
 	if versionURL == "" {
-		return "", errors.New("VERSION_API_URL environment variable not set") //nolint:err113
+		return versionAPIRef{}, errors.New("VERSION_API_URL environment variable not set") //nolint:err113
 	}
 
 	if cfg.serviceRepo == "" {
-		return "", errors.New("SERVICE_REPO or GITHUB_REPOSITORY environment variable not set") //nolint:err113
+		return versionAPIRef{}, errors.New("SERVICE_REPO or GITHUB_REPOSITORY environment variable not set") //nolint:err113
 	}
 
 	if cfg.repoToken == "" {
-		return "", errors.New("SERVICE_REPO_TOKEN or GH_TOKEN environment variable not set") //nolint:err113
+		return versionAPIRef{}, errors.New("SERVICE_REPO_TOKEN or GH_TOKEN environment variable not set") //nolint:err113
 	}
 
 	serviceVersion, err := fetchServiceVersion(versionURL, cfg.versionToken)
 	if err != nil {
-		return "", err
+		return versionAPIRef{}, err
 	}
 
-	tag := strings.TrimSpace(serviceVersion.Version)
-	if !tagPattern.MatchString(tag) {
-		return "", fmt.Errorf("version API returned %q, which does not match expected vX.Y.Z tag format", serviceVersion.Version) //nolint:err113
+	version := strings.TrimSpace(serviceVersion.Version)
+	if commitRef := pseudoVersionCommit(version); commitRef != "" {
+		sha, err := resolveCommit(client, cfg.serviceRepo, commitRef)
+		if err != nil {
+			return versionAPIRef{}, fmt.Errorf("checking pseudo-version commit %s in %s: %w", commitRef, cfg.serviceRepo, err)
+		}
+
+		fmt.Printf("Matched service version API: %s reports pseudo-version %s (%s); commit %s exists in %s\n", versionURL, version, serviceVersion.Name, sha, cfg.serviceRepo)
+
+		return versionAPIRef{ref: sha, version: version}, nil
 	}
 
-	exists, err := tagExists(client, cfg.serviceRepo, tag)
+	if !semverTagPattern.MatchString(version) {
+		return versionAPIRef{}, fmt.Errorf("version API returned %q, which does not match expected semver tag or Go pseudo-version format", serviceVersion.Version) //nolint:err113
+	}
+
+	exists, err := tagExists(client, cfg.serviceRepo, version)
 	if err != nil {
-		return "", fmt.Errorf("checking tag %s in %s: %w", tag, cfg.serviceRepo, err)
+		return versionAPIRef{}, fmt.Errorf("checking tag %s in %s: %w", version, cfg.serviceRepo, err)
 	}
 
 	if !exists {
-		return "", fmt.Errorf("tag %s from version API does not exist in %s", tag, cfg.serviceRepo) //nolint:err113
+		return versionAPIRef{}, fmt.Errorf("tag %s from version API does not exist in %s", version, cfg.serviceRepo) //nolint:err113
 	}
 
-	fmt.Printf("Matched service version API: %s reports %s (%s); tag exists in %s\n", versionURL, tag, serviceVersion.Name, cfg.serviceRepo)
+	fmt.Printf("Matched service version API: %s reports %s (%s); tag exists in %s\n", versionURL, version, serviceVersion.Name, cfg.serviceRepo)
 
-	return tag, nil
+	return versionAPIRef{tag: version, ref: version, version: version}, nil
+}
+
+func pseudoVersionCommit(version string) string {
+	matches := pseudoVersionPattern.FindStringSubmatch(version)
+	if len(matches) != 2 {
+		return ""
+	}
+
+	return matches[1]
 }
 
 func fetchServiceVersion(versionURL, token string) (serviceVersion, error) {
@@ -323,6 +423,24 @@ func tagExists(client *githubClient, repo, tag string) (bool, error) {
 	}
 
 	return ref.Ref != "", nil
+}
+
+func resolveCommit(client *githubClient, repo, ref string) (string, error) {
+	u := fmt.Sprintf("%s/repos/%s/commits/%s", githubAPIURL(), repo, url.PathEscape(ref))
+
+	var commit struct {
+		SHA string `json:"sha"`
+	}
+
+	if _, err := client.getJSON(u, &commit); err != nil {
+		return "", err
+	}
+
+	if commit.SHA == "" {
+		return "", fmt.Errorf("commit lookup for %s in %s did not include a SHA", ref, repo) //nolint:err113
+	}
+
+	return commit.SHA, nil
 }
 
 // findCandidateTag scans open PRs in releasesRepo for a constellation with

@@ -62,10 +62,13 @@ Version API lookup with constellation fallback:
     version-api-token: ${{ secrets.UAT_API_AUTH_TOKEN }}
 ```
 
-The action validates that the returned `version` is a `vX.Y.Z` tag and that the
-tag exists in the service repository before outputting it. If the version API is
-missing or unhealthy, the action falls back to the staged constellation by
-default.
+The action validates that the returned `version` is either a semver Git tag or a
+Go pseudo-version. Tags must exist in the service repository before the action
+outputs them. Pseudo-versions are resolved to the embedded commit SHA, which is
+then verified in the service repository and output as `ref`. Version API
+resolution also outputs the raw deployed `version` string for job summaries. If
+the version API is missing or unhealthy, the action falls back to the staged
+constellation by default.
 
 Strict version API mode:
 
@@ -79,6 +82,7 @@ Strict version API mode:
     version-api-url: ${{ vars.UAT_REGION_BASE_URL }}/api/version
     version-api-token: ${{ secrets.UAT_API_AUTH_TOKEN }}
     fallback-to-constellation: false
+    summary-title: UAT API Test Version
 ```
 
 Use strict mode once the component reliably exposes `/api/version`; until then,
@@ -98,6 +102,7 @@ fallback mode avoids breaking UAT jobs for services that still return `404`.
 | `fallback-to-constellation` | No | `true` | Fall back to staged constellation lookup if version API lookup fails |
 | `service-repo` | No | current workflow repo | Service repository used to verify the version API tag exists |
 | `repo-read-token` | No | `github.token` | GitHub token with read access to the service repository for tag validation |
+| `summary-title` | No | - | When set, append resolved checkout details to the GitHub step summary with this heading |
 
 When `use-staging-constellation` is `false`, the action must be running from
 `workflow_dispatch` and outputs the workflow ref selected for the run.
@@ -106,5 +111,6 @@ When `use-staging-constellation` is `false`, the action must be running from
 
 | Output | Description |
 |--------|-------------|
-| `tag` | Git tag pinned in the candidate constellation (e.g. `v1.16.4`), empty if no candidate found |
-| `ref` | Checkout ref for UAT tests: the staged constellation tag or the selected workflow ref |
+| `tag` | Git tag pinned in the candidate constellation or returned by the version API, empty if no tag was resolved |
+| `ref` | Checkout ref for tests: the staged constellation tag, selected workflow ref, version API tag, or pseudo-version commit SHA |
+| `version` | Version string returned by the deployed service version API, empty when not using version API resolution |
