@@ -137,7 +137,7 @@ func TestVersionAPIWritesTagAndRefOutput(t *testing.T) {
 	}
 
 	output := readFile(t, outputFile)
-	if output != "tag=v1.17.2\nref=v1.17.2\n" {
+	if output != "tag=v1.17.2\nref=v1.17.2\nversion=v1.17.2\n" {
 		t.Fatalf("expected tag and ref output, got %q", output)
 	}
 }
@@ -180,7 +180,7 @@ func TestVersionAPIWritesPseudoVersionCommitRefOutput(t *testing.T) {
 	}
 
 	output := readFile(t, outputFile)
-	if output != "ref="+fullSHA+"\n" {
+	if output != "ref="+fullSHA+"\nversion=v0.0.0-20260625031624-517a48e78688\n" {
 		t.Fatalf("expected commit ref output, got %q", output)
 	}
 }

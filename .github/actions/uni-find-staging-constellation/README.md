@@ -65,9 +65,10 @@ Version API lookup with constellation fallback:
 The action validates that the returned `version` is either a semver Git tag or a
 Go pseudo-version. Tags must exist in the service repository before the action
 outputs them. Pseudo-versions are resolved to the embedded commit SHA, which is
-then verified in the service repository and output as `ref`. If the version API
-is missing or unhealthy, the action falls back to the staged constellation by
-default.
+then verified in the service repository and output as `ref`. Version API
+resolution also outputs the raw deployed `version` string for job summaries. If
+the version API is missing or unhealthy, the action falls back to the staged
+constellation by default.
 
 Strict version API mode:
 
@@ -110,3 +111,4 @@ When `use-staging-constellation` is `false`, the action must be running from
 |--------|-------------|
 | `tag` | Git tag pinned in the candidate constellation or returned by the version API, empty if no tag was resolved |
 | `ref` | Checkout ref for tests: the staged constellation tag, selected workflow ref, version API tag, or pseudo-version commit SHA |
+| `version` | Version string returned by the deployed service version API, empty when not using version API resolution |

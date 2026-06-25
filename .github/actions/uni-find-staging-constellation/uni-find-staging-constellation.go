@@ -79,8 +79,9 @@ type versionAPIConfig struct {
 }
 
 type versionAPIRef struct {
-	tag string
-	ref string
+	tag     string
+	ref     string
+	version string
 }
 
 // tagPattern validates the vX.Y.Z format we expect after stripping the short-SHA.
@@ -114,7 +115,7 @@ func main() {
 
 		fmt.Printf("Using selected workflow ref for UAT: %s\n", ref)
 
-		if err := writeOutputs("", ref); err != nil {
+		if err := writeOutputs("", ref, ""); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
 		}
@@ -144,7 +145,7 @@ func main() {
 			repoToken:    repoToken,
 		})
 		if err == nil {
-			if err := writeOutputs(resolved.tag, resolved.ref); err != nil {
+			if err := writeOutputs(resolved.tag, resolved.ref, resolved.version); err != nil {
 				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 				os.Exit(1)
 			}
@@ -178,13 +179,13 @@ func main() {
 		return
 	}
 
-	if err := writeOutputs(tag, tag); err != nil {
+	if err := writeOutputs(tag, tag, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func writeOutputs(tag, ref string) error {
+func writeOutputs(tag, ref, version string) error {
 	outputFile := os.Getenv("GITHUB_OUTPUT")
 	if outputFile == "" {
 		return nil
@@ -204,6 +205,12 @@ func writeOutputs(tag, ref string) error {
 
 	if ref != "" {
 		if _, err := fmt.Fprintf(f, "ref=%s\n", ref); err != nil {
+			return fmt.Errorf("failed to write GITHUB_OUTPUT: %w", err)
+		}
+	}
+
+	if version != "" {
+		if _, err := fmt.Fprintf(f, "version=%s\n", version); err != nil {
 			return fmt.Errorf("failed to write GITHUB_OUTPUT: %w", err)
 		}
 	}
@@ -267,7 +274,7 @@ func findVersionAPIRef(client *githubClient, cfg versionAPIConfig) (versionAPIRe
 
 		fmt.Printf("Matched service version API: %s reports pseudo-version %s (%s); commit %s exists in %s\n", versionURL, version, serviceVersion.Name, sha, cfg.serviceRepo)
 
-		return versionAPIRef{ref: sha}, nil
+		return versionAPIRef{ref: sha, version: version}, nil
 	}
 
 	if !semverTagPattern.MatchString(version) {
@@ -285,7 +292,7 @@ func findVersionAPIRef(client *githubClient, cfg versionAPIConfig) (versionAPIRe
 
 	fmt.Printf("Matched service version API: %s reports %s (%s); tag exists in %s\n", versionURL, version, serviceVersion.Name, cfg.serviceRepo)
 
-	return versionAPIRef{tag: version, ref: version}, nil
+	return versionAPIRef{tag: version, ref: version, version: version}, nil
 }
 
 func pseudoVersionCommit(version string) string {

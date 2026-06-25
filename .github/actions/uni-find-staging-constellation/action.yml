@@ -49,6 +49,9 @@ outputs:
   ref:
     description: 'Checkout ref for tests: the staged constellation tag, selected workflow ref, version API tag, or pseudo-version commit SHA'
     value: ${{ steps.find.outputs.ref }}
+  version:
+    description: 'Version string returned by the deployed service version API, empty when not using version API resolution'
+    value: ${{ steps.find.outputs.version }}
 
 runs:
   using: 'composite'
