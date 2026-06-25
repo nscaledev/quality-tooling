@@ -100,6 +100,8 @@ func main() {
 	useStagingConstellation := !strings.EqualFold(strings.TrimSpace(os.Getenv("USE_STAGING_CONSTELLATION")), "false")
 	useVersionAPI := envBool("USE_VERSION_API", false)
 	fallbackToConstellation := envBool("FALLBACK_TO_CONSTELLATION", true)
+	versionURL := strings.TrimSpace(os.Getenv("VERSION_API_URL"))
+	summaryTitle := strings.TrimSpace(os.Getenv("SUMMARY_TITLE"))
 
 	if !useStagingConstellation {
 		if eventName := os.Getenv("GITHUB_EVENT_NAME"); eventName != "workflow_dispatch" {
@@ -116,6 +118,10 @@ func main() {
 		fmt.Printf("Using selected workflow ref for UAT: %s\n", ref)
 
 		if err := writeOutputs("", ref, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(1)
+		}
+		if err := writeStepSummary(summaryTitle, versionURL, "", "", ref); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
 		}
@@ -139,7 +145,7 @@ func main() {
 
 	if useVersionAPI {
 		resolved, err := findVersionAPIRef(&githubClient{token: repoToken}, versionAPIConfig{
-			versionURL:   strings.TrimSpace(os.Getenv("VERSION_API_URL")),
+			versionURL:   versionURL,
 			versionToken: strings.TrimSpace(os.Getenv("VERSION_API_TOKEN")),
 			serviceRepo:  firstNonEmpty(os.Getenv("SERVICE_REPO"), os.Getenv("GITHUB_REPOSITORY")),
 			repoToken:    repoToken,
@@ -149,11 +155,19 @@ func main() {
 				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 				os.Exit(1)
 			}
+			if err := writeStepSummary(summaryTitle, versionURL, resolved.version, resolved.tag, resolved.ref); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+				os.Exit(1)
+			}
 
 			return
 		}
 
 		if !fallbackToConstellation {
+			if summaryErr := writeStepSummary(summaryTitle, versionURL, "", "", ""); summaryErr != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: %v\n", summaryErr)
+				os.Exit(1)
+			}
 			fmt.Fprintf(os.Stderr, "ERROR: version API lookup failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -180,6 +194,10 @@ func main() {
 	}
 
 	if err := writeOutputs(tag, tag, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		os.Exit(1)
+	}
+	if err := writeStepSummary(summaryTitle, versionURL, "", tag, tag); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
 	}
@@ -216,6 +234,50 @@ func writeOutputs(tag, ref, version string) error {
 	}
 
 	return nil
+}
+
+func writeStepSummary(title, versionURL, version, tag, ref string) error {
+	if title == "" {
+		return nil
+	}
+
+	summaryFile := os.Getenv("GITHUB_STEP_SUMMARY")
+	if summaryFile == "" {
+		return nil
+	}
+
+	f, err := os.OpenFile(summaryFile, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open GITHUB_STEP_SUMMARY: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := fmt.Fprintf(f, "### %s\n", title); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "- **Version API:** `%s`\n", summaryValue(versionURL, "<not configured>")); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "- **Deployed Version:** `%s`\n", summaryValue(version, "<not resolved>")); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "- **Resolved Tag:** `%s`\n", summaryValue(tag, "<none>")); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+	if _, err := fmt.Fprintf(f, "- **Checkout Ref:** `%s`\n", summaryValue(ref, "<not resolved>")); err != nil {
+		return fmt.Errorf("failed to write GITHUB_STEP_SUMMARY: %w", err)
+	}
+
+	return nil
+}
+
+func summaryValue(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+
+	return value
 }
 
 func envBool(name string, defaultValue bool) bool {

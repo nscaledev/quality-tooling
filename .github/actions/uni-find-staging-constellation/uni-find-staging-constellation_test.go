@@ -142,6 +142,51 @@ func TestVersionAPIWritesTagAndRefOutput(t *testing.T) {
 	}
 }
 
+func TestVersionAPIWritesStepSummary(t *testing.T) {
+	outputFile := createOutputFile(t)
+	summaryFile := createOutputFile(t)
+	const versionAPIPath = "/api/version"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case versionAPIPath:
+			fmt.Fprint(w, `{"name":"unikorn-region-server","version":"v1.17.2"}`)
+		case "/repos/nscaledev/uni-region/git/ref/tags/v1.17.2":
+			fmt.Fprint(w, `{"ref":"refs/tags/v1.17.2"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	versionAPIURL := server.URL + versionAPIPath
+	result := runMain(t, map[string]string{
+		"SERVICE":             "uni-region",
+		"USE_VERSION_API":     "true",
+		"VERSION_API_URL":     versionAPIURL,
+		"SERVICE_REPO":        "nscaledev/uni-region",
+		"SERVICE_REPO_TOKEN":  "repo-token",
+		"GITHUB_API_URL":      server.URL,
+		"GITHUB_OUTPUT":       outputFile,
+		"GITHUB_STEP_SUMMARY": summaryFile,
+		"SUMMARY_TITLE":       "Dev API Test Version",
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout:\n%s\nstderr:\n%s", result.exitCode, result.stdout, result.stderr)
+	}
+
+	summary := readFile(t, summaryFile)
+	expected := "### Dev API Test Version\n" +
+		"- **Version API:** `" + versionAPIURL + "`\n" +
+		"- **Deployed Version:** `v1.17.2`\n" +
+		"- **Resolved Tag:** `v1.17.2`\n" +
+		"- **Checkout Ref:** `v1.17.2`\n"
+	if summary != expected {
+		t.Fatalf("expected step summary %q, got %q", expected, summary)
+	}
+}
+
 func TestVersionAPIWritesPseudoVersionCommitRefOutput(t *testing.T) {
 	outputFile := createOutputFile(t)
 	const fullSHA = "517a48e78688ea507b64831e0aaae0ad4a78f43c"
@@ -283,19 +328,23 @@ services:
 }
 
 func TestVersionAPIStrictModeFailsWithoutFallback(t *testing.T) {
+	summaryFile := createOutputFile(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}))
 	defer server.Close()
 
+	versionAPIURL := server.URL + "/api/version"
 	result := runMain(t, map[string]string{
 		"SERVICE":                   "uni-region",
 		"USE_VERSION_API":           "true",
-		"VERSION_API_URL":           server.URL + "/api/version",
+		"VERSION_API_URL":           versionAPIURL,
 		"FALLBACK_TO_CONSTELLATION": "false",
 		"SERVICE_REPO":              "nscaledev/uni-region",
 		"SERVICE_REPO_TOKEN":        "repo-token",
 		"GITHUB_API_URL":            server.URL,
+		"GITHUB_STEP_SUMMARY":       summaryFile,
+		"SUMMARY_TITLE":             "Dev API Test Version",
 	})
 
 	if result.exitCode != 1 {
@@ -304,6 +353,16 @@ func TestVersionAPIStrictModeFailsWithoutFallback(t *testing.T) {
 
 	if !strings.Contains(result.stderr, "ERROR: version API lookup failed") {
 		t.Fatalf("expected version API lookup error, got stderr:\n%s", result.stderr)
+	}
+
+	summary := readFile(t, summaryFile)
+	expected := "### Dev API Test Version\n" +
+		"- **Version API:** `" + versionAPIURL + "`\n" +
+		"- **Deployed Version:** `<not resolved>`\n" +
+		"- **Resolved Tag:** `<none>`\n" +
+		"- **Checkout Ref:** `<not resolved>`\n"
+	if summary != expected {
+		t.Fatalf("expected unresolved step summary %q, got %q", expected, summary)
 	}
 }
 

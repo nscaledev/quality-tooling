@@ -82,6 +82,7 @@ Strict version API mode:
     version-api-url: ${{ vars.UAT_REGION_BASE_URL }}/api/version
     version-api-token: ${{ secrets.UAT_API_AUTH_TOKEN }}
     fallback-to-constellation: false
+    summary-title: UAT API Test Version
 ```
 
 Use strict mode once the component reliably exposes `/api/version`; until then,
@@ -101,6 +102,7 @@ fallback mode avoids breaking UAT jobs for services that still return `404`.
 | `fallback-to-constellation` | No | `true` | Fall back to staged constellation lookup if version API lookup fails |
 | `service-repo` | No | current workflow repo | Service repository used to verify the version API tag exists |
 | `repo-read-token` | No | `github.token` | GitHub token with read access to the service repository for tag validation |
+| `summary-title` | No | - | When set, append resolved checkout details to the GitHub step summary with this heading |
 
 When `use-staging-constellation` is `false`, the action must be running from
 `workflow_dispatch` and outputs the workflow ref selected for the run.

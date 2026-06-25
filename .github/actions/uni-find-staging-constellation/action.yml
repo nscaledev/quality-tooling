@@ -41,6 +41,10 @@ inputs:
     description: 'GitHub token with read access to the service repository for tag validation; defaults to github.token'
     required: false
     default: ''
+  summary-title:
+    description: 'Optional GitHub step summary title for resolved checkout details'
+    required: false
+    default: ''
 
 outputs:
   tag:
@@ -72,3 +76,4 @@ runs:
         FALLBACK_TO_CONSTELLATION: ${{ inputs.fallback-to-constellation }}
         SERVICE_REPO: ${{ inputs.service-repo || github.repository }}
         SERVICE_REPO_TOKEN: ${{ inputs.repo-read-token || github.token }}
+        SUMMARY_TITLE: ${{ inputs.summary-title }}
