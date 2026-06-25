@@ -50,6 +50,10 @@ inputs:
     description: 'Environment name shown in the summary and Slack message.'
     required: false
     default: ''
+  deployed-version:
+    description: 'Deployed component version or resolved ref shown in the Slack message.'
+    required: false
+    default: ''
   branch:
     description: 'Branch name shown in Slack. Defaults to GITHUB_REF_NAME.'
     required: false
@@ -1245,6 +1249,7 @@ runs:
         INPUT_SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
         INPUT_FAIL_ON_SLACK_ERROR: ${{ inputs.fail-on-slack-error }}
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_DEPLOYED_VERSION: ${{ inputs.deployed-version }}
         INPUT_BRANCH: ${{ inputs.branch }}
         INPUT_ACTOR: ${{ inputs.actor }}
         INPUT_TITLE: ${{ inputs.title }}

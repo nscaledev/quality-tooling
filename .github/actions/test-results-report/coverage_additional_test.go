@@ -235,6 +235,7 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 		"INPUT_FAIL_ON_SLACK_ERROR":           "yes",
 		"INPUT_TITLE":                         "Region API",
 		"INPUT_ENVIRONMENT":                   "uat",
+		"INPUT_DEPLOYED_VERSION":              "v1.18.0-rc1",
 		"GITHUB_REF_NAME":                     "feature/test",
 		"GITHUB_ACTOR":                        "octocat",
 		"GITHUB_SERVER_URL":                   "https://github.example",
@@ -286,7 +287,7 @@ func TestConfigParsingCoversOverridesAndEnvironment(t *testing.T) {
 	if config.WriteStepSummary || !config.SendSlack || !config.FailOnSlackError || config.IncludeSkips {
 		t.Fatalf("unexpected boolean config: %+v", config)
 	}
-	if config.Branch != "feature/test" || config.Actor != "octocat" || config.WorkflowURL != "https://github.example/nscale/repo/actions/runs/12345" {
+	if config.DeployedVersion != "v1.18.0-rc1" || config.Branch != "feature/test" || config.Actor != "octocat" || config.WorkflowURL != "https://github.example/nscale/repo/actions/runs/12345" {
 		t.Fatalf("unexpected GitHub defaults: %+v", config)
 	}
 	if config.MaxFailures != 12 || config.MaxSkips != 13 || config.GrafanaLogLimit != 25 || config.GrafanaLogMaxFailures != 7 || config.GrafanaLogConcurrency != 8 {

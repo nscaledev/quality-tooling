@@ -643,14 +643,15 @@ func TestBuildSlackPayloadIncludesContextButtonsAndAnalysis(t *testing.T) {
 	}
 
 	payload := buildSlackPayload(analysis, SlackOptions{
-		Title:       "E2E Test Results",
-		Environment: "dev",
-		Branch:      "feat/e2e",
-		Actor:       "octocat",
-		WorkflowURL: "https://github.example/run",
-		ReportURL:   "https://reports.example/allure",
-		AIAnalysis:  "The failure is isolated to instance creation.",
-		MaxFailures: 5,
+		Title:           "E2E Test Results",
+		Environment:     "dev",
+		DeployedVersion: "v1.18.0-rc1",
+		Branch:          "feat/e2e",
+		Actor:           "octocat",
+		WorkflowURL:     "https://github.example/run",
+		ReportURL:       "https://reports.example/allure",
+		AIAnalysis:      "The failure is isolated to instance creation.",
+		MaxFailures:     5,
 	})
 
 	if !strings.Contains(payload.Text, "E2E Test Results (DEV)") {
@@ -662,6 +663,8 @@ func TestBuildSlackPayloadIncludesContextButtonsAndAnalysis(t *testing.T) {
 		"New failures",
 		"creates instance",
 		"Failure Analysis",
+		"Deployed version",
+		"v1.18.0-rc1",
 		"feat/e2e",
 		"octocat",
 		"GitHub Build",
@@ -670,6 +673,28 @@ func TestBuildSlackPayloadIncludesContextButtonsAndAnalysis(t *testing.T) {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("payload missing %q:\n%s", expected, rendered)
 		}
+	}
+}
+
+func TestBuildSlackPayloadOmitsDeployedVersionWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	payload := buildSlackPayload(Analysis{
+		Current: TestRun{Name: "API"},
+		Stats:   Stats{Total: 1, Passed: 1},
+	}, SlackOptions{
+		Title:       "API Test Results",
+		Environment: "uat",
+		Branch:      "main",
+		Actor:       "octocat",
+	})
+
+	rendered := slackPayloadText(payload)
+	if strings.Contains(rendered, "Deployed version") {
+		t.Fatalf("payload should omit deployed version when unset:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Environment") || !strings.Contains(rendered, "Branch") || !strings.Contains(rendered, "Triggered by") {
+		t.Fatalf("payload should keep existing context fields:\n%s", rendered)
 	}
 }
 
