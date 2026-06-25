@@ -91,7 +91,7 @@ var tagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 var semverTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
 
 // pseudoVersionPattern validates Go pseudo-versions and captures the commit hash.
-var pseudoVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+-(?:[0-9A-Za-z][0-9A-Za-z.-]*\.)?\d{14}-([0-9a-f]{12,40})$`)
+var pseudoVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+-(?:[0-9A-Za-z][0-9A-Za-z.-]*\.)?\d{14}-([0-9a-f]{12,40})(?:\+incompatible)?$`)
 
 // errNotFound is returned by getJSON when the server responds with 404.
 var errNotFound = errors.New("not found")
