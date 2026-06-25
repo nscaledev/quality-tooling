@@ -62,9 +62,11 @@ Version API lookup with constellation fallback:
     version-api-token: ${{ secrets.UAT_API_AUTH_TOKEN }}
 ```
 
-The action validates that the returned `version` is a `vX.Y.Z` tag and that the
-tag exists in the service repository before outputting it. If the version API is
-missing or unhealthy, the action falls back to the staged constellation by
+The action validates that the returned `version` is either a semver Git tag or a
+Go pseudo-version. Tags must exist in the service repository before the action
+outputs them. Pseudo-versions are resolved to the embedded commit SHA, which is
+then verified in the service repository and output as `ref`. If the version API
+is missing or unhealthy, the action falls back to the staged constellation by
 default.
 
 Strict version API mode:
@@ -106,5 +108,5 @@ When `use-staging-constellation` is `false`, the action must be running from
 
 | Output | Description |
 |--------|-------------|
-| `tag` | Git tag pinned in the candidate constellation (e.g. `v1.16.4`), empty if no candidate found |
-| `ref` | Checkout ref for UAT tests: the staged constellation tag or the selected workflow ref |
+| `tag` | Git tag pinned in the candidate constellation or returned by the version API, empty if no tag was resolved |
+| `ref` | Checkout ref for tests: the staged constellation tag, selected workflow ref, version API tag, or pseudo-version commit SHA |

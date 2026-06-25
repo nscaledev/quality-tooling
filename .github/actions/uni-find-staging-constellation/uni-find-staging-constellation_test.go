@@ -142,6 +142,49 @@ func TestVersionAPIWritesTagAndRefOutput(t *testing.T) {
 	}
 }
 
+func TestVersionAPIWritesPseudoVersionCommitRefOutput(t *testing.T) {
+	outputFile := createOutputFile(t)
+	const fullSHA = "517a48e78688ea507b64831e0aaae0ad4a78f43c"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/version":
+			fmt.Fprint(w, `{"name":"unikorn-region-server","version":"v0.0.0-20260625031624-517a48e78688"}`)
+		case "/repos/nscaledev/uni-region/commits/517a48e78688":
+			if got := r.Header.Get("Authorization"); got != "Bearer repo-token" {
+				t.Errorf("expected repo token, got %q", got)
+			}
+			fmt.Fprintf(w, `{"sha":%q}`, fullSHA)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	result := runMain(t, map[string]string{
+		"SERVICE":            "uni-region",
+		"USE_VERSION_API":    "true",
+		"VERSION_API_URL":    server.URL + "/api/version",
+		"SERVICE_REPO":       "nscaledev/uni-region",
+		"SERVICE_REPO_TOKEN": "repo-token",
+		"GITHUB_API_URL":     server.URL,
+		"GITHUB_OUTPUT":      outputFile,
+	})
+
+	if result.exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout:\n%s\nstderr:\n%s", result.exitCode, result.stdout, result.stderr)
+	}
+
+	if !strings.Contains(result.stdout, "reports pseudo-version v0.0.0-20260625031624-517a48e78688") {
+		t.Fatalf("expected pseudo-version match log, got stdout:\n%s", result.stdout)
+	}
+
+	output := readFile(t, outputFile)
+	if output != "ref="+fullSHA+"\n" {
+		t.Fatalf("expected commit ref output, got %q", output)
+	}
+}
+
 func TestVersionAPIFallsBackToConstellation(t *testing.T) {
 	outputFile := createOutputFile(t)
 	const constellationYAML = `status: candidate

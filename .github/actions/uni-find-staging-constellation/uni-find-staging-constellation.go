@@ -78,8 +78,19 @@ type versionAPIConfig struct {
 	repoToken    string
 }
 
+type versionAPIRef struct {
+	tag string
+	ref string
+}
+
 // tagPattern validates the vX.Y.Z format we expect after stripping the short-SHA.
 var tagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// semverTagPattern validates service versions that should exist as Git tags.
+var semverTagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
+
+// pseudoVersionPattern validates Go pseudo-versions and captures the commit hash.
+var pseudoVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+-(?:[0-9A-Za-z][0-9A-Za-z.-]*\.)?\d{14}-([0-9a-f]{12,40})$`)
 
 // errNotFound is returned by getJSON when the server responds with 404.
 var errNotFound = errors.New("not found")
@@ -126,14 +137,14 @@ func main() {
 	repoToken := firstNonEmpty(os.Getenv("SERVICE_REPO_TOKEN"), releasesToken)
 
 	if useVersionAPI {
-		tag, err := findVersionAPITag(&githubClient{token: repoToken}, versionAPIConfig{
+		resolved, err := findVersionAPIRef(&githubClient{token: repoToken}, versionAPIConfig{
 			versionURL:   strings.TrimSpace(os.Getenv("VERSION_API_URL")),
 			versionToken: strings.TrimSpace(os.Getenv("VERSION_API_TOKEN")),
 			serviceRepo:  firstNonEmpty(os.Getenv("SERVICE_REPO"), os.Getenv("GITHUB_REPOSITORY")),
 			repoToken:    repoToken,
 		})
 		if err == nil {
-			if err := writeOutputs(tag, tag); err != nil {
+			if err := writeOutputs(resolved.tag, resolved.ref); err != nil {
 				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 				os.Exit(1)
 			}
@@ -228,42 +239,62 @@ func githubAPIURL() string {
 	return defaultGitHubAPI
 }
 
-func findVersionAPITag(client *githubClient, cfg versionAPIConfig) (string, error) {
+func findVersionAPIRef(client *githubClient, cfg versionAPIConfig) (versionAPIRef, error) {
 	versionURL := strings.TrimSpace(cfg.versionURL)
 	if versionURL == "" {
-		return "", errors.New("VERSION_API_URL environment variable not set") //nolint:err113
+		return versionAPIRef{}, errors.New("VERSION_API_URL environment variable not set") //nolint:err113
 	}
 
 	if cfg.serviceRepo == "" {
-		return "", errors.New("SERVICE_REPO or GITHUB_REPOSITORY environment variable not set") //nolint:err113
+		return versionAPIRef{}, errors.New("SERVICE_REPO or GITHUB_REPOSITORY environment variable not set") //nolint:err113
 	}
 
 	if cfg.repoToken == "" {
-		return "", errors.New("SERVICE_REPO_TOKEN or GH_TOKEN environment variable not set") //nolint:err113
+		return versionAPIRef{}, errors.New("SERVICE_REPO_TOKEN or GH_TOKEN environment variable not set") //nolint:err113
 	}
 
 	serviceVersion, err := fetchServiceVersion(versionURL, cfg.versionToken)
 	if err != nil {
-		return "", err
+		return versionAPIRef{}, err
 	}
 
-	tag := strings.TrimSpace(serviceVersion.Version)
-	if !tagPattern.MatchString(tag) {
-		return "", fmt.Errorf("version API returned %q, which does not match expected vX.Y.Z tag format", serviceVersion.Version) //nolint:err113
+	version := strings.TrimSpace(serviceVersion.Version)
+	if commitRef := pseudoVersionCommit(version); commitRef != "" {
+		sha, err := resolveCommit(client, cfg.serviceRepo, commitRef)
+		if err != nil {
+			return versionAPIRef{}, fmt.Errorf("checking pseudo-version commit %s in %s: %w", commitRef, cfg.serviceRepo, err)
+		}
+
+		fmt.Printf("Matched service version API: %s reports pseudo-version %s (%s); commit %s exists in %s\n", versionURL, version, serviceVersion.Name, sha, cfg.serviceRepo)
+
+		return versionAPIRef{ref: sha}, nil
 	}
 
-	exists, err := tagExists(client, cfg.serviceRepo, tag)
+	if !semverTagPattern.MatchString(version) {
+		return versionAPIRef{}, fmt.Errorf("version API returned %q, which does not match expected semver tag or Go pseudo-version format", serviceVersion.Version) //nolint:err113
+	}
+
+	exists, err := tagExists(client, cfg.serviceRepo, version)
 	if err != nil {
-		return "", fmt.Errorf("checking tag %s in %s: %w", tag, cfg.serviceRepo, err)
+		return versionAPIRef{}, fmt.Errorf("checking tag %s in %s: %w", version, cfg.serviceRepo, err)
 	}
 
 	if !exists {
-		return "", fmt.Errorf("tag %s from version API does not exist in %s", tag, cfg.serviceRepo) //nolint:err113
+		return versionAPIRef{}, fmt.Errorf("tag %s from version API does not exist in %s", version, cfg.serviceRepo) //nolint:err113
 	}
 
-	fmt.Printf("Matched service version API: %s reports %s (%s); tag exists in %s\n", versionURL, tag, serviceVersion.Name, cfg.serviceRepo)
+	fmt.Printf("Matched service version API: %s reports %s (%s); tag exists in %s\n", versionURL, version, serviceVersion.Name, cfg.serviceRepo)
 
-	return tag, nil
+	return versionAPIRef{tag: version, ref: version}, nil
+}
+
+func pseudoVersionCommit(version string) string {
+	matches := pseudoVersionPattern.FindStringSubmatch(version)
+	if len(matches) != 2 {
+		return ""
+	}
+
+	return matches[1]
 }
 
 func fetchServiceVersion(versionURL, token string) (serviceVersion, error) {
@@ -323,6 +354,24 @@ func tagExists(client *githubClient, repo, tag string) (bool, error) {
 	}
 
 	return ref.Ref != "", nil
+}
+
+func resolveCommit(client *githubClient, repo, ref string) (string, error) {
+	u := fmt.Sprintf("%s/repos/%s/commits/%s", githubAPIURL(), repo, url.PathEscape(ref))
+
+	var commit struct {
+		SHA string `json:"sha"`
+	}
+
+	if _, err := client.getJSON(u, &commit); err != nil {
+		return "", err
+	}
+
+	if commit.SHA == "" {
+		return "", fmt.Errorf("commit lookup for %s in %s did not include a SHA", ref, repo) //nolint:err113
+	}
+
+	return commit.SHA, nil
 }
 
 // findCandidateTag scans open PRs in releasesRepo for a constellation with

@@ -44,10 +44,10 @@ inputs:
 
 outputs:
   tag:
-    description: 'Git tag pinned in the candidate constellation (e.g. v1.16.4), empty if no candidate found'
+    description: 'Git tag pinned in the candidate constellation or returned by the version API, empty if no tag was resolved'
     value: ${{ steps.find.outputs.tag }}
   ref:
-    description: 'Checkout ref for UAT tests: the staged constellation tag or the selected workflow ref'
+    description: 'Checkout ref for tests: the staged constellation tag, selected workflow ref, version API tag, or pseudo-version commit SHA'
     value: ${{ steps.find.outputs.ref }}
 
 runs:
