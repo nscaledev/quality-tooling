@@ -379,6 +379,7 @@ func TestMarkdownSummaryIncludesFailuresSkipsAndComparison(t *testing.T) {
 		Environment:  "dev",
 		WorkflowURL:  "https://github.example/run",
 		ReportURL:    "https://reports.example/allure",
+		Component:    ComponentMetadata{Name: "uni-region", Version: "v1.2.3", Ref: "v1.2.3", Repo: "nscaledev/uni-region"},
 		MaxFailures:  5,
 		MaxSkips:     5,
 		IncludeSkips: true,
@@ -394,6 +395,7 @@ func TestMarkdownSummaryIncludesFailuresSkipsAndComparison(t *testing.T) {
 		"### Skipped Tests",
 		"feature flag disabled",
 		"https://reports.example/allure",
+		"**Component:** `uni-region`; version `v1.2.3`; repo `nscaledev/uni-region`",
 	} {
 		if !strings.Contains(markdown, expected) {
 			t.Fatalf("summary missing %q:\n%s", expected, markdown)
@@ -650,6 +652,7 @@ func TestBuildSlackPayloadIncludesContextButtonsAndAnalysis(t *testing.T) {
 		Actor:           "octocat",
 		WorkflowURL:     "https://github.example/run",
 		ReportURL:       "https://reports.example/allure",
+		Component:       ComponentMetadata{Name: "uni-region", Version: "v1.2.3", Repo: "nscaledev/uni-region"},
 		AIAnalysis:      "The failure is isolated to instance creation.",
 		MaxFailures:     5,
 	})
@@ -666,6 +669,7 @@ func TestBuildSlackPayloadIncludesContextButtonsAndAnalysis(t *testing.T) {
 		"Deployed version",
 		"v1.18.0-rc1",
 		"feat/e2e",
+		"uni-region@v1.2.3",
 		"octocat",
 		"GitHub Build",
 		"Allure Report",
