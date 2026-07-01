@@ -39,6 +39,11 @@ func run(ctx context.Context, config Config) error {
 	if err := config.validate(); err != nil {
 		return err
 	}
+	var err error
+	if config, err = resolveComponentMetadata(ctx, config); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: component version lookup skipped: %v\n", err)
+	}
+	component := componentMetadataFromConfig(config)
 
 	stageStarted := time.Now()
 	current, err := readAndParse(config.TestResultsPath, config.Format)
@@ -96,6 +101,7 @@ func run(ctx context.Context, config Config) error {
 			Environment:     config.Environment,
 			WorkflowURL:     config.WorkflowURL,
 			ReportURL:       config.ReportURL,
+			Component:       component,
 			MaxFailures:     config.MaxFailures,
 			MaxSkips:        config.MaxSkips,
 			IncludeSkips:    config.IncludeSkips,
@@ -125,6 +131,7 @@ func run(ctx context.Context, config Config) error {
 			Actor:              config.Actor,
 			WorkflowURL:        config.WorkflowURL,
 			ReportURL:          config.ReportURL,
+			Component:          component,
 			AIAnalysis:         slackSummary,
 			MaxFailures:        config.MaxFailures,
 			OmitFailureDetails: strings.TrimSpace(slackSummary) != "",
@@ -149,7 +156,7 @@ func run(ctx context.Context, config Config) error {
 	logReportTiming("test-history-publish", stageStarted)
 
 	stageStarted = time.Now()
-	if err := writeOutputs(os.Getenv("GITHUB_OUTPUT"), analysis, slackSent); err != nil {
+	if err := writeOutputs(os.Getenv("GITHUB_OUTPUT"), analysis, slackSent, component); err != nil {
 		return err
 	}
 	if err := writeTestHistoryOutputs(os.Getenv("GITHUB_OUTPUT"), testHistoryResult); err != nil {
@@ -343,7 +350,7 @@ func appendStepSummary(path, content string) error {
 	return nil
 }
 
-func writeOutputs(path string, analysis Analysis, slackSent bool) error {
+func writeOutputs(path string, analysis Analysis, slackSent bool, components ...ComponentMetadata) error {
 	if path == "" {
 		return nil
 	}
@@ -382,6 +389,27 @@ func writeOutputs(path string, analysis Analysis, slackSent bool) error {
 		{"resolved-skips", fmt.Sprint(resolvedSkips)},
 		{"slack-sent", fmt.Sprint(slackSent)},
 	}
+	if len(components) > 0 && !components[0].IsZero() {
+		component := components[0]
+		values = append(values,
+			struct {
+				key   string
+				value string
+			}{"component-name", component.Name},
+			struct {
+				key   string
+				value string
+			}{"component-version", component.Version},
+			struct {
+				key   string
+				value string
+			}{"component-ref", component.Ref},
+			struct {
+				key   string
+				value string
+			}{"component-repo", component.Repo},
+		)
+	}
 
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -390,7 +418,7 @@ func writeOutputs(path string, analysis Analysis, slackSent bool) error {
 	defer file.Close()
 
 	for _, value := range values {
-		if _, err := fmt.Fprintf(file, "%s=%s\n", value.key, value.value); err != nil {
+		if _, err := fmt.Fprintf(file, "%s=%s\n", value.key, cleanOneLine(value.value)); err != nil {
 			return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
 		}
 	}

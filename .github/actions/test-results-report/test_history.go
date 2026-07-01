@@ -29,6 +29,11 @@ type TestHistoryEvent struct {
 	RunID      string `json:"run_id"`
 	RunAttempt int    `json:"run_attempt"`
 
+	ComponentName    string `json:"component_name,omitempty"`
+	ComponentVersion string `json:"component_version,omitempty"`
+	ComponentRef     string `json:"component_ref,omitempty"`
+	ComponentRepo    string `json:"component_repo,omitempty"`
+
 	TestID   string `json:"test_id"`
 	TestName string `json:"test_name,omitempty"`
 
@@ -56,6 +61,7 @@ type testHistoryContext struct {
 	RunAttempt  int
 	ArtifactURL string
 	StartedAt   time.Time
+	Component   ComponentMetadata
 }
 
 var (
@@ -232,6 +238,7 @@ func buildTestHistoryContext(config Config, current TestRun, format string, now 
 		RunAttempt:  runAttempt,
 		ArtifactURL: firstNonEmpty(config.TestHistoryArtifactURL, config.ReportURL, config.WorkflowURL),
 		StartedAt:   startedAt.UTC(),
+		Component:   componentMetadataFromConfig(config),
 	}
 }
 
@@ -301,22 +308,26 @@ func collectPlaywrightHistorySuite(suite playwrightSuite, parents []string, cont
 func newTestHistoryEvent(context testHistoryContext, testID string, testName string, status TestStatus, rawStatus string, duration time.Duration, attemptIndex int, excerpt string, startedAt time.Time) TestHistoryEvent {
 	canonicalStatus := testHistoryStatus(status, rawStatus)
 	event := TestHistoryEvent{
-		EventID:      testHistoryEventID(context.Repo, context.RunID, context.RunAttempt, testID, attemptIndex),
-		Repo:         context.Repo,
-		Suite:        context.Suite,
-		Framework:    context.Framework,
-		Env:          context.Env,
-		Branch:       context.Branch,
-		CommitSHA:    context.CommitSHA,
-		RunID:        context.RunID,
-		RunAttempt:   context.RunAttempt,
-		TestID:       testID,
-		TestName:     testName,
-		Status:       canonicalStatus,
-		DurationMS:   durationMilliseconds(duration),
-		AttemptIndex: attemptIndex,
-		ArtifactURL:  context.ArtifactURL,
-		StartedAt:    startedAt.UTC(),
+		EventID:          testHistoryEventID(context.Repo, context.RunID, context.RunAttempt, testID, attemptIndex),
+		Repo:             context.Repo,
+		Suite:            context.Suite,
+		Framework:        context.Framework,
+		Env:              context.Env,
+		Branch:           context.Branch,
+		CommitSHA:        context.CommitSHA,
+		RunID:            context.RunID,
+		RunAttempt:       context.RunAttempt,
+		ComponentName:    context.Component.Name,
+		ComponentVersion: context.Component.Version,
+		ComponentRef:     context.Component.Ref,
+		ComponentRepo:    context.Component.Repo,
+		TestID:           testID,
+		TestName:         testName,
+		Status:           canonicalStatus,
+		DurationMS:       durationMilliseconds(duration),
+		AttemptIndex:     attemptIndex,
+		ArtifactURL:      context.ArtifactURL,
+		StartedAt:        startedAt.UTC(),
 	}
 	if canonicalStatus == string(StatusFailed) {
 		event.FailureMessageExcerpt = truncateFailureExcerpt(excerpt)
@@ -518,6 +529,10 @@ func testHistoryOTLPLogsPayload(events []TestHistoryEvent, aiAnalysis *AIAnalysi
 			otlpStringAttribute("github.repository", first.Repo),
 			otlpStringAttribute("github.run_id", first.RunID),
 			otlpIntAttribute("github.run_attempt", first.RunAttempt),
+			otlpStringAttribute("component.name", first.ComponentName),
+			otlpStringAttribute("component.version", first.ComponentVersion),
+			otlpStringAttribute("component.ref", first.ComponentRef),
+			otlpStringAttribute("component.repo", first.ComponentRepo),
 		)
 	}
 
@@ -569,6 +584,10 @@ func testHistoryOTLPLogRecord(event TestHistoryEvent, aiAnnotation *testHistoryA
 		otlpStringAttribute("test.history.commit", event.CommitSHA),
 		otlpStringAttribute("test.history.run_id", event.RunID),
 		otlpIntAttribute("test.history.run_attempt", event.RunAttempt),
+		otlpStringAttribute("component.name", event.ComponentName),
+		otlpStringAttribute("component.version", event.ComponentVersion),
+		otlpStringAttribute("component.ref", event.ComponentRef),
+		otlpStringAttribute("component.repo", event.ComponentRepo),
 		otlpStringAttribute("test.history.test_id", event.TestID),
 		otlpStringAttribute("test.history.test_name", event.TestName),
 		otlpStringAttribute("test.history.status", event.Status),
