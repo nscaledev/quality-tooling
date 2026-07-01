@@ -110,17 +110,32 @@ func findComponentVersion(value any) string {
 	switch typed := value.(type) {
 	case string:
 		return strings.TrimSpace(typed)
+	case []any:
+		for _, item := range typed {
+			if version := findComponentVersion(item); version != "" {
+				return version
+			}
+		}
 	case map[string]any:
 		for _, key := range []string{"version", "serviceVersion", "componentVersion", "gitVersion", "tag"} {
 			if version := findComponentVersion(typed[key]); version != "" {
 				return version
 			}
 		}
-		for _, key := range []string{"metadata", "status", "data"} {
-			if version := findComponentVersion(typed[key]); version != "" {
+		for _, key := range []string{"data", "metadata", "status"} {
+			if version := findComponentVersionContainer(typed[key]); version != "" {
 				return version
 			}
 		}
 	}
 	return ""
+}
+
+func findComponentVersionContainer(value any) string {
+	switch value.(type) {
+	case map[string]any, []any:
+		return findComponentVersion(value)
+	default:
+		return ""
+	}
 }

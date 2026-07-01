@@ -62,3 +62,23 @@ func TestComponentVersionFromJSONSupportsNestedVersion(t *testing.T) {
 		t.Fatalf("version = %q", version)
 	}
 }
+
+func TestComponentVersionFromJSONIgnoresWrapperStatus(t *testing.T) {
+	t.Parallel()
+
+	version, err := componentVersionFromJSON([]byte(`{"status":"ok","data":{"version":"v1.2.3"}}`))
+	if err != nil {
+		t.Fatalf("componentVersionFromJSON returned error: %v", err)
+	}
+	if version != "v1.2.3" {
+		t.Fatalf("version = %q", version)
+	}
+}
+
+func TestComponentVersionFromJSONRequiresExplicitVersionField(t *testing.T) {
+	t.Parallel()
+
+	if version, err := componentVersionFromJSON([]byte(`{"status":"ok"}`)); err == nil {
+		t.Fatalf("componentVersionFromJSON returned version %q, want error", version)
+	}
+}
