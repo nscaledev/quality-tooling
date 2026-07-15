@@ -1316,6 +1316,47 @@ func TestEnsureAIAnalysisEvidenceSignalsAddsMissingUnikornCRSignal(t *testing.T)
 	}
 }
 
+func TestEnsureAIAnalysisEvidenceSignalsEscapesGenericUnikornCRSignal(t *testing.T) {
+	t.Parallel()
+
+	aiAnalysis := &AIAnalysis{
+		StepSummary: "## Test Failure Analysis\n\n### Suggested Next Checks\n- Inspect the Network CR.",
+		SlackSummary: "- *Network setup* (infra/external): Network reached error instead of provisioned; inspect the Network CR.\n" +
+			"- *Action:* Use the GitHub build summary for test-level failure reasons.",
+	}
+	updated := ensureAIAnalysisEvidenceSignals(aiAnalysis, Analysis{
+		UnikornCRs: &UnikornCREnrichment{
+			Contexts: []UnikornCRContext{{
+				Resource:    "networks.region.unikorn-cloud.org",
+				Name:        "network-123",
+				ResultCount: 1,
+				Objects: []UnikornCRObjectSummary{{
+					Kind:       "Network",
+					Name:       "network-123",
+					Phase:      "Error",
+					Conditions: []string{`Ready =False reason=ControllerError message=<img src=x onerror=alert(1)> <!channel> & retry failed`},
+				}},
+			}},
+		},
+	})
+
+	if updated == nil {
+		t.Fatal("expected AI analysis")
+	}
+	for _, summary := range []string{updated.StepSummary, updated.SlackSummary} {
+		for _, unexpected := range []string{"<img", "<!channel>", " & retry failed"} {
+			if strings.Contains(summary, unexpected) {
+				t.Fatalf("summary should escape generic CR evidence %q:\n%s", unexpected, summary)
+			}
+		}
+		for _, expected := range []string{"&lt;img", "&lt;!channel&gt;", "&amp; retry failed"} {
+			if !strings.Contains(summary, expected) {
+				t.Fatalf("summary should include escaped CR evidence %q:\n%s", expected, summary)
+			}
+		}
+	}
+}
+
 func TestEnsureAIAnalysisEvidenceSignalsDoesNotDuplicateExistingUnikornCRSignal(t *testing.T) {
 	t.Parallel()
 

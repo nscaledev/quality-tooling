@@ -975,7 +975,17 @@ func compactUnikornCREvidenceSignal(context UnikornCRContext) (string, string) {
 	if strings.Contains(lowerSignal, "vlanexhausted") {
 		return "Kubernetes CR signal: Network CR condition reason is `VLANExhausted`.", "vlanexhausted"
 	}
-	return "Kubernetes CR signal: " + truncate(cleanOneLine(signal), 220) + ".", signal
+	safeSignal := escapeEvidenceText(signal, 220)
+	if safeSignal == "" {
+		return "", ""
+	}
+	return "Kubernetes CR signal: " + safeSignal + ".", safeSignal
+}
+
+func escapeEvidenceText(value string, limit int) string {
+	value = truncate(cleanOneLine(value), limit)
+	value = escapeHTML(value)
+	return value
 }
 
 func cutAIAnalysisOnDelimiter(output string) (string, string, bool) {
