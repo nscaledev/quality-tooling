@@ -20,6 +20,7 @@ type SlackOptions struct {
 	Actor              string
 	WorkflowURL        string
 	ReportURL          string
+	Component          ComponentMetadata
 	AIAnalysis         string
 	MaxFailures        int
 	OmitFailureDetails bool
@@ -96,6 +97,9 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 	if options.Branch != "" {
 		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Branch:*\n`%s`", options.Branch)})
 	}
+	if component := slackComponentLabel(options.Component); component != "" {
+		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Component:*\n`%s`", component)})
+	}
 	if options.Actor != "" {
 		contextFields = append(contextFields, SlackText{Type: "mrkdwn", Text: fmt.Sprintf("*Triggered by:*\n`%s`", options.Actor)})
 	}
@@ -166,6 +170,19 @@ func buildSlackPayload(analysis Analysis, options SlackOptions) SlackPayload {
 		Text:   text,
 		Blocks: blocks,
 	}
+}
+
+func slackComponentLabel(component ComponentMetadata) string {
+	if component.IsZero() {
+		return ""
+	}
+	label := firstNonEmpty(component.Name, component.Repo, "component")
+	if component.Version != "" {
+		label += "@" + component.Version
+	} else if component.Ref != "" {
+		label += "@" + component.Ref
+	}
+	return truncate(cleanOneLine(label), 120)
 }
 
 func sendSlack(ctx context.Context, config Config, payload SlackPayload) error {

@@ -28,6 +28,13 @@ type Config struct {
 	Actor                   string
 	WorkflowURL             string
 	ReportURL               string
+	ComponentName           string
+	ComponentVersion        string
+	ComponentRef            string
+	ComponentRepo           string
+	ComponentVersionURL     string
+	ComponentVersionToken   string
+	ComponentVersionTimeout time.Duration
 	MaxFailures             int
 	MaxSkips                int
 	IncludeSkips            bool
@@ -124,6 +131,13 @@ func configFromEnv(env map[string]string) Config {
 		Actor:                   firstNonEmpty(env["INPUT_ACTOR"], env["GITHUB_ACTOR"]),
 		WorkflowURL:             firstNonEmpty(env["INPUT_WORKFLOW_URL"], defaultWorkflowURL(env)),
 		ReportURL:               env["INPUT_REPORT_URL"],
+		ComponentName:           env["INPUT_COMPONENT_NAME"],
+		ComponentVersion:        env["INPUT_COMPONENT_VERSION"],
+		ComponentRef:            env["INPUT_COMPONENT_REF"],
+		ComponentRepo:           firstNonEmpty(env["INPUT_COMPONENT_REPO"], env["GITHUB_REPOSITORY"]),
+		ComponentVersionURL:     env["INPUT_COMPONENT_VERSION_URL"],
+		ComponentVersionToken:   env["INPUT_COMPONENT_VERSION_TOKEN"],
+		ComponentVersionTimeout: time.Duration(parseIntDefault(env["INPUT_COMPONENT_VERSION_TIMEOUT_SECONDS"], 10)) * time.Second,
 		MaxFailures:             parseIntDefault(env["INPUT_MAX_FAILURES"], 10),
 		MaxSkips:                parseIntDefault(env["INPUT_MAX_SKIPS"], 10),
 		IncludeSkips:            parseBoolDefault(env["INPUT_INCLUDE_SKIPS"], true),

@@ -48,6 +48,10 @@ func TestBuildTestHistoryEventsFromJUnitUsesAPIContractFields(t *testing.T) {
 		TestHistoryRunID:       "123456789",
 		TestHistoryRunAttempt:  2,
 		TestHistoryArtifactURL: "https://github.example/run/123456789",
+		ComponentName:          "uni-region",
+		ComponentVersion:       "v1.2.3",
+		ComponentRef:           "v1.2.3",
+		ComponentRepo:          "nscaledev/uni-region",
 	}
 
 	events, err := buildTestHistoryEvents(config, current, now)
@@ -67,6 +71,9 @@ func TestBuildTestHistoryEventsFromJUnitUsesAPIContractFields(t *testing.T) {
 	}
 	if failed.Branch != "feature/test-history" || failed.CommitSHA != "abc123" || failed.RunID != "123456789" || failed.RunAttempt != 2 {
 		t.Fatalf("unexpected run identity fields: %+v", failed)
+	}
+	if failed.ComponentName != "uni-region" || failed.ComponentVersion != "v1.2.3" || failed.ComponentRef != "v1.2.3" || failed.ComponentRepo != "nscaledev/uni-region" {
+		t.Fatalf("unexpected component fields: %+v", failed)
 	}
 	if failed.TestID != "network::creates VPC" || failed.TestName != "creates VPC" || failed.Status != "failed" || failed.DurationMS != 1250 {
 		t.Fatalf("unexpected failed event: %+v", failed)
@@ -424,6 +431,10 @@ func TestPublishTestHistoryPostsOTLPLogs(t *testing.T) {
 		TestHistoryTimeout:      2 * time.Second,
 		TestHistoryRetries:      0,
 		TestHistoryArtifactURL:  "https://github.example/run-1",
+		ComponentName:           "uni-region",
+		ComponentVersion:        "v1.2.3",
+		ComponentRef:            "v1.2.3",
+		ComponentRepo:           "nscaledev/uni-region",
 	}, current)
 
 	if !result.Enabled || result.Mode != "otlp" || !result.Posted || result.EventCount != 1 || len(result.Warnings) != 0 {
@@ -467,6 +478,10 @@ func TestPublishTestHistoryPostsOTLPLogs(t *testing.T) {
 		"test.history.failure_fingerprint": testHistoryFailureFingerprint("POST /instances returned 500\nbackend timeout"),
 		"github.repository":                "nscale/repo",
 		"github.sha":                       "abc123",
+		"component.name":                   "uni-region",
+		"component.version":                "v1.2.3",
+		"component.ref":                    "v1.2.3",
+		"component.repo":                   "nscaledev/uni-region",
 	} {
 		if got := attributes[key]; got != want {
 			t.Fatalf("attribute %s = %q, want %q; all attributes: %+v", key, got, want, attributes)

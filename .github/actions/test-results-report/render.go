@@ -13,6 +13,7 @@ type RenderOptions struct {
 	Environment     string
 	WorkflowURL     string
 	ReportURL       string
+	Component       ComponentMetadata
 	MaxFailures     int
 	MaxSkips        int
 	IncludeSkips    bool
@@ -27,6 +28,7 @@ func renderStepSummary(analysis Analysis, options RenderOptions) string {
 	if options.Environment != "" {
 		sb.WriteString(fmt.Sprintf("**Environment:** `%s`\n\n", escapeMarkdown(options.Environment)))
 	}
+	renderComponentMetadata(&sb, options.Component)
 
 	sb.WriteString("| Total | Passed | Failed | Skipped | Duration |\n")
 	sb.WriteString("| ---: | ---: | ---: | ---: | ---: |\n")
@@ -63,6 +65,30 @@ func renderStepSummary(analysis Analysis, options RenderOptions) string {
 	}
 
 	return sb.String()
+}
+
+func renderComponentMetadata(sb *strings.Builder, component ComponentMetadata) {
+	if component.IsZero() {
+		return
+	}
+
+	var parts []string
+	if component.Name != "" {
+		parts = append(parts, fmt.Sprintf("`%s`", escapeMarkdown(component.Name)))
+	}
+	if component.Version != "" {
+		parts = append(parts, fmt.Sprintf("version `%s`", escapeMarkdown(component.Version)))
+	}
+	if component.Ref != "" && component.Ref != component.Version {
+		parts = append(parts, fmt.Sprintf("ref `%s`", escapeMarkdown(component.Ref)))
+	}
+	if component.Repo != "" {
+		parts = append(parts, fmt.Sprintf("repo `%s`", escapeMarkdown(component.Repo)))
+	}
+	if len(parts) == 0 {
+		return
+	}
+	sb.WriteString(fmt.Sprintf("**Component:** %s\n\n", strings.Join(parts, "; ")))
 }
 
 func renderComparison(sb *strings.Builder, comparison *Comparison) {
