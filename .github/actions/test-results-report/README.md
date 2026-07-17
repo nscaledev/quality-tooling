@@ -15,6 +15,7 @@ This action is additive. Existing users of `slack-test-notifications` can keep u
 - Sends Slack via incoming webhook
 - Optionally adds concise Claude failure analysis grouped by failure pattern, without repeating the raw test tables
 - Optionally enriches failures with related Loki logs fetched through Grafana MCP
+- Guides OpenStack-backed failure follow-up through the read-only `github-openstack-read-access` bot when provider state is needed
 - Fails open for Slack and Claude by default
 
 ## Basic Usage
@@ -141,6 +142,7 @@ This section is the operating contract for maintainers and coding agents changin
 
 - Parsed test results are the source of truth for totals, failed tests, skipped tests, durations, and action outputs.
 - Grafana data is supporting evidence only. It must not create failures, remove failures, or override the parsed test outcome.
+- OpenStack data is supporting evidence only. It must not create failures, remove failures, mutate provider resources, or override the parsed test outcome.
 - AI analysis is presentation and diagnosis only. It must not change counts, conclusions, comparison values, or Slack send status.
 - If AI is disabled or unavailable, the action must still render a deterministic test summary.
 
@@ -229,8 +231,8 @@ If any gate fails, the action continues without Grafana log context. Non-backend
 - GitHub summary should remain close to the existing production shape: totals, optional comparison, compact Grafana observations, then concise failure analysis.
 - Do not render raw Loki rows, LogQL, search terms, exact failure metadata, Grafana debug output, or query-bearing URLs in the GitHub-facing summary.
 - Grafana observations must stay compact: test, backend area, line count, components, and a neutral Grafana link when available.
-- Final Claude analysis must merge Grafana evidence into the normal pattern table or next-check bullets. It must not add a separate Grafana/Loki section.
-- Slack should remain short and actionable: grouped bullets plus one `Action` bullet. It should explicitly connect test error, AI interpretation, and Grafana signal only when Grafana evidence directly supports the failure or changes the next action.
+- Final Claude analysis must merge Grafana, CR, and OpenStack evidence into the normal pattern table or next-check bullets. It must not add separate Grafana/Loki, Kubernetes, or OpenStack sections.
+- Slack should remain short and actionable: grouped bullets plus one `Action` bullet. It should explicitly connect test error, AI interpretation, and Grafana, CR, or OpenStack signals only when that evidence directly supports the failure or changes the next action.
 - Slack should omit weak, time-disjoint, identifier-unmatched, or likely unrelated Grafana observations instead of explaining that they are probably unrelated.
 
 ### Fail-Open And Safety
@@ -331,6 +333,16 @@ Claude receives the failed test name, suite, location, error, captured output, e
 The reporter executes each planned query through Grafana MCP's `query_loki_logs` tool. The GitHub summary shows only compact Grafana observations: test, backend area, line count, matched components, and a neutral Grafana link when available. Raw log rows, LogQL, search terms, exact failure metadata, and query-bearing Explore URLs stay out of the GitHub summary. The final Claude analysis receives summarized Loki evidence, including concrete signal text when available, so it can connect the test error to the backend observation without making the report verbose. Internally, when `grafana-url` is provided, or when `grafana-app` lets the wrapper infer the Teleport public Grafana URL, the reporter can generate an Explore URL for the exact datasource, LogQL, and time range; Claude is instructed not to invent Grafana URLs. If Claude decides no backend lookup is justified, it returns an empty query list and the report continues without Grafana logs.
 
 For `nscale-ui` and other cross-component suites, the planner does not assume a single backend component. A single UI run can have unrelated failures caused by different backend components, such as Uni, identity, file storage, or console APIs. Claude chooses backend lookups per failure and may use a broad selector when the failure evidence does not identify one namespace or service. If `grafana-loki-datasource-uid` is omitted, the reporter uses Grafana MCP to discover the default or first Loki datasource, optionally filtered by `grafana-loki-datasource-name`.
+
+## OpenStack Follow-Up Diagnostics
+
+The final AI prompt is aware of OpenStack-backed failure modes seen in Uni API tests, such as Neutron quota failures, `IpAddressGenerationFailure`, `SubnetInUse`, external-network IP exhaustion, VLAN allocation exhaustion, and stale provider resources referenced by Unikorn CRs. When suite output, CR state, or Grafana logs point to provider-side state, Claude should either use supplied OpenStack observations as supporting evidence or call out a read-only OpenStack follow-up in the normal pattern table and Slack action.
+
+The `github-openstack-read-access` Teleport bot is the intended GitHub Actions identity for that follow-up path. That bot only grants Teleport app reachability to OpenStack endpoints; callers still need a separate read-only Keystone or application credential, for example from Vault, before any OpenStack CLI/API lookup can run. This action does not currently open an OpenStack tunnel or execute OpenStack CLI commands itself.
+
+OpenStack follow-up must remain read-only. Reports should not suggest provider-side cleanup, finalizer removal, quota changes, or resource mutation unless a human has separately verified provider state and chosen the cleanup path. If direct OpenStack evidence is not available, the report should phrase it as a next check, for example: use `github-openstack-read-access` to inspect Neutron ports, floating IPs, router gateway allocations, quotas, subnets, networks, or provider IDs for the affected resource.
+
+This mirrors the failure pattern from the July 2026 Uni region investigation: test-created Network, LoadBalancer, and FileStorage failures were downstream of OpenStack or allocator state, while the correct cleanup order still depended on CR state, finalizers, and provider-side verification.
 
 ## Previous Result Comparison
 
