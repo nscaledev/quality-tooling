@@ -202,6 +202,10 @@ inputs:
     description: 'Claude Code OAuth token. If omitted, CLAUDE_CODE_OAUTH_TOKEN is used.'
     required: false
     default: ''
+  claude-model:
+    description: 'Optional model override for analysis and both query planners. Leave empty to use the reporter default. Use a full model ID available to the Claude OAuth credential, not a floating alias.'
+    required: false
+    default: ''
   enable-grafana-log-enrichment:
     description: 'Fetch related Loki logs through Grafana MCP. With AI analysis enabled, Claude first plans backend-related LogQL queries from parsed failures, then the fetched logs are included in the final report.'
     required: false
@@ -701,6 +705,7 @@ runs:
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
         INPUT_ENABLE_AI_ANALYSIS: ${{ inputs.enable-ai-analysis }}
         INPUT_CLAUDE_TOKEN: ${{ inputs.claude-token }}
+        INPUT_CLAUDE_MODEL: ${{ inputs.claude-model }}
         INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT: ${{ inputs.enable-grafana-log-enrichment }}
         INPUT_GRAFANA_LOG_MAX_FAILURES: ${{ inputs.grafana-log-max-failures }}
         INPUT_GRAFANA_QUERY_PLAN_PATH: ${{ runner.temp }}/test-results-report-grafana-query-plan.json
@@ -839,6 +844,7 @@ runs:
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
         INPUT_ENABLE_AI_ANALYSIS: ${{ inputs.enable-ai-analysis }}
         INPUT_CLAUDE_TOKEN: ${{ inputs.claude-token }}
+        INPUT_CLAUDE_MODEL: ${{ inputs.claude-model }}
         INPUT_ENABLE_UNIKORN_CR_ENRICHMENT: ${{ inputs.enable-unikorn-cr-enrichment }}
         INPUT_UNIKORN_CR_MAX_FAILURES: ${{ inputs.unikorn-cr-max-failures }}
         INPUT_UNIKORN_CR_PLAN_PATH: ${{ runner.temp }}/test-results-report-unikorn-cr-plan.json
@@ -1321,6 +1327,7 @@ runs:
         INPUT_ENABLE_AI_ANALYSIS: ${{ inputs.enable-ai-analysis }}
         INPUT_AI_ANALYSIS_TIMEOUT_SECONDS: ${{ inputs.ai-analysis-timeout-seconds }}
         INPUT_CLAUDE_TOKEN: ${{ inputs.claude-token }}
+        INPUT_CLAUDE_MODEL: ${{ inputs.claude-model }}
         INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT: ${{ inputs.enable-grafana-log-enrichment }}
         INPUT_GRAFANA_URL: ${{ inputs.grafana-url }}
         INPUT_GRAFANA_MCP_ENDPOINT: ${{ inputs.grafana-mcp-endpoint }}

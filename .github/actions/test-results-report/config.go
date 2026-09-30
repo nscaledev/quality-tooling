@@ -41,6 +41,7 @@ type Config struct {
 	EnableAIAnalysis        bool
 	AIAnalysisTimeout       time.Duration
 	ClaudeToken             string
+	ClaudeModel             string
 	EnableGrafanaLogs       bool
 	GrafanaURL              string
 	GrafanaOrgID            string
@@ -78,6 +79,10 @@ type Config struct {
 	TestHistoryRetries      int
 	TestHistoryRetryDelay   time.Duration
 }
+
+// Pin a model ID, not a floating CLI alias. Callers can select another model
+// available to their CI credential without changing the reporter's CLI version.
+const defaultClaudeModel = "claude-sonnet-5"
 
 func loadConfig() Config {
 	return configFromEnv(envMapFromList(os.Environ()))
@@ -144,6 +149,7 @@ func configFromEnv(env map[string]string) Config {
 		EnableAIAnalysis:        parseBoolDefault(env["INPUT_ENABLE_AI_ANALYSIS"], false),
 		AIAnalysisTimeout:       time.Duration(parseIntDefault(env["INPUT_AI_ANALYSIS_TIMEOUT_SECONDS"], 300)) * time.Second,
 		ClaudeToken:             firstNonEmpty(env["INPUT_CLAUDE_TOKEN"], env["CLAUDE_CODE_OAUTH_TOKEN"]),
+		ClaudeModel:             firstNonEmpty(strings.TrimSpace(env["INPUT_CLAUDE_MODEL"]), defaultClaudeModel),
 		EnableGrafanaLogs:       parseBoolDefault(env["INPUT_ENABLE_GRAFANA_LOG_ENRICHMENT"], false),
 		GrafanaURL:              firstNonEmpty(env["INPUT_GRAFANA_URL"], env["GRAFANA_REPORT_URL"], env["GRAFANA_URL"]),
 		GrafanaOrgID:            firstNonEmpty(env["INPUT_GRAFANA_ORG_ID"], env["GRAFANA_ORG_ID"], "1"),

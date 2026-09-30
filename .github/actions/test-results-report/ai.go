@@ -143,8 +143,10 @@ func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysi
 	return parseUnikornCRQueryPlan(stdout)
 }
 
-func newClaudeCommand(ctx context.Context, token, prompt, input string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "npx", "--yes", claudeCodePackage, "-p", prompt)
+func newClaudeCommand(ctx context.Context, config Config, prompt, input string) *exec.Cmd {
+	// An explicit model takes precedence over CLI defaults and inherited model
+	// settings, so a CLI upgrade cannot silently choose a different model.
+	cmd := exec.CommandContext(ctx, "npx", "--yes", claudeCodePackage, "--model", config.ClaudeModel, "-p", prompt)
 	// On context cancellation, SIGTERM the whole process group instead of the
 	// default SIGKILL-the-leader: npx wraps the actual claude process, so
 	// signalling only the leader leaves the child running (holding the stdout
@@ -159,7 +161,7 @@ func newClaudeCommand(ctx context.Context, token, prompt, input string) *exec.Cm
 		return err
 	}
 	cmd.WaitDelay = claudeCommandWaitDelay
-	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+token)
+	cmd.Env = append(os.Environ(), "CLAUDE_CODE_OAUTH_TOKEN="+config.ClaudeToken)
 	cmd.Stdin = strings.NewReader(input)
 	return cmd
 }
