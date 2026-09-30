@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -56,7 +55,8 @@ type AIInputOptions struct {
 }
 
 const (
-	aiSlackDelimiter = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
+	aiSlackDelimiter  = "<<<TEST_RESULTS_REPORT_SLACK_SUMMARY_8E5B7AE7>>>"
+	claudeCodePackage = "@anthropic-ai/claude-code@2.1.285"
 	// Grace period between SIGTERM on context cancellation and the hard kill,
 	// giving the claude CLI a chance to flush stderr so timeouts are
 	// diagnosable from the logs.
@@ -89,26 +89,20 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := newClaudeCommand(ctx, config.ClaudeToken, claudePrompt(), renderAIInputWithOptions(analysis, AIInputOptions{
+	stdout, err := executeClaude(ctx, config, "run claude analysis", claudePrompt(), renderAIInputWithOptions(analysis, AIInputOptions{
 		MaxFailures: config.MaxFailures,
 		MaxSkips:    config.MaxSkips,
 	}))
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	start := time.Now()
-
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("run claude analysis: timed out after %s (raise ai-analysis-timeout-seconds): %w: %s", time.Since(start).Round(time.Second), err, strings.TrimSpace(stderr.String()))
-		}
-		return nil, fmt.Errorf("run claude analysis: %w: %s", err, strings.TrimSpace(stderr.String()))
+	if err != nil {
+		return nil, err
 	}
 
-	return parseAIAnalysis(stdout.String()), nil
+	parsed := parseAIAnalysis(stdout)
+	// Reject empty output before evidence enrichment can make it look complete.
+	if parsed.StepSummary == "" && parsed.SlackSummary == "" {
+		return nil, fmt.Errorf("run claude analysis: Claude exited successfully but returned no analysis content")
+	}
+	return parsed, nil
 }
 
 func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analysis Analysis) ([]GrafanaLogPlannedQuery, error) {
@@ -122,18 +116,12 @@ func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analys
 	ctx, cancel := context.WithTimeout(ctx, grafanaLogQueryPlanningTimeout)
 	defer cancel()
 
-	cmd := newClaudeCommand(ctx, config.ClaudeToken, grafanaLogQueryPlanningPrompt(), renderGrafanaLogQueryPlanningInput(analysis, config))
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("run claude grafana log query planning: %w: %s", err, strings.TrimSpace(stderr.String()))
+	stdout, err := executeClaude(ctx, config, "run claude grafana log query planning", grafanaLogQueryPlanningPrompt(), renderGrafanaLogQueryPlanningInput(analysis, config))
+	if err != nil {
+		return nil, err
 	}
 
-	return parseGrafanaLogQueryPlan(stdout.String())
+	return parseGrafanaLogQueryPlan(stdout)
 }
 
 func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysis Analysis) ([]UnikornCRPlannedQuery, error) {
@@ -147,22 +135,16 @@ func runClaudeUnikornCRQueryPlanning(ctx context.Context, config Config, analysi
 	ctx, cancel := context.WithTimeout(ctx, grafanaLogQueryPlanningTimeout)
 	defer cancel()
 
-	cmd := newClaudeCommand(ctx, config.ClaudeToken, unikornCRQueryPlanningPrompt(), renderUnikornCRQueryPlanningInput(analysis, config))
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("run claude unikorn CR query planning: %w: %s", err, strings.TrimSpace(stderr.String()))
+	stdout, err := executeClaude(ctx, config, "run claude unikorn CR query planning", unikornCRQueryPlanningPrompt(), renderUnikornCRQueryPlanningInput(analysis, config))
+	if err != nil {
+		return nil, err
 	}
 
-	return parseUnikornCRQueryPlan(stdout.String())
+	return parseUnikornCRQueryPlan(stdout)
 }
 
 func newClaudeCommand(ctx context.Context, token, prompt, input string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "npx", "--yes", "@anthropic-ai/claude-code", "-p", prompt)
+	cmd := exec.CommandContext(ctx, "npx", "--yes", claudeCodePackage, "-p", prompt)
 	// On context cancellation, SIGTERM the whole process group instead of the
 	// default SIGKILL-the-leader: npx wraps the actual claude process, so
 	// signalling only the leader leaves the child running (holding the stdout
