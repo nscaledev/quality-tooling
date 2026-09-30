@@ -48,6 +48,7 @@ Place this after the Allure report URL is known.
     slack-webhook-url: ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
     enable-ai-analysis: 'true'
     claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    claude-model: 'claude-sonnet-4-6'
 ```
 
 Pass `slack-webhook-url` and `claude-token` from GitHub secrets. The action masks both inputs before running the reporter, but callers should still avoid storing webhook URLs or Claude tokens in repository variables.
@@ -244,6 +245,20 @@ If any gate fails, the action continues without Grafana log context. Non-backend
 - Secrets such as Slack webhooks, Claude tokens, and Grafana service account tokens must be masked before shelling out.
 - Locally started `mcp-grafana` must use only datasource/Loki tools with writes disabled.
 
+### Claude Model Selection
+
+`claude-model` selects the model for final analysis, Grafana query planning, and Unikorn CR query planning. The default is the fixed model ID `claude-sonnet-4-6`; an omitted or blank input uses that default. Model selection is independent of the pinned Claude Code package. The shared command is:
+
+```text
+npx --yes @anthropic-ai/claude-code@2.1.285 --model <claude-model> -p <prompt>
+```
+
+Test context is supplied on stdin and the credential through `CLAUDE_CODE_OAUTH_TOKEN`. The reporter passes the model as a separate argument, so ambient `ANTHROPIC_MODEL` and ordinary CLI defaults do not select it. Use a full model ID rather than a floating alias such as `sonnet`. Organization restrictions still apply; setting the input does not grant model access.
+
+Each invocation logs the operation, pinned CLI package, and requested model, without the prompt or credential. Failures include this metadata alongside bounded, redacted CLI diagnostics. If Claude rejects a model, verify its availability to the workflow's OAuth credential and override `claude-model` with an approved model ID. The reporter does not retry with a different model or silently fall back. A model-access rejection is not fixed by increasing `ai-analysis-timeout-seconds`.
+
+Treat model and CLI upgrades as separate, reviewed changes. Before merging a new default or CLI version, run a failed-test artifact through GitHub Actions with the same OAuth credential and confirm completed AI analysis and meaningful output. When enrichment is enabled, confirm both query planners use the selected model as well. Mocked tests validate argument/configuration behavior, not account access. See [Claude Code model configuration](https://code.claude.com/docs/en/model-config) and [model availability](https://platform.claude.com/docs/en/models/overview).
+
 ### Agent Change Checklist
 
 When changing this action, update tests for the behavior being changed and run:
@@ -409,6 +424,7 @@ When enabled, the report includes:
 | `enable-ai-analysis` | No | `false` | Run Claude analysis |
 | `ai-analysis-timeout-seconds` | No | `300` | Claude failure-analysis timeout; on timeout the report is sent without the AI section |
 | `claude-token` | No | empty | Claude Code OAuth token |
+| `claude-model` | No | `claude-sonnet-4-6` | Explicit model ID for analysis and both query planners; must be available to the OAuth credential |
 | `enable-grafana-log-enrichment` | No | `false` | Fetch related logs through Grafana MCP |
 | `grafana-service-account-token` | No | empty | Grafana service account token used when this action starts `mcp-grafana` |
 | `grafana-app` | No | inferred from `environment` | Teleport Grafana app name used for the local tunnel |

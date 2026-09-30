@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,7 +25,11 @@ var (
 )
 
 func executeClaude(ctx context.Context, config Config, operation, prompt, input string) (string, error) {
-	cmd := newClaudeCommand(ctx, config.ClaudeToken, prompt, input)
+	cmd := newClaudeCommand(ctx, config, prompt, input)
+	// Model input is caller-controlled: use the same bounded redaction as CLI
+	// output so diagnostic metadata cannot leak credentials or inject log lines.
+	invocation := fmt.Sprintf("cli=%s; model=%s", claudeCodePackage, claudeDiagnostic(config.ClaudeModel, config))
+	fmt.Fprintf(os.Stderr, "Claude invocation: operation=%q; %s\n", operation, invocation)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -35,10 +40,10 @@ func executeClaude(ctx context.Context, config Config, operation, prompt, input 
 		diagnostic := fmt.Sprintf("stdout=%s; stderr=%s",
 			claudeDiagnostic(stdout.String(), config), claudeDiagnostic(stderr.String(), config))
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("%s: timed out after %s (%w): %w; %s", operation,
-				time.Since(started).Round(time.Millisecond), context.DeadlineExceeded, err, diagnostic)
+			return "", fmt.Errorf("%s: timed out after %s (%w): %w; %s; %s", operation,
+				time.Since(started).Round(time.Millisecond), context.DeadlineExceeded, err, invocation, diagnostic)
 		}
-		return "", fmt.Errorf("%s: %w; %s", operation, err, diagnostic)
+		return "", fmt.Errorf("%s: %w; %s; %s", operation, err, invocation, diagnostic)
 	}
 	return stdout.String(), nil
 }
