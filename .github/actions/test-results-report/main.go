@@ -88,8 +88,19 @@ func run(ctx context.Context, config Config) error {
 
 	stageStarted = time.Now()
 	aiAnalysis, err := runAIAnalysis(ctx, config, analysis)
+	aiStatus := AIAnalysisCompleted
+	switch {
+	case !config.EnableAIAnalysis:
+		aiStatus = AIAnalysisDisabled
+	case err != nil:
+		aiStatus = AIAnalysisFailed
+	case aiAnalysis == nil:
+		aiStatus = AIAnalysisSkipped
+	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: AI failure analysis skipped: %v\n", err)
+		// CLI output can contain newlines and workflow-command syntax. Escape it
+		// so a failed optional analysis emits exactly one warning annotation.
+		fmt.Fprintf(os.Stderr, "::warning title=AI failure analysis failed::%s\n", workflowCommandEscape(err.Error()))
 	}
 	aiAnalysis = ensureAIAnalysisEvidenceSignals(aiAnalysis, analysis)
 	logReportTiming("ai-failure-analysis", stageStarted)
@@ -97,15 +108,16 @@ func run(ctx context.Context, config Config) error {
 	if config.WriteStepSummary {
 		stageStarted = time.Now()
 		summary := renderStepSummary(analysis, RenderOptions{
-			Title:           config.Title,
-			Environment:     config.Environment,
-			WorkflowURL:     config.WorkflowURL,
-			ReportURL:       config.ReportURL,
-			Component:       component,
-			MaxFailures:     config.MaxFailures,
-			MaxSkips:        config.MaxSkips,
-			IncludeSkips:    config.IncludeSkips,
-			OmitTestDetails: aiAnalysis != nil && aiAnalysis.StepSummary != "",
+			Title:            config.Title,
+			Environment:      config.Environment,
+			WorkflowURL:      config.WorkflowURL,
+			ReportURL:        config.ReportURL,
+			Component:        component,
+			MaxFailures:      config.MaxFailures,
+			MaxSkips:         config.MaxSkips,
+			IncludeSkips:     config.IncludeSkips,
+			OmitTestDetails:  aiAnalysis != nil && aiAnalysis.StepSummary != "",
+			AIAnalysisStatus: aiStatus,
 		})
 		if aiAnalysis != nil && aiAnalysis.StepSummary != "" {
 			summary += "\n" + aiAnalysis.StepSummary + "\n"

@@ -52,7 +52,7 @@ Place this after the Allure report URL is known.
 
 Pass `slack-webhook-url` and `claude-token` from GitHub secrets. The action masks both inputs before running the reporter, but callers should still avoid storing webhook URLs or Claude tokens in repository variables.
 
-AI analysis shells out through `npx @anthropic-ai/claude-code`, so the runner must have Node.js/npm available.
+AI analysis shells out through `npx @anthropic-ai/claude-code@2.1.285`, so the runner must have Node.js/npm available. The CLI version is pinned in `ai.go` for reproducible runs.
 
 ## Uni Component Version Metadata
 
@@ -237,6 +237,8 @@ If any gate fails, the action continues without Grafana log context. Non-backend
 
 - Slack sending is fail-open unless `fail-on-slack-error` is true.
 - AI failure analysis errors are warnings, not action failures.
+- The GitHub summary shows whether AI analysis completed, failed, was disabled, or was skipped because there were no failed or skipped tests. An AI failure preserves the normal test report and emits a warning annotation with bounded, credential-redacted stdout and stderr in the reporting-step logs.
+- AI analysis keeps the default 300-second timeout. Timeout diagnostics are distinct from CLI exit failures; increase `ai-analysis-timeout-seconds` only when diagnostics show the analysis exhausted that budget.
 - Grafana planning, Teleport tunnel setup, MCP startup, datasource discovery, and Loki query errors are warnings from the report perspective.
 - Required input validation and current result parsing errors are real action errors.
 - Secrets such as Slack webhooks, Claude tokens, and Grafana service account tokens must be masked before shelling out.

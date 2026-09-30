@@ -9,16 +9,26 @@ import (
 )
 
 type RenderOptions struct {
-	Title           string
-	Environment     string
-	WorkflowURL     string
-	ReportURL       string
-	Component       ComponentMetadata
-	MaxFailures     int
-	MaxSkips        int
-	IncludeSkips    bool
-	OmitTestDetails bool
+	Title            string
+	Environment      string
+	WorkflowURL      string
+	ReportURL        string
+	Component        ComponentMetadata
+	MaxFailures      int
+	MaxSkips         int
+	IncludeSkips     bool
+	OmitTestDetails  bool
+	AIAnalysisStatus AIAnalysisStatus
 }
+
+type AIAnalysisStatus string
+
+const (
+	AIAnalysisCompleted AIAnalysisStatus = "completed"
+	AIAnalysisFailed    AIAnalysisStatus = "failed"
+	AIAnalysisDisabled  AIAnalysisStatus = "disabled"
+	AIAnalysisSkipped   AIAnalysisStatus = "skipped (no failed or skipped tests)"
+)
 
 func renderStepSummary(analysis Analysis, options RenderOptions) string {
 	options = normalizeRenderOptions(options)
@@ -29,6 +39,12 @@ func renderStepSummary(analysis Analysis, options RenderOptions) string {
 		sb.WriteString(fmt.Sprintf("**Environment:** `%s`\n\n", escapeMarkdown(options.Environment)))
 	}
 	renderComponentMetadata(&sb, options.Component)
+	if options.AIAnalysisStatus != "" {
+		sb.WriteString(fmt.Sprintf("**AI analysis:** %s.\n\n", options.AIAnalysisStatus))
+		if options.AIAnalysisStatus == AIAnalysisFailed {
+			sb.WriteString("The normal test report is preserved. See the AI failure analysis warning in the reporting-step logs for diagnostics.\n\n")
+		}
+	}
 
 	sb.WriteString("| Total | Passed | Failed | Skipped | Duration |\n")
 	sb.WriteString("| ---: | ---: | ---: | ---: | ---: |\n")
