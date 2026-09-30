@@ -97,7 +97,12 @@ func runClaudeAnalysis(ctx context.Context, config Config, analysis Analysis) (*
 		return nil, err
 	}
 
-	return parseAIAnalysis(stdout), nil
+	parsed := parseAIAnalysis(stdout)
+	// Reject empty output before evidence enrichment can make it look complete.
+	if parsed.StepSummary == "" && parsed.SlackSummary == "" {
+		return nil, fmt.Errorf("run claude analysis: Claude exited successfully but returned no analysis content")
+	}
+	return parsed, nil
 }
 
 func runClaudeGrafanaLogQueryPlanning(ctx context.Context, config Config, analysis Analysis) ([]GrafanaLogPlannedQuery, error) {
