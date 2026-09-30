@@ -82,7 +82,7 @@ type Config struct {
 
 // Pin a model ID, not a floating CLI alias. Callers can select another model
 // available to their CI credential without changing the reporter's CLI version.
-const defaultClaudeModel = "claude-sonnet-4-6"
+const defaultClaudeModel = "claude-sonnet-5"
 
 func loadConfig() Config {
 	return configFromEnv(envMapFromList(os.Environ()))

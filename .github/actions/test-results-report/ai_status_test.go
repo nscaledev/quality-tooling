@@ -13,7 +13,7 @@ func TestClaudeCommandUsesPinnedPackage(t *testing.T) {
 	// Every Claude operation uses the reviewed CLI and an explicit model argument.
 	config := configFromEnv(map[string]string{"INPUT_CLAUDE_TOKEN": "test-token"})
 	cmd := newClaudeCommand(context.Background(), config, "test prompt", "test input")
-	want := []string{"npx", "--yes", "@anthropic-ai/claude-code@2.1.285", "--model", "claude-sonnet-4-6", "-p", "test prompt"}
+	want := []string{"npx", "--yes", "@anthropic-ai/claude-code@2.1.285", "--model", defaultClaudeModel, "-p", "test prompt"}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Fatalf("Claude command arguments = %q, want %q", cmd.Args, want)
 	}
