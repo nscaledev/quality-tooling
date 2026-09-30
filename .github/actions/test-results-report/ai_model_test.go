@@ -16,11 +16,11 @@ func TestClaudeModelConfiguration(t *testing.T) {
 	for _, scenario := range []struct {
 		name, input, ambient, want string
 	}{
-		{name: "default", want: "claude-sonnet-4-6"},
-		{name: "blank input", input: " \t\n", want: "claude-sonnet-4-6"},
+		{name: "default", want: defaultClaudeModel},
+		{name: "blank input", input: " \t\n", want: defaultClaudeModel},
 		{name: "explicit input", input: "claude-custom-model", want: "claude-custom-model"},
 		{name: "trimmed input", input: " \tclaude-custom-model\n", want: "claude-custom-model"},
-		{name: "ambient ignored", ambient: "claude-unavailable-model", want: "claude-sonnet-4-6"},
+		{name: "ambient ignored", ambient: "claude-unavailable-model", want: defaultClaudeModel},
 		{name: "explicit overrides ambient", input: "claude-custom-model", ambient: "claude-unavailable-model", want: "claude-custom-model"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -39,7 +39,7 @@ func TestClaudeModelConfiguration(t *testing.T) {
 // when the process inherits a conflicting model setting.
 func TestClaudeOperationsPassConfiguredModel(t *testing.T) {
 	for _, scenario := range []struct{ name, input, want string }{
-		{name: "default", want: "claude-sonnet-4-6"},
+		{name: "default", want: defaultClaudeModel},
 		{name: "override", input: "claude-custom-model", want: "claude-custom-model"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -182,8 +182,8 @@ func TestClaudeModelMetadataIsCredentialSafe(t *testing.T) {
 func TestActionWiresClaudeModelForEveryOperation(t *testing.T) {
 	action := readPlainTestFile(t, "action.yml")
 	inputBlock := regexp.MustCompile(`(?m)^  claude-model:\n(?:    .*\n)+`).FindString(action)
-	if !strings.Contains(inputBlock, "    default: 'claude-sonnet-4-6'") {
-		t.Fatalf("claude-model input must default to the fixed model: %s", inputBlock)
+	if !strings.Contains(inputBlock, "    default: ''") {
+		t.Fatalf("claude-model input must defer to the reporter default: %s", inputBlock)
 	}
 	for _, step := range []string{"Plan Grafana MCP queries", "Plan Unikorn CR queries", "Generate Test Results Report"} {
 		start := strings.Index(action, "    - name: "+step+"\n")

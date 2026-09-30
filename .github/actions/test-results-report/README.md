@@ -48,7 +48,7 @@ Place this after the Allure report URL is known.
     slack-webhook-url: ${{ secrets.E2E_SLACK_WEBHOOK_URL }}
     enable-ai-analysis: 'true'
     claude-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-    claude-model: 'claude-sonnet-4-6'
+    claude-model: 'your-approved-model-id' # Optional override
 ```
 
 Pass `slack-webhook-url` and `claude-token` from GitHub secrets. The action masks both inputs before running the reporter, but callers should still avoid storing webhook URLs or Claude tokens in repository variables.
@@ -247,7 +247,7 @@ If any gate fails, the action continues without Grafana log context. Non-backend
 
 ### Claude Model Selection
 
-`claude-model` selects the model for final analysis, Grafana query planning, and Unikorn CR query planning. The default is the fixed model ID `claude-sonnet-4-6`; an omitted or blank input uses that default. Model selection is independent of the pinned Claude Code package. The shared command is:
+`claude-model` selects the model for final analysis, Grafana query planning, and Unikorn CR query planning. An omitted or blank input uses the reporter's [pinned default](config.go); set the input only to override it. Model selection is independent of the pinned Claude Code package. The shared command is:
 
 ```text
 npx --yes @anthropic-ai/claude-code@2.1.285 --model <claude-model> -p <prompt>
@@ -424,7 +424,7 @@ When enabled, the report includes:
 | `enable-ai-analysis` | No | `false` | Run Claude analysis |
 | `ai-analysis-timeout-seconds` | No | `300` | Claude failure-analysis timeout; on timeout the report is sent without the AI section |
 | `claude-token` | No | empty | Claude Code OAuth token |
-| `claude-model` | No | `claude-sonnet-4-6` | Explicit model ID for analysis and both query planners; must be available to the OAuth credential |
+| `claude-model` | No | reporter default | Optional model override for analysis and both query planners; must be available to the OAuth credential |
 | `enable-grafana-log-enrichment` | No | `false` | Fetch related logs through Grafana MCP |
 | `grafana-service-account-token` | No | empty | Grafana service account token used when this action starts `mcp-grafana` |
 | `grafana-app` | No | inferred from `environment` | Teleport Grafana app name used for the local tunnel |

@@ -203,9 +203,9 @@ inputs:
     required: false
     default: ''
   claude-model:
-    description: 'Explicit model for analysis and both query planners. Use a full model ID available to the Claude OAuth credential, not a floating alias.'
+    description: 'Optional model override for analysis and both query planners. Leave empty to use the reporter default. Use a full model ID available to the Claude OAuth credential, not a floating alias.'
     required: false
-    default: 'claude-sonnet-4-6'
+    default: ''
   enable-grafana-log-enrichment:
     description: 'Fetch related Loki logs through Grafana MCP. With AI analysis enabled, Claude first plans backend-related LogQL queries from parsed failures, then the fetched logs are included in the final report.'
     required: false
