@@ -66,6 +66,28 @@ func TestParseJUnitReport(t *testing.T) {
 	}
 }
 
+func TestParseJUnitUsesSuiteTimeForParallelPytestRun(t *testing.T) {
+	t.Parallel()
+
+	// pytest-xdist with two workers: the suite's elapsed time is less than the sum of its tests.
+	input := []byte(`<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest tests">
+  <testsuite name="pytest" tests="2" failures="0" skipped="0" time="60.0">
+    <testcase classname="test_lifecycle" name="test_lifecycle" time="50.0"/>
+    <testcase classname="test_swap" name="test_swap" time="55.0"/>
+  </testsuite>
+</testsuites>`)
+
+	run, err := parseJUnit(input)
+	if err != nil {
+		t.Fatalf("parseJUnit returned error: %v", err)
+	}
+
+	if run.Duration != 60*time.Second {
+		t.Fatalf("run duration = %s, want the suite's elapsed 1m0s", run.Duration)
+	}
+}
+
 func TestParsePlaywrightJSONReport(t *testing.T) {
 	t.Parallel()
 

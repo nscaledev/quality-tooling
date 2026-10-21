@@ -75,6 +75,12 @@ func parseJUnit(data []byte) (TestRun, error) {
 		for _, suite := range root.Suites {
 			collectJUnitSuite(suite, nil, &run.Tests)
 		}
+		// Suite time is elapsed time; summing test cases overcounts parallel runs.
+		if run.Duration == 0 {
+			for _, suite := range root.Suites {
+				run.Duration += parseSecondsDuration(suite.Time)
+			}
+		}
 	case "testsuite":
 		suite := junitSuite{
 			Name:   root.Name,
