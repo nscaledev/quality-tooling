@@ -75,11 +75,8 @@ func parseJUnit(data []byte) (TestRun, error) {
 		for _, suite := range root.Suites {
 			collectJUnitSuite(suite, nil, &run.Tests)
 		}
-		// Suite time is elapsed time; summing test cases overcounts parallel runs.
 		if run.Duration == 0 {
-			for _, suite := range root.Suites {
-				run.Duration += parseSecondsDuration(suite.Time)
-			}
+			run.Duration = suitesDuration(root.Suites)
 		}
 	case "testsuite":
 		suite := junitSuite{
@@ -447,6 +444,20 @@ func formatJUnitFailure(failure junitFailure) string {
 func hasLocation(value string) bool {
 	file, _ := extractLocation(value)
 	return file != ""
+}
+
+// suitesDuration sums suite times, which are elapsed time, so parallel runs aren't
+// overcounted. It returns 0 if any suite lacks a time, leaving the test-case fallback.
+func suitesDuration(suites []junitSuite) time.Duration {
+	var total time.Duration
+	for _, suite := range suites {
+		seconds, err := strconv.ParseFloat(suite.Time, 64)
+		if err != nil {
+			return 0
+		}
+		total += time.Duration(seconds * float64(time.Second))
+	}
+	return total
 }
 
 func parseSecondsDuration(value string) time.Duration {

@@ -88,6 +88,29 @@ func TestParseJUnitUsesSuiteTimeForParallelPytestRun(t *testing.T) {
 	}
 }
 
+func TestParseJUnitFallsBackToTestTimesWhenASuiteHasNoTime(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="mixed">
+  <testsuite name="timed" tests="1" time="10.0">
+    <testcase classname="timed" name="first" time="10.0"/>
+  </testsuite>
+  <testsuite name="untimed" tests="1">
+    <testcase classname="untimed" name="second" time="20.0"/>
+  </testsuite>
+</testsuites>`)
+
+	run, err := parseJUnit(input)
+	if err != nil {
+		t.Fatalf("parseJUnit returned error: %v", err)
+	}
+
+	if run.Duration != 30*time.Second {
+		t.Fatalf("run duration = %s, want both suites' tests 30s", run.Duration)
+	}
+}
+
 func TestParsePlaywrightJSONReport(t *testing.T) {
 	t.Parallel()
 
