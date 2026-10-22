@@ -624,7 +624,9 @@ func runGrafanaLogQueryJobs(ctx context.Context, client *mcpHTTPClient, datasour
 
 			logGrafanaQueryStart(index, len(jobs), job)
 			context := queryGrafanaLogs(ctx, client, datasourceUID, job.LogQL, start, end, config.GrafanaLogLimit, job.Test, job.Label, job.Reason)
-			attachGrafanaLogQueryMetadata(&context, job, grafanaExploreURL(config.GrafanaURL, config.GrafanaOrgID, datasourceUID, job.LogQL, start, end))
+			strongTerms := filterGrafanaLogContextByStrongSearchTerms(&context, job)
+			exploreLogQL := grafanaExploreLogQL(job.LogQL, strongTerms)
+			attachGrafanaLogQueryMetadata(&context, job, grafanaExploreURL(config.GrafanaURL, config.GrafanaOrgID, datasourceUID, exploreLogQL, start, end))
 			logGrafanaQueryFinish(index, len(jobs), context)
 			contexts[index] = context
 		}()
@@ -680,6 +682,8 @@ func grafanaQueryFinishLogMessage(context GrafanaLogContext) string {
 		status = "succeeded; Loki returned no matching log lines"
 	} else if usableLineCount == 0 && context.FilteredLineCount > 0 {
 		status = "succeeded; Loki returned only Grafana/MCP self-observability lines"
+	} else if usableLineCount == 0 {
+		status = "succeeded; Loki returned no usable log lines after filtering"
 	} else {
 		status = "succeeded; Loki returned usable log lines"
 	}
@@ -823,6 +827,175 @@ func queryGrafanaLogs(ctx context.Context, client *mcpHTTPClient, datasourceUID,
 	}
 	context.LineCount = len(context.Entries)
 	return context
+}
+
+func filterGrafanaLogContextByStrongSearchTerms(context *GrafanaLogContext, job grafanaLogQueryJob) []string {
+	strongTerms := grafanaStrongSearchTerms(job)
+	if context.Error != "" || len(context.Entries) == 0 {
+		return strongTerms
+	}
+
+	if len(strongTerms) == 0 {
+		return strongTerms
+	}
+
+	filtered := context.Entries[:0]
+	for _, entry := range context.Entries {
+		if grafanaLogEntryContainsAnyTerm(entry, strongTerms) {
+			filtered = append(filtered, entry)
+		}
+	}
+	context.Entries = filtered
+	context.LineCount = len(context.Entries)
+	return strongTerms
+}
+
+func grafanaExploreLogQL(original string, strongTerms []string) string {
+	original = strings.TrimSpace(original)
+	if original == "" || len(strongTerms) == 0 {
+		return original
+	}
+
+	terms := make([]string, 0, len(strongTerms))
+	for _, term := range strongTerms {
+		term = strings.TrimSpace(term)
+		if term == "" {
+			continue
+		}
+		terms = append(terms, regexp.QuoteMeta(term))
+	}
+	if len(terms) == 0 {
+		return original
+	}
+	return grafanaLogQLSelector(original) + ` |~ "(?i)(` + strings.Join(terms, "|") + `)"`
+}
+
+func grafanaLogQLSelector(logql string) string {
+	logql = strings.TrimSpace(logql)
+	if !strings.HasPrefix(logql, "{") {
+		return `{namespace=~".+"}`
+	}
+	for index, char := range logql {
+		if char == '}' {
+			return strings.TrimSpace(logql[:index+1])
+		}
+	}
+	return `{namespace=~".+"}`
+}
+
+func grafanaStrongSearchTerms(job grafanaLogQueryJob) []string {
+	evidence := grafanaFailureEvidenceForSearchTerms(job)
+	seen := map[string]bool{}
+	var terms []string
+	for _, term := range job.SearchTerms {
+		term = strings.TrimSpace(term)
+		if !isStrongGrafanaSearchTerm(term, evidence) {
+			continue
+		}
+		key := strings.ToLower(term)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		terms = append(terms, term)
+	}
+	return terms
+}
+
+func grafanaFailureEvidenceForSearchTerms(job grafanaLogQueryJob) string {
+	fields := []string{job.ExpectedError}
+	if job.Test != nil {
+		fields = append(fields, job.Test.Message, job.Test.Output)
+	}
+	return strings.ToLower(strings.Join(fields, "\n"))
+}
+
+func isStrongGrafanaSearchTerm(term string, lowerEvidence string) bool {
+	term = strings.TrimSpace(term)
+	if term == "" || isGenericGrafanaSearchTerm(term) || isScopeOnlyGrafanaSearchTerm(term, lowerEvidence) {
+		return false
+	}
+	if !strings.Contains(lowerEvidence, strings.ToLower(term)) {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(term), "/api/") && grafanaSearchTermContainsUUID(term) {
+		return true
+	}
+	if regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(term) {
+		return true
+	}
+	if regexp.MustCompile(`(?i)^[0-9a-f]{16,32}$`).MatchString(term) {
+		return true
+	}
+	return len(term) >= 8 &&
+		regexp.MustCompile(`[0-9]`).MatchString(term) &&
+		strings.ContainsAny(term, "-_./")
+}
+
+func isGenericGrafanaSearchTerm(term string) bool {
+	lower := strings.ToLower(strings.Trim(term, ` "'`))
+	if lower == "" {
+		return true
+	}
+	if strings.HasPrefix(lower, "/api/") && !grafanaSearchTermContainsUUID(lower) {
+		return true
+	}
+	if regexp.MustCompile(`^[45][0-9]{2}$`).MatchString(lower) {
+		return true
+	}
+	switch lower {
+	case "error", "failed", "failure", "timeout", "provisioned", "provisioning", "network", "networks", "instance", "instances":
+		return true
+	default:
+		return false
+	}
+}
+
+func isScopeOnlyGrafanaSearchTerm(term string, lowerEvidence string) bool {
+	lowerTerm := strings.ToLower(strings.TrimSpace(term))
+	if lowerTerm == "" || lowerEvidence == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"organizationid=" + lowerTerm,
+		"organization_id=" + lowerTerm,
+		"organization-id=" + lowerTerm,
+		"/organizations/" + lowerTerm,
+		"projectid=" + lowerTerm,
+		"project_id=" + lowerTerm,
+		"project-id=" + lowerTerm,
+		"/projects/" + lowerTerm,
+		"regionid=" + lowerTerm,
+		"region_id=" + lowerTerm,
+		"region-id=" + lowerTerm,
+		"." + lowerTerm + ".",
+	} {
+		if strings.Contains(lowerEvidence, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func grafanaSearchTermContainsUUID(term string) bool {
+	return regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`).MatchString(term)
+}
+
+func grafanaLogEntryContainsAnyTerm(entry GrafanaLogEntry, terms []string) bool {
+	var fields []string
+	fields = append(fields, entry.Line)
+	for _, values := range []map[string]string{entry.Labels, entry.StructuredMetadata, entry.Parsed} {
+		for _, value := range values {
+			fields = append(fields, value)
+		}
+	}
+	text := strings.ToLower(strings.Join(fields, "\n"))
+	for _, term := range terms {
+		if strings.Contains(text, strings.ToLower(term)) {
+			return true
+		}
+	}
+	return false
 }
 
 func isGrafanaSelfObservabilityLog(entry GrafanaLogEntry) bool {
