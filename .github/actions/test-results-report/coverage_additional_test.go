@@ -201,6 +201,8 @@ func TestAIPlanningInputAndExtractionBranches(t *testing.T) {
 		"provisioningStatus mismatches",
 		"Resource UUIDs",
 		"Cloud resource identifiers",
+		"OpenStack provider errors from Neutron, Nova, Cinder, or Keystone",
+		"IpAddressGenerationFailure, SubnetInUse, No more IP addresses available, or vlan ids exhausted",
 	} {
 		if !strings.Contains(planningPrompt, expected) {
 			t.Fatalf("planning prompt missing backend signal %q:\n%s", expected, planningPrompt)

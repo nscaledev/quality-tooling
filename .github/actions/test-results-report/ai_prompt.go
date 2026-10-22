@@ -12,13 +12,14 @@ Evidence priority:
 1. Suite report evidence (JUnit/XML/JSON): status, failure message, output, suite, timestamps, resource identifiers.
 2. Matching Kubernetes/Unikorn CR evidence for the same resource and time window.
 3. Matching Grafana observations for the same resource and time window.
-4. Other correlated environmental observations.
+4. Matching read-only OpenStack provider observations for the same resource and time window, when supplied.
+5. Other correlated environmental observations.
 
 Prefer higher-priority evidence whenever it sufficiently explains a failure. Do not override suite-report evidence with lower-priority observations.
 
 Confidence guidance:
 
-- High confidence: suite report evidence plus matching CR or Grafana evidence.
+- High confidence: suite report evidence plus matching CR, Grafana, or OpenStack provider evidence.
 - Medium confidence: suite report evidence alone clearly explains the failure.
 - Low confidence: incomplete, conflicting, missing, or weakly correlated evidence.
 - Reflect confidence through wording but do not add a confidence column.
@@ -116,15 +117,17 @@ Failure interpretation requirements:
 - When file/line locations point to test files in the checked-out repository, inspect nearby test code and fixtures for dependency context, such as setup resources, helper-created networks, parent resources, or lifecycle prerequisites.
 - Use test code context only to understand relationships between resources; do not invent resource IDs, backend components, or root causes from source code alone.
 - Do not quote source code or add raw source snippets to the report.
-- Use Grafana observations and CR observations only as supporting evidence inside existing pattern rows or next-check bullets.
-- Combine suite evidence, Grafana observations, and CR observations into a single interpretation.
+- Use Grafana observations, CR observations, and OpenStack observations only as supporting evidence inside existing pattern rows or next-check bullets.
+- Combine suite evidence, Grafana observations, CR observations, and OpenStack observations into a single interpretation.
 - Keep environment, region, resource ID, and evidence signals scoped to the matching failure and time window.
 - When grouped failures have different concrete Grafana or CR signals, split the row or explicitly qualify each signal by environment/resource.
 - Do not carry VLAN IDs, physical networks, controller errors, or CR states from one failure, resource, region, or environment to another.
 - Do not add a separate Grafana section.
 - Do not add a separate Kubernetes section.
+- Do not add a separate OpenStack section.
 - Do not produce separate Grafana sections.
 - Do not produce separate Kubernetes sections.
+- Do not produce separate OpenStack sections.
 - Do not produce source-by-source analysis.
 
 Grafana evidence rules:
@@ -159,6 +162,20 @@ CR evidence rules:
   - CR query failed with forbidden.
 - Do not overstate certainty when CR lookup returned no objects, CR fields are missing, matches are weak, query results are incomplete, or queries failed.
 - If CR evidence is weak or non-actionable, omit it.
+
+OpenStack evidence and follow-up rules:
+
+- Use OpenStack provider observations only when directly relevant, read-only, and concrete.
+- Mention OpenStack only when it supports the failure interpretation or changes the next action.
+- If direct OpenStack evidence is not supplied but suite, Grafana, or CR evidence points to provider state, make it a next check rather than claiming the provider state was verified.
+- For provider follow-up, name the read-only github-openstack-read-access Teleport bot only when OpenStack API state is needed to confirm Neutron, Nova, Cinder, Keystone, quota, subnet, router, port, floating IP, or allocation-pool state.
+- Do not suggest writes, cleanup, finalizer removal, quota changes, or OpenStack mutations from this report. Keep OpenStack follow-up read-only.
+- Examples:
+  - OpenStack/Neutron showed IpAddressGenerationFailure on the external network.
+  - OpenStack/Neutron showed SubnetInUse for the subnet backing a stuck Network CR.
+  - OpenStack quota or API evidence showed network allocation would exceed quota.
+  - OpenStack provider lookup is needed to identify router gateway ports, floating IPs, or hidden allocations.
+- Do not overstate certainty when OpenStack evidence is unavailable, incomplete, credential-limited, or weakly matched.
 
 The pattern table must clearly communicate:
 
@@ -197,10 +214,12 @@ Do not include:
 - Raw logs.
 - Raw CR YAML.
 - Raw CR JSON.
+- Raw OpenStack command output.
 - Grafana URLs.
 - LogQL.
 - Search terms.
 - kubectl commands.
+- OpenStack CLI commands.
 - Resource dumps.
 - Full lists of tests.
 
@@ -261,6 +280,11 @@ CR-backed bullets:
 - Include CR observations only when they directly support the failure interpretation or change the next action.
 - Explicitly connect the test error, interpretation, and CR signal in the same bullet.
 
+OpenStack-backed bullets:
+
+- Include OpenStack observations only when they directly support the failure interpretation or change the next action.
+- If OpenStack lookup is only a required follow-up, phrase it as a next check using the read-only github-openstack-read-access bot; do not imply the lookup already ran.
+
 Do not:
 
 - Do not use vague phrases like "Grafana returned related activity".
@@ -273,6 +297,8 @@ Do not:
 - Do not mention CR merely to say it looked related.
 - Do not mention vague CR state observations.
 - Do not mention weak CR matches without a concrete signal.
+- Do not mention OpenStack merely to say provider evidence was unavailable, weak, credential-limited, or not checked.
+- Do not suggest OpenStack writes, cleanup, quota changes, or finalizer removal in Slack.
 
 Cleanup-only Grafana handling:
 
@@ -332,6 +358,7 @@ Use this shape:
 - *Auth / all suites* (configuration): 23 setup-dependent tests failed with HTTP 401 before product assertions; the likely reason is an expired or invalid API token.
 - *File Storage input validation* (skipped): 1 test is intentionally skipped for known bug INST-457; re-enable it once the bug is fixed.
 - *File Storage attachment network* (infra/external): The test failed because network provisioning reached error instead of provisioned; Grafana showed vlan ids exhausted for the same resource during the test window, so inspect network capacity before rerunning.
+- *Network provisioning* (infra/external): Network creation failed with an OpenStack-backed quota or Neutron allocation signal; use read-only OpenStack diagnostics through github-openstack-read-access to confirm provider capacity before rerunning.
 - *Action:* Use the GitHub build summary for detailed test-level failure reasons, then validate credentials and rerun one focused smoke suite.`, aiSlackDelimiter)
 }
 
@@ -391,6 +418,9 @@ Backend evidence includes:
 - state mismatches
 - Infrastructure error states
 - Cloud resource identifiers
+- OpenStack provider errors from Neutron, Nova, Cinder, or Keystone
+- OpenStack quota, subnet, router, port, floating IP, VLAN, or allocation-pool identifiers
+- Provider-side allocation errors such as IpAddressGenerationFailure, SubnetInUse, No more IP addresses available, or vlan ids exhausted
 - Dependent resource identifiers from API output or status fields, such as status.networkId for a load balancer
 - Explicit service or component failures
 - Timeout failures involving provisioning, orchestration, or backend APIs
@@ -426,6 +456,9 @@ Examples:
 - compute
 - billing
 - cluster-lifecycle
+- openstack-networking
+- openstack-compute
+- openstack-storage
 
 If the evidence does not support a component assignment, use:
 
@@ -468,6 +501,7 @@ Dependency-aware lookup rules:
 - For provisioning failures, include dependency IDs copied from captured output when they are part of the failed resource state.
 - For load balancer provisioning timeouts, prefer a query that can see both the load balancer UUID and any status.networkId or POST /networks UUID from the same failure evidence.
 - If the failed resource is waiting on a dependency, the useful backend error may be in the dependency controller logs, not only in the failed resource controller logs.
+- For OpenStack-backed provisioning failures, prefer queries that can find controller logs containing Neutron, Nova, Cinder, Keystone, quota, subnet, router, floating IP, VLAN, or allocation-pool errors copied from the failure evidence.
 - If local test code is available, inspect the referenced test and fixture helpers to understand dependency setup, for example whether a load balancer test creates a network first.
 - Do not invent dependency IDs or component names; use only dependency identifiers present in the failure evidence or failure keyword regex.
 
@@ -573,8 +607,11 @@ Unikorn/Kubernetes resource lifecycle signals include:
 - Instance resource names
 - File storage resource names
 - Kubernetes cluster resource names
+- Provider-backed OpenStack CR names or IDs when the failure evidence references OpenStack network, subnet, server, security group, identity, quota, VLAN, or allocation state
 
 For load balancer provisioning failures, do not request loadbalancers.region.unikorn-cloud.org. If the failure evidence includes dependency IDs such as status.networkId or POST /networks UUIDs, CR lookups for dependency resources such as networks.region.unikorn-cloud.org or vlanallocations.region.unikorn-cloud.org are allowed when they materially improve the analysis.
+
+For OpenStack-backed allocation or quota failures, prefer the Unikorn CR that owns or records the provider-side state. Use CR state to identify provider IDs and lifecycle status, then leave direct provider verification to read-only OpenStack diagnostics through the github-openstack-read-access bot when needed.
 
 Do not create CR lookups for:
 
@@ -627,6 +664,9 @@ Examples supported by the github-unikorn-cr-reader bot include:
 - objectstorageendpoints.storage.unikorn-cloud.org
 - projects.identity.unikorn-cloud.org
 - kubernetesclusters.unikorn-cloud.org
+- openstacknetworks.region.unikorn-cloud.org
+- openstacksecuritygroups.region.unikorn-cloud.org
+- openstackservers.region.unikorn-cloud.org
 
 resource must never include:
 
