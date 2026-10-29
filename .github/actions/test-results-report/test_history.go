@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -48,6 +50,8 @@ type TestHistoryEvent struct {
 
 	ArtifactURL string    `json:"artifact_url,omitempty"`
 	StartedAt   time.Time `json:"started_at"`
+
+	Properties []TestProperty `json:"properties,omitempty"`
 }
 
 type testHistoryContext struct {
@@ -65,6 +69,7 @@ type testHistoryContext struct {
 }
 
 var (
+	testHistoryPropertyNamePattern         = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
 	testHistoryFingerprintUUIDPattern      = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 	testHistoryFingerprintTempPathPattern  = regexp.MustCompile(`(?i)(?:/private)?/tmp/[^\s]+|/var/folders/[^\s]+|[a-z]:\\(?:users\\[^\\\s]+\\appdata\\local\\temp|temp)\\[^\s]+`)
 	testHistoryFingerprintTimestampPattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}[t\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b|\b\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b`)
@@ -245,14 +250,51 @@ func buildTestHistoryContext(config Config, current TestRun, format string, now 
 func testHistoryEventsFromTestRun(run TestRun, context testHistoryContext, now time.Time) []TestHistoryEvent {
 	events := make([]TestHistoryEvent, 0, len(run.Tests))
 	attemptIndexes := map[string]int{}
+	droppedProperties := 0
 	for _, test := range run.Tests {
 		testID := firstNonEmpty(test.ID, stableID(test.Suite, test.Name), test.Name)
 		attemptIndex := attemptIndexes[testID]
 		attemptIndexes[testID] = attemptIndex + 1
 		startedAt := firstNonZeroTime(test.StartTime, run.StartTime, context.StartedAt, now).UTC()
-		events = append(events, newTestHistoryEvent(context, testID, test.Name, test.Status, test.RawState, test.Duration, attemptIndex, failureExcerpt(test), startedAt))
+		event := newTestHistoryEvent(context, testID, test.Name, test.Status, test.RawState, test.Duration, attemptIndex, failureExcerpt(test), startedAt)
+		var dropped int
+		event.Properties, dropped = testHistoryProperties(test.Properties)
+		droppedProperties += dropped
+		events = append(events, event)
+	}
+	if droppedProperties > 0 {
+		fmt.Fprintf(os.Stderr, "[test-history] warning: dropped %d JUnit testcase properties (name must match ^[a-z0-9_]+$ and be at most 64 chars, names must be unique, at most %d per test case)\n", droppedProperties, testHistoryMaxProperties)
 	}
 	return events
+}
+
+const (
+	testHistoryMaxProperties        = 32
+	testHistoryMaxPropertyValueSize = 200
+)
+
+// testHistoryProperties keeps the first testHistoryMaxProperties valid, uniquely named, non-empty properties.
+// The test.property. prefix keeps them clear of the fixed OTLP attributes, so only duplicates can collide.
+func testHistoryProperties(properties []TestProperty) ([]TestProperty, int) {
+	var kept []TestProperty
+	seen := map[string]bool{}
+	dropped := 0
+	for _, property := range properties {
+		value := []rune(cleanOneLine(property.Value))
+		if len(value) > testHistoryMaxPropertyValueSize {
+			value = value[:testHistoryMaxPropertyValueSize]
+		}
+		if len(value) == 0 {
+			continue
+		}
+		if !testHistoryPropertyNamePattern.MatchString(property.Name) || seen[property.Name] || len(kept) >= testHistoryMaxProperties {
+			dropped++
+			continue
+		}
+		seen[property.Name] = true
+		kept = append(kept, TestProperty{Name: property.Name, Value: string(value)})
+	}
+	return kept, dropped
 }
 
 func testHistoryEventsFromPlaywright(data []byte, context testHistoryContext, now time.Time) ([]TestHistoryEvent, error) {
@@ -609,6 +651,9 @@ func testHistoryOTLPLogRecord(event TestHistoryEvent, aiAnnotation *testHistoryA
 		otlpStringAttribute("github.run_id", event.RunID),
 		otlpIntAttribute("github.run_attempt", event.RunAttempt),
 	}
+	for _, property := range event.Properties {
+		attributes = append(attributes, otlpPropertyAttribute("test.property."+property.Name, property.Value))
+	}
 
 	return map[string]any{
 		"timeUnixNano":         fmt.Sprintf("%d", event.StartedAt.UnixNano()),
@@ -954,6 +999,17 @@ func otlpStringAttribute(key, value string) map[string]any {
 			"stringValue": value,
 		},
 	}
+}
+
+// otlpPropertyAttribute types numeric values so Loki/Grafana can unwrap them.
+func otlpPropertyAttribute(key, value string) map[string]any {
+	if number, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return map[string]any{"key": key, "value": map[string]any{"intValue": strconv.FormatInt(number, 10)}}
+	}
+	if number, err := strconv.ParseFloat(value, 64); err == nil && !math.IsInf(number, 0) && !math.IsNaN(number) {
+		return map[string]any{"key": key, "value": map[string]any{"doubleValue": number}}
+	}
+	return otlpStringAttribute(key, value)
 }
 
 func otlpIntAttribute(key string, value int) map[string]any {

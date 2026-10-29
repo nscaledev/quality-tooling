@@ -752,6 +752,143 @@ func otlpAttributeMap(t *testing.T, raw any) map[string]string {
 	return result
 }
 
+func junitPropertiesTestHistoryEvents(t *testing.T) []TestHistoryEvent {
+	t.Helper()
+
+	resultsPath := filepath.Join("testdata", "junit-properties.xml")
+	current, err := readAndParse(resultsPath, formatJUnit)
+	if err != nil {
+		t.Fatalf("readAndParse returned error: %v", err)
+	}
+	events, err := buildTestHistoryEvents(Config{
+		TestResultsPath:  resultsPath,
+		Format:           formatJUnit,
+		TestHistoryRepo:  "nscaledev/ims-profile",
+		TestHistoryRunID: "run-1",
+	}, current, time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("buildTestHistoryEvents returned error: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3", len(events))
+	}
+	return events
+}
+
+func TestTestHistoryEventsCarryLimitedJUnitProperties(t *testing.T) {
+	t.Parallel()
+
+	events := junitPropertiesTestHistoryEvents(t)
+
+	want := []TestProperty{
+		{Name: "ready_seconds", Value: "42.5"},
+		{Name: "gpus", Value: "8"},
+		{Name: "model", Value: "meta-llama/Llama-3-8B"},
+		{Name: "findings", Value: "first line second line"},
+		{Name: "tokens_per_second", Value: "NaN"},
+		{Name: "failure_class", Value: strings.Repeat("x", testHistoryMaxPropertyValueSize)},
+	}
+	got := events[0].Properties
+	if len(got) != len(want) {
+		t.Fatalf("properties = %+v, want %+v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("property %d = %+v, want %+v", index, got[index], want[index])
+		}
+	}
+	overCap := events[1].Properties
+	if len(overCap) != testHistoryMaxProperties || overCap[0].Name != "p00" || overCap[len(overCap)-1].Name != "p31" {
+		t.Fatalf("over-cap properties = %+v", overCap)
+	}
+	if events[2].Properties != nil {
+		t.Fatalf("event without properties = %+v", events[2].Properties)
+	}
+}
+
+func TestTestHistorySpoolIncludesPropertiesOnlyWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	events := junitPropertiesTestHistoryEvents(t)
+	spoolPath := filepath.Join(t.TempDir(), "events.ndjson")
+	if err := writeTestHistorySpool(spoolPath, events); err != nil {
+		t.Fatalf("writeTestHistorySpool returned error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(readPlainTestFile(t, spoolPath)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("spool lines = %d, want 3", len(lines))
+	}
+	if !strings.Contains(lines[0], `"properties":[{"name":"ready_seconds","value":"42.5"},{"name":"gpus","value":"8"},`) {
+		t.Fatalf("spool line missing ordered properties:\n%s", lines[0])
+	}
+	if strings.Contains(lines[2], `"properties"`) {
+		t.Fatalf("spool line without properties should omit the field:\n%s", lines[2])
+	}
+}
+
+func TestTestHistoryOTLPExportsTypedPropertyAttributes(t *testing.T) {
+	t.Parallel()
+
+	events := junitPropertiesTestHistoryEvents(t)
+	body, err := json.Marshal(testHistoryOTLPLogsPayload(events, nil))
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	records := otlpLogRecordsFromPayload(t, payload)
+
+	values := func(record any) map[string]map[string]any {
+		result := map[string]map[string]any{}
+		for _, item := range record.(map[string]any)["attributes"].([]any) {
+			attribute := item.(map[string]any)
+			result[attribute["key"].(string)] = attribute["value"].(map[string]any)
+		}
+		return result
+	}
+
+	first := values(records[0])
+	for key, want := range map[string]map[string]any{
+		"test.property.ready_seconds":     {"doubleValue": 42.5},
+		"test.property.gpus":              {"intValue": "8"},
+		"test.property.model":             {"stringValue": "meta-llama/Llama-3-8B"},
+		"test.property.findings":          {"stringValue": "first line second line"},
+		"test.property.tokens_per_second": {"stringValue": "NaN"},
+		"test.property.failure_class":     {"stringValue": strings.Repeat("x", testHistoryMaxPropertyValueSize)},
+	} {
+		got, ok := first[key]
+		if !ok || len(got) != 1 {
+			t.Fatalf("attribute %s = %#v, want %#v", key, got, want)
+		}
+		for valueType, wantValue := range want {
+			if got[valueType] != wantValue {
+				t.Fatalf("attribute %s = %#v, want %#v", key, got, want)
+			}
+		}
+	}
+	propertyCount := func(attributes map[string]map[string]any) int {
+		count := 0
+		for key := range attributes {
+			if strings.HasPrefix(key, "test.property.") {
+				count++
+			}
+		}
+		return count
+	}
+	if got := propertyCount(first); got != 6 {
+		t.Fatalf("first record property attributes = %d, want 6: %#v", got, first)
+	}
+	if got := propertyCount(values(records[1])); got != testHistoryMaxProperties {
+		t.Fatalf("over-cap record property attributes = %d, want %d", got, testHistoryMaxProperties)
+	}
+
+	if got := propertyCount(values(records[2])); got != 0 {
+		t.Fatalf("record without properties has %d property attributes", got)
+	}
+}
+
 func TestTestHistoryIngestURL(t *testing.T) {
 	t.Parallel()
 

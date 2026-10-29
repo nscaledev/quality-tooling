@@ -181,6 +181,14 @@ type junitCase struct {
 	Errors    []junitFailure `xml:"error"`
 	Skipped   *junitSkipped  `xml:"skipped"`
 	SystemOut string         `xml:"system-out"`
+	// Properties accepts both value="..." and element-text forms, as pytest record_property can emit either.
+	Properties []junitProperty `xml:"properties>property"`
+}
+
+type junitProperty struct {
+	Name  string `xml:"name,attr"`
+	Value string `xml:"value,attr"`
+	Text  string `xml:",chardata"`
 }
 
 type junitFailure struct {
@@ -290,6 +298,14 @@ func collectJUnitSuite(suite junitSuite, parents []string, tests *[]TestCase) {
 			}
 		}
 
+		var properties []TestProperty
+		for _, property := range tc.Properties {
+			properties = append(properties, TestProperty{
+				Name:  strings.TrimSpace(property.Name),
+				Value: firstNonEmpty(property.Value, property.Text),
+			})
+		}
+
 		*tests = append(*tests, TestCase{
 			ID:       stableID(suiteName, name),
 			Suite:    suiteName,
@@ -301,6 +317,8 @@ func collectJUnitSuite(suite junitSuite, parents []string, tests *[]TestCase) {
 			Duration: parseSecondsDuration(tc.Time),
 			Message:  message,
 			Output:   strings.TrimSpace(tc.SystemOut),
+
+			Properties: properties,
 		})
 	}
 }

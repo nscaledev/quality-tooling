@@ -195,6 +195,38 @@ Because test history shipping runs after Slack notification, callers should ensu
 
 Only set `test-history-otlp-endpoint` to a trusted endpoint. The events posted to that URL include test names, failure excerpts, repository name, run IDs, and AI analysis text. When omitted, the action opens a scoped Teleport port-forward to the internal collector, which is the recommended path.
 
+#### JUnit testcase properties
+
+JUnit `<properties>` on a `<testcase>` are exported with that test's history event, so suites can attach per-test measurements and metadata, such as phase timings or the model under test. Both the attribute form and the element-text form are accepted, matching what pytest's `record_property` writes:
+
+```xml
+<testcase classname="tests.test_profile" name="test_profile[llama-3-8b]" time="812.4">
+  <properties>
+    <property name="ready_seconds" value="412.7"/>
+    <property name="model" value="meta-llama/Llama-3.1-8B-Instruct"/>
+    <property name="findings">leftover volume vol-123</property>
+  </properties>
+</testcase>
+```
+
+Each property becomes one OTLP log attribute named `test.property.<name>`, and is also written to the NDJSON spool as an ordered `properties` array of `{"name", "value"}` objects. Test cases without properties produce the same records as before.
+
+- Values that parse as base-10 integers are sent as `intValue`, other finite numbers as `doubleValue`, and everything else as `stringValue`. Whitespace is collapsed and values are truncated to 200 characters. Empty values are skipped.
+- Names must match `^[a-z0-9_]+$` and be at most 64 characters. Invalid names, repeated names (the first wins), and properties beyond the first 32 per test case are dropped, with one warning per run in the action log.
+- Properties are only read from JUnit results; Ginkgo and Playwright events carry none. They are not shown in the step summary or Slack message.
+
+Loki stores OTLP attributes as structured metadata and replaces dots with underscores, so `test.property.ready_seconds` is queried as `test_property_ready_seconds`. For example, a Grafana time-series panel of readiness time per model:
+
+```logql
+avg by (test_property_model) (
+  avg_over_time(
+    {service_name="test-results-report"}
+      | test_property_ready_seconds != ""
+      | unwrap test_property_ready_seconds [$__auto]
+  )
+)
+```
+
 Legacy API posting remains available for compatibility by setting `test-history-publish-mode: api` with `test-history-api-url` and `test-history-token`, or by leaving `publish-test-history: auto` while providing `TEST_HISTORY_API_URL`.
 
 ### Grafana Enrichment Gate

@@ -266,6 +266,46 @@ func TestParseGinkgoJSONTimeRanges(t *testing.T) {
 	}
 }
 
+func TestParseJUnitTestcaseProperties(t *testing.T) {
+	t.Parallel()
+
+	run, err := parseJUnit(readFixture(t, "junit-properties.xml"))
+	if err != nil {
+		t.Fatalf("parseJUnit returned error: %v", err)
+	}
+	if len(run.Tests) != 3 {
+		t.Fatalf("test count = %d", len(run.Tests))
+	}
+
+	// The parser keeps every property in document order; history export applies the limits.
+	want := []TestProperty{
+		{Name: "ready_seconds", Value: "42.5"},
+		{Name: "gpus", Value: "8"},
+		{Name: "model", Value: "meta-llama/Llama-3-8B"},
+		{Name: "findings", Value: "first line\n          second line"},
+		{Name: "Bad-Name", Value: "dropped"},
+		{Name: "gpus", Value: "16"},
+		{Name: "tokens_per_second", Value: "NaN"},
+		{Name: "empty", Value: ""},
+		{Name: "failure_class", Value: strings.Repeat("x", 250)},
+	}
+	got := run.Tests[0].Properties
+	if len(got) != len(want) {
+		t.Fatalf("properties = %+v, want %+v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("property %d = %+v, want %+v", index, got[index], want[index])
+		}
+	}
+	if len(run.Tests[1].Properties) != 34 || run.Tests[1].Properties[33] != (TestProperty{Name: "p33", Value: "33"}) {
+		t.Fatalf("over-cap case properties = %+v", run.Tests[1].Properties)
+	}
+	if run.Tests[2].Properties != nil {
+		t.Fatalf("case without properties = %+v", run.Tests[2].Properties)
+	}
+}
+
 func TestParseUniRegionJUnitFixture(t *testing.T) {
 	t.Parallel()
 
