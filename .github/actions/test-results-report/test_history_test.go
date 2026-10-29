@@ -786,6 +786,7 @@ func TestTestHistoryEventsCarryLimitedJUnitProperties(t *testing.T) {
 		{Name: "model", Value: "meta-llama/Llama-3-8B"},
 		{Name: "findings", Value: "first line second line"},
 		{Name: "tokens_per_second", Value: "NaN"},
+		{Name: "stage", Value: "profile <run>"},
 		{Name: "failure_class", Value: strings.Repeat("x", testHistoryMaxPropertyValueSize)},
 	}
 	got := events[0].Properties
@@ -877,8 +878,8 @@ func TestTestHistoryOTLPExportsTypedPropertyAttributes(t *testing.T) {
 		}
 		return count
 	}
-	if got := propertyCount(first); got != 6 {
-		t.Fatalf("first record property attributes = %d, want 6: %#v", got, first)
+	if got := propertyCount(first); got != 7 {
+		t.Fatalf("first record property attributes = %d, want 7: %#v", got, first)
 	}
 	if got := propertyCount(values(records[1])); got != testHistoryMaxProperties {
 		t.Fatalf("over-cap record property attributes = %d, want %d", got, testHistoryMaxProperties)
@@ -886,6 +887,36 @@ func TestTestHistoryOTLPExportsTypedPropertyAttributes(t *testing.T) {
 
 	if got := propertyCount(values(records[2])); got != 0 {
 		t.Fatalf("record without properties has %d property attributes", got)
+	}
+}
+
+func TestOTLPPropertyAttributeTypes(t *testing.T) {
+	t.Parallel()
+
+	for value, want := range map[string]map[string]any{
+		"8":                    {"intValue": "8"},
+		"-3":                   {"intValue": "-3"},
+		"0042":                 {"stringValue": "0042"},
+		"+5":                   {"stringValue": "+5"},
+		"99999999999999999999": {"stringValue": "99999999999999999999"},
+		"42.5":                 {"doubleValue": 42.5},
+		"1e3":                  {"doubleValue": 1000.0},
+		".5":                   {"doubleValue": 0.5},
+		"0x1p4":                {"stringValue": "0x1p4"},
+		"NaN":                  {"stringValue": "NaN"},
+		"Inf":                  {"stringValue": "Inf"},
+		"1e400":                {"stringValue": "1e400"},
+		"llama":                {"stringValue": "llama"},
+	} {
+		got := otlpPropertyAttribute("test.property.x", value)["value"].(map[string]any)
+		if len(got) != 1 {
+			t.Fatalf("%q = %#v, want %#v", value, got, want)
+		}
+		for valueType, wantValue := range want {
+			if got[valueType] != wantValue {
+				t.Fatalf("%q = %#v, want %#v", value, got, want)
+			}
+		}
 	}
 }
 

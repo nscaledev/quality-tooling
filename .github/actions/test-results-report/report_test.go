@@ -287,6 +287,7 @@ func TestParseJUnitTestcaseProperties(t *testing.T) {
 		{Name: "gpus", Value: "16"},
 		{Name: "tokens_per_second", Value: "NaN"},
 		{Name: "empty", Value: ""},
+		{Name: "stage", Value: "profile <run>"},
 		{Name: "failure_class", Value: strings.Repeat("x", 250)},
 	}
 	got := run.Tests[0].Properties

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="IMS Profile Canary" tests="3" failures="0" time="12.5">
   <testsuite name="tests.test_profile" tests="3" time="12.5">
+    <properties>
+      <property name="suite_level" value="ignored"/>
+    </properties>
     <testcase classname="tests.test_profile" name="test_profile[llama-3-8b]" time="10.5">
       <properties>
         <property name="ready_seconds" value="42.5"/>
@@ -12,6 +15,7 @@
         <property name="gpus" value="16"/>
         <property name="tokens_per_second" value="NaN"/>
         <property name="empty" value=""/>
+        <property name="stage" value=""><![CDATA[profile <run>]]></property>
         <property name="failure_class" value="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"/>
       </properties>
     </testcase>

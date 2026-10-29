@@ -70,6 +70,8 @@ type testHistoryContext struct {
 
 var (
 	testHistoryPropertyNamePattern         = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+	testHistoryPropertyIntPattern          = regexp.MustCompile(`^[+-]?[0-9]+$`)
+	testHistoryPropertyFloatPattern        = regexp.MustCompile(`^[+-]?([0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)([eE][+-]?[0-9]+)?$`)
 	testHistoryFingerprintUUIDPattern      = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 	testHistoryFingerprintTempPathPattern  = regexp.MustCompile(`(?i)(?:/private)?/tmp/[^\s]+|/var/folders/[^\s]+|[a-z]:\\(?:users\\[^\\\s]+\\appdata\\local\\temp|temp)\\[^\s]+`)
 	testHistoryFingerprintTimestampPattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}[t\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b|\b\d{2}:\d{2}:\d{2}(?:\.\d+)?z?\b`)
@@ -1002,12 +1004,18 @@ func otlpStringAttribute(key, value string) map[string]any {
 }
 
 // otlpPropertyAttribute types numeric values so Loki/Grafana can unwrap them.
+// Only canonical int64 text becomes intValue, so zero-padded IDs such as "0042" stay strings.
 func otlpPropertyAttribute(key, value string) map[string]any {
-	if number, err := strconv.ParseInt(value, 10, 64); err == nil {
-		return map[string]any{"key": key, "value": map[string]any{"intValue": strconv.FormatInt(number, 10)}}
+	if testHistoryPropertyIntPattern.MatchString(value) {
+		if number, err := strconv.ParseInt(value, 10, 64); err == nil && strconv.FormatInt(number, 10) == value {
+			return map[string]any{"key": key, "value": map[string]any{"intValue": value}}
+		}
+		return otlpStringAttribute(key, value)
 	}
-	if number, err := strconv.ParseFloat(value, 64); err == nil && !math.IsInf(number, 0) && !math.IsNaN(number) {
-		return map[string]any{"key": key, "value": map[string]any{"doubleValue": number}}
+	if testHistoryPropertyFloatPattern.MatchString(value) {
+		if number, err := strconv.ParseFloat(value, 64); err == nil && !math.IsInf(number, 0) {
+			return map[string]any{"key": key, "value": map[string]any{"doubleValue": number}}
+		}
 	}
 	return otlpStringAttribute(key, value)
 }

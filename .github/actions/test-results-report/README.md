@@ -211,8 +211,8 @@ JUnit `<properties>` on a `<testcase>` are exported with that test's history eve
 
 Each property becomes one OTLP log attribute named `test.property.<name>`, and is also written to the NDJSON spool as an ordered `properties` array of `{"name", "value"}` objects. Test cases without properties produce the same records as before.
 
-- Values that parse as base-10 integers are sent as `intValue`, other finite numbers as `doubleValue`, and everything else as `stringValue`. Whitespace is collapsed and values are truncated to 200 characters. Empty values are skipped.
-- Names must match `^[a-z0-9_]+$` and be at most 64 characters. Invalid names, repeated names (the first wins), and properties beyond the first 32 per test case are dropped, with one warning per run in the action log.
+- Canonical base-10 integers that fit in int64 (`8`, `-3`) are sent as `intValue`. Other finite decimal numbers (`42.5`, `1e3`) are sent as `doubleValue`. Everything else is sent as `stringValue`, including zero-padded values such as `0042`, hex, `NaN`, and `Inf`. Whitespace is collapsed, values are truncated to 200 characters, and empty values are skipped without a warning.
+- Names must match `^[a-z0-9_]+$` and be at most 64 characters. Invalid names, repeated names (the first non-empty value wins), and properties beyond the first 32 per test case are dropped, with one warning per run in the action log.
 - Properties are only read from JUnit results; Ginkgo and Playwright events carry none. They are not shown in the step summary or Slack message.
 
 Loki stores OTLP attributes as structured metadata and replaces dots with underscores, so `test.property.ready_seconds` is queried as `test_property_ready_seconds`. For example, a Grafana time-series panel of readiness time per model:
