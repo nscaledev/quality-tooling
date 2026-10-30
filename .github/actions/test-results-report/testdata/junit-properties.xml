@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="IMS Profile Canary" tests="3" failures="0" time="12.5">
+  <testsuite name="tests.test_profile" tests="3" time="12.5">
+    <properties>
+      <property name="suite_level" value="ignored"/>
+    </properties>
+    <testcase classname="tests.test_profile" name="test_profile[llama-3-8b]" time="10.5">
+      <properties>
+        <property name="ready_seconds" value="42.5"/>
+        <property name="gpus" value="8"/>
+        <property name="model" value="meta-llama/Llama-3-8B"/>
+        <property name="findings">first line
+          second line</property>
+        <property name="Bad-Name" value="dropped"/>
+        <property name="gpus" value="16"/>
+        <property name="tokens_per_second" value="NaN"/>
+        <property name="empty" value=""/>
+        <property name="stage" value=""><![CDATA[profile <run>]]></property>
+        <property name="failure_class" value="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"/>
+      </properties>
+    </testcase>
+    <testcase classname="tests.test_profile" name="test_profile[over-cap]" time="1.0">
+      <properties>
+        <property name="p00" value="0"/>
+        <property name="p01" value="1"/>
+        <property name="p02" value="2"/>
+        <property name="p03" value="3"/>
+        <property name="p04" value="4"/>
+        <property name="p05" value="5"/>
+        <property name="p06" value="6"/>
+        <property name="p07" value="7"/>
+        <property name="p08" value="8"/>
+        <property name="p09" value="9"/>
+        <property name="p10" value="10"/>
+        <property name="p11" value="11"/>
+        <property name="p12" value="12"/>
+        <property name="p13" value="13"/>
+        <property name="p14" value="14"/>
+        <property name="p15" value="15"/>
+        <property name="p16" value="16"/>
+        <property name="p17" value="17"/>
+        <property name="p18" value="18"/>
+        <property name="p19" value="19"/>
+        <property name="p20" value="20"/>
+        <property name="p21" value="21"/>
+        <property name="p22" value="22"/>
+        <property name="p23" value="23"/>
+        <property name="p24" value="24"/>
+        <property name="p25" value="25"/>
+        <property name="p26" value="26"/>
+        <property name="p27" value="27"/>
+        <property name="p28" value="28"/>
+        <property name="p29" value="29"/>
+        <property name="p30" value="30"/>
+        <property name="p31" value="31"/>
+        <property name="p32" value="32"/>
+        <property name="p33" value="33"/>
+      </properties>
+    </testcase>
+    <testcase classname="tests.test_profile" name="test_profile[no-properties]" time="1.0"/>
+  </testsuite>
+</testsuites>

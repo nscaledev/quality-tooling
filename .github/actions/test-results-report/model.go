@@ -32,6 +32,13 @@ type TestCase struct {
 	Duration  time.Duration
 	Message   string
 	Output    string
+	// Properties holds JUnit <testcase><properties> in document order.
+	Properties []TestProperty
+}
+
+type TestProperty struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type Stats struct {
