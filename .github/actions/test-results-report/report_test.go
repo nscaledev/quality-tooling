@@ -1070,10 +1070,16 @@ func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
 		"Do not include Grafana URLs, Explore URLs, dashboard URLs, time ranges",
 		"The reporter generates Grafana URLs separately using the datasource, query, and time window",
 		`{"queries":[]}`,
+		"Never combine a unique identifier with generic terms in one alternation",
+		"Put a namespace or service named in the failure evidence in the stream selector",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("planning prompt missing %q:\n%s", expected, prompt)
 		}
+	}
+	// The example query is copied by the planner, so it must not pair an identifier with generic terms.
+	if strings.Contains(prompt, "(?i)(claim-123|file-storage|500)") {
+		t.Fatalf("planning prompt example combines an identifier with generic terms:\n%s", prompt)
 	}
 }
 
