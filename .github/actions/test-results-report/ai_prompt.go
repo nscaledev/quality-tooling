@@ -511,11 +511,9 @@ LogQL requirements:
 - Read-only queries only.
 - Keep queries concise and readable.
 - Prefer the smallest query that still captures the strongest identifiers.
-- Avoid broad regex searches when a unique identifier is available.
-- When the evidence has a unique identifier (UUID, request ID, trace ID, resource name), the line filter matches only those identifiers, for example |= "claim-123" or |~ "claim-123|req-456".
+- When the evidence has a unique identifier (UUID, request ID, trace ID, generated resource name), the line filter matches only those identifiers, for example |= "claim-123" or |~ "claim-123|req-456". Use generic terms in the line filter only when the evidence has no unique identifier.
 - Never combine a unique identifier with generic terms in one alternation. Status codes, HTTP methods, component, service and namespace names match nearly every line, so (claim-123|file-storage|500) returns unrelated logs.
-- Put a namespace or service named in the failure evidence in the stream selector, not the line filter.
-- Use generic terms in the line filter only when the evidence has no unique identifier.
+- Never put namespace, service, or component names in the line filter. Narrow the stream selector to a namespace only when the failure evidence names that namespace and the failure does not depend on another component's logs.
 - Use broad selectors such as:
 
 {namespace=~".+"}

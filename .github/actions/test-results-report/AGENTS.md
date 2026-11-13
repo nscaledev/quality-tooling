@@ -17,6 +17,7 @@ These rules apply when editing the `test-results-report` GitHub Action.
 - Let AI planning decide whether a failed test is backend-related before querying Grafana MCP.
 - Do not query Loki for purely client-side assertions unless the failure evidence contains a backend signal.
 - Prefer exact identifiers from test artifacts: request IDs, trace IDs, UUIDs, resource names, status codes, API error strings, and backend component names.
+- In planned LogQL, the line filter matches only the failure's unique identifiers when it has any; status codes and component names stay out of it.
 - Execute per-failure Grafana MCP queries in parallel, bounded by `grafana-log-concurrency`.
 - Keep Grafana defaults centralized at the source (`config.go` / action wrapper), not repeated at each caller.
 

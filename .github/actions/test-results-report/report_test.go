@@ -1071,7 +1071,7 @@ func TestGrafanaLogQueryPlanningPromptRequestsBackendOnlyJSON(t *testing.T) {
 		"The reporter generates Grafana URLs separately using the datasource, query, and time window",
 		`{"queries":[]}`,
 		"Never combine a unique identifier with generic terms in one alternation",
-		"Put a namespace or service named in the failure evidence in the stream selector",
+		"Never put namespace, service, or component names in the line filter",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("planning prompt missing %q:\n%s", expected, prompt)
