@@ -956,32 +956,31 @@ func logKeywordRegex(test TestCase) string {
 	}
 	seen := map[string]bool{}
 	var keywords []string
-	addKeyword := func(token string) bool {
-		token = strings.Trim(strings.ToLower(token), "._/-")
-		if len(token) < 4 || stopWords[token] || seen[token] {
-			return false
+	addKeyword := func(token string) {
+		token = strings.Trim(token, "._/-")
+		if len(keywords) >= 8 || len(token) < 4 || stopWords[token] || seen[token] {
+			return
 		}
 		seen[token] = true
 		keywords = append(keywords, regexp.QuoteMeta(token))
-		return len(keywords) >= 8
 	}
 
+	// Identifiers keep their case and are returned alone: ORing them with generic
+	// words from the suite or test name matches unrelated log lines.
 	identifierPattern := regexp.MustCompile(`[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}|[0-9A-Fa-f]{16,32}`)
 	for _, field := range []string{test.Message, test.Output} {
 		for _, token := range identifierPattern.FindAllString(field, -1) {
-			if addKeyword(token) {
-				return strings.Join(keywords, "|")
-			}
+			addKeyword(token)
 		}
 	}
+	if len(keywords) > 0 {
+		return strings.Join(keywords, "|")
+	}
 
-	fields := []string{test.Suite, test.Name, test.File, test.Message}
 	tokenPattern := regexp.MustCompile(`[A-Za-z0-9][A-Za-z0-9._/-]{3,}`)
-	for _, field := range fields {
+	for _, field := range []string{test.Suite, test.Name, test.File, test.Message} {
 		for _, token := range tokenPattern.FindAllString(field, -1) {
-			if addKeyword(token) {
-				return strings.Join(keywords, "|")
-			}
+			addKeyword(strings.ToLower(token))
 		}
 	}
 	sort.Strings(keywords)

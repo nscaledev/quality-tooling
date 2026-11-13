@@ -350,7 +350,7 @@ Output format:
       "backend_area": "file-storage",
       "expected_error": "POST /api/storage returned 500 for claim-123",
       "search_terms": ["claim-123","file-storage","500"],
-      "logql": "{namespace=~\".+\"} |~ \"(?i)(claim-123|file-storage|500)\"",
+      "logql": "{namespace=~\".+\"} |= \"claim-123\"",
       "reason": "The failed upload crossed the file storage API and includes a backend 500 response, so Loki evidence can confirm whether the service emitted the same error.",
       "confidence": "medium"
     }
@@ -511,7 +511,9 @@ LogQL requirements:
 - Read-only queries only.
 - Keep queries concise and readable.
 - Prefer the smallest query that still captures the strongest identifiers.
-- Avoid broad regex searches when a unique identifier is available.
+- When the evidence has a unique identifier (UUID, request ID, trace ID, generated resource name), the line filter matches only those identifiers, for example |= "claim-123" or |~ "claim-123|req-456". Use generic terms in the line filter only when the evidence has no unique identifier.
+- Never combine a unique identifier with generic terms in one alternation. Status codes, HTTP methods, component, service and namespace names match nearly every line, so (claim-123|file-storage|500) returns unrelated logs.
+- Never put namespace, service, or component names in the line filter. Narrow the stream selector to a namespace only when the failure evidence names that namespace and the failure does not depend on another component's logs.
 - Use broad selectors such as:
 
 {namespace=~".+"}

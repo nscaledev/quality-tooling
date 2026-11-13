@@ -369,7 +369,7 @@ Claude receives the failed test name, suite, location, error, captured output, e
       "backend_area": "file-storage",
       "expected_error": "POST /api/storage returned 500 for claim-123",
       "search_terms": ["claim-123", "file-storage", "500"],
-      "logql": "{namespace=~\".+\"} |~ \"(?i)(claim-123|file-storage|500)\"",
+      "logql": "{namespace=~\".+\"} |= \"claim-123\"",
       "reason": "The failed UI upload crossed the file storage API and includes a backend 500 signature, so Loki evidence can confirm whether file storage emitted the same error.",
       "confidence": "medium"
     }

@@ -33,6 +33,19 @@ func TestLogKeywordRegexPrioritizesFailureIdentifiers(t *testing.T) {
 			t.Fatalf("keywords missing %q: %s", expected, keywords)
 		}
 	}
+	if strings.Contains(keywords, "instance") {
+		t.Fatalf("keywords pair identifiers with generic test-name terms: %s", keywords)
+	}
+
+	upper := logKeywordRegex(TestCase{Name: "creates network", Message: "Network CC68D1A4-C005-4B61-A24E-B7C64CB451D0 reached Error"})
+	if upper != "CC68D1A4-C005-4B61-A24E-B7C64CB451D0" {
+		t.Fatalf("identifier-only keywords = %q", upper)
+	}
+
+	generic := logKeywordRegex(TestCase{Name: "creates network", Message: "Network reached Error"})
+	if generic != "creates|network|reached" {
+		t.Fatalf("keywords without identifiers = %q", generic)
+	}
 }
 
 func TestRunGrafanaLogEnrichmentThroughMCP(t *testing.T) {
